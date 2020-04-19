@@ -12,8 +12,8 @@ import pickle
 import os
 from copy import deepcopy
 from datetime import datetime
-from NamastePymc3 import NamastePymc3 as namaste
-from NamastePymc3 import MonoFit
+from MonoTools import tools as namaste
+from MonoTools import MonoFit
 from scipy import optimize
 from scipy import interpolate
 import exoplanet as xo
@@ -1811,8 +1811,9 @@ def CheckMonoPairs(lc_time, all_pls,prox_thresh=3.0):
                     Npts_in_tr=np.sum(abs(phase)<0.3*newm1['tdur'])
                     check_pers_ix[nper]=Npts_in_tr<1.075*Npts_from_known_transits #Less than 15% of another eclipse is covered
                 newm1['period_aliases']=check_pers[check_pers_ix]
-                P_min=check_pers[check_pers_ix]
-                newm1['P_min']=P_min if type(P_min)==float else P_min[0]
+                P_mins=check_pers[check_pers_ix]
+                newm1['P_min']=P_mins if type(P_mins)==float else np.min(P_mins)
+                print("period aliases:",newm1['period_aliases'],"P_min:",newm1['P_min'])
                 all_pls[m1]=newm1
                 all_pls[m2]['orbit_flag']='FP - Confusion with '+m1
                 all_pls[m2]['flag']='FP - confusion'
@@ -2151,10 +2152,9 @@ def get_interpmodels(Rs,Ms,Teff,lc_time,lc_flux_unit,mission='tess',n_durs=3,tex
 
     return interpmodels,tdurs
 
-
 def InitNamaste(ID, mission, tcen=None, tdur=None, overwrite=False, do_search=True,
-                useL2=False,PL_ror_thresh=0.2,variable_llk_thresh=5,
-                plot=False,do_fit=False,re_vet=False,**kwargs):
+                useL2=False,PL_ror_thresh=0.2,variable_llk_thresh=5,file_loc=None,
+                plot=False,do_fit=False,re_vet=False,re_fit=False,**kwargs):
     '''#Here we're going to initialise the Monotransit fitting by searching for other planets/transits/secondaries and filtering out binaries.
     INPUTS:
     - ID
@@ -2184,14 +2184,13 @@ def InitNamaste(ID, mission, tcen=None, tdur=None, overwrite=False, do_search=Tr
      - plot_loc=file_loc+"/"
      - poly_order=4
      '''
-    if 'file_loc' not in kwargs:
+    if file_loc is None:
         #Creating a ID directory in the current directory for the planet fits/docs
         file_loc=namaste.id_dic[mission]+str(ID).zfill(11)
-        kwargs['file_loc']=file_loc
     elif kwargs['file_loc'][-1]=='/':
         #If we're given a directory, we'll create a ID directory in there for the planet fits/docs
         file_loc=kwargs['file_loc']+namaste.id_dic[mission]+str(ID).zfill(11)
-        kwargs['file_loc']=file_loc
+    kwargs['file_loc']=file_loc
     
     mono_SNR_thresh=6.5 if 'mono_SNR_thresh' not in kwargs else kwargs['mono_SNR_thresh']
 
@@ -2248,7 +2247,7 @@ def InitNamaste(ID, mission, tcen=None, tdur=None, overwrite=False, do_search=Tr
     elif not do_search:
         intr=lc['mask']&(abs(lc['time']-tcen)<0.45*tdur)
         outtr=lc['mask']&(abs(lc['time']-tcen)<1.25*tdur)&(~intr)
-        mono_dic={'00':{'tcen':tcen,'tdur':tdur,'orbit_flag'='mono','poly_DeltaBIC':0.0,
+        mono_dic={'00':{'tcen':tcen,'tdur':tdur,'orbit_flag':'mono','poly_DeltaBIC':0.0,
                         'depth':np.nanmedian(lc['flux'][outtr])-np.nanmedian(lc['flux'][intr])}}
     #print("monos:",{pl:{'tcen':mono_dic[pl]['tcen'],'depth':mono_dic[pl]['depth']} for pl in mono_dic})
     
@@ -2528,7 +2527,7 @@ def InitNamaste(ID, mission, tcen=None, tdur=None, overwrite=False, do_search=Tr
             # PLANET MODELLING:
             print({pl:{'tcen':both_dic[pl]['tcen'],'depth':both_dic[pl]['depth'],'period':both_dic[pl]['period'],'orbit_flag':both_dic[pl]['orbit_flag'],'flag':both_dic[pl]['flag']} for pl in both_dic})
             print("Planets to model:",[obj for obj in both_dic if both_dic[obj]['flag']=='planet'])
-            if not os.path.isfile(file_loc+"/"+file_loc+'_model.pickle') or overwrite:
+            if not os.path.isfile(file_loc+"/"+file_loc+'_model.pickle') or overwrite or re_fit:
                 mod=MonoFit.monoModel(ID, lc, {},savefileloc=file_loc+'/')
                 #If not, we have a planet.
                 #Checking if monoplanet is single, double-with-gap, or periodic.
@@ -2567,3 +2566,22 @@ def InitNamaste(ID, mission, tcen=None, tdur=None, overwrite=False, do_search=Tr
             return None,both_dic
     else:
         print("nothing detected")
+        
+if __name__=='__main__':
+    ID=int(sys.argv[1])
+    mission=sys.argv[2]
+    tcen=float(sys.argv[3]) if sys.argv[3]!=0.0 else None
+    tdur=float(sys.argv[4]) if sys.argv[4]!=0.0 else None
+    overwrite=bool(sys.argv[5])
+    do_search=bool(sys.argv[6])
+    useL2=bool(sys.argv[7])
+    PL_ror_thresh=float(sys.argv[8])
+    variable_llk_thresh=float(sys.argv[9])
+    plot=bool(sys.argv[10])
+    do_fit=bool(sys.argv[11])
+    re_vet=bool(sys.argv[12])
+    re_fit=bool(sys.argv[13])
+    out=InitNamaste(ID,mission,
+                    tcen=tcen,tdur=tdur,overwrite=overwrite,do_search=do_search,
+                    useL2=useL2,PL_ror_thresh=PL_ror_thresh,variable_llk_thresh=variable_llk_thresh,file_loc=file_loc,
+                    plot=plot,do_fit=do_fit,re_vet=re_vet,re_fit=re_fit)
