@@ -12,8 +12,8 @@ import pickle
 import os
 from copy import deepcopy
 from datetime import datetime
-from MonoTools import tools as namaste
-from MonoTools import MonoFit
+import .tools as namaste
+import .MonoFit
 from scipy import optimize
 from scipy import interpolate
 import exoplanet as xo
