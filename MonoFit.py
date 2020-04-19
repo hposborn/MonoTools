@@ -512,11 +512,11 @@ class monoModel():
                         print(self.lc['time'][self.lc['oot_mask']])
                         if debug:
                             tt.printing.Print('r_pl')(r_pl)
-                            tt.printing.Print('mult')(mult)
+                            #tt.printing.Print('mult')(mult)
                             tt.printing.Print('tdur')(tdur)
                             tt.printing.Print('t0')(t0)
                             tt.printing.Print('b')(b)
-                            tt.printing.Print('p2use')(p2use)
+                            #tt.printing.Print('p2use')(p2use)
                             tt.printing.Print('rho_S')(rho_S)
                             tt.printing.Print('Rs')(Rs)
                         # Compute the model light curve using starry
@@ -551,8 +551,8 @@ class monoModel():
                         else:
                             loglike = tt.sum(pm.Normal.dist(mu=light_curve, sd=self.lc['flux_err'][self.lc['oot_mask']]).logp(self.lc['flux'][self.lc['oot_mask']]))
 
-                        logprior = tt.log(orbit.dcosidb) - 2 * tt.log(self.planets[self.duos[i]]['period_aliases'])
-                        logprobs.append(loglike + logprior)
+                        logprior = tt.log(orbit.dcosidb[-1]) - 2 * tt.log((t0_second_trans-t0_first_trans)/p_int)
+                        logprobs.append(loglike)
 
             elif len(self.duos)==2:
                 #Two planets with two transits... This has to be the max.
