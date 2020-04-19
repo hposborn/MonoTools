@@ -36,8 +36,8 @@ import glob
 import warnings
 warnings.filterwarnings("ignore")
 
-NamastePymc3_path = os.path.dirname(os.path.abspath( __file__ ))
-from .stellar import starpars
+MonoTools_path = os.path.dirname(os.path.abspath( __file__ ))
+from stellar import starpars
 
 id_dic={'TESS':'TIC','tess':'TIC','Kepler':'KIC','kepler':'KIC','KEPLER':'KIC',
         'K2':'EPIC','k2':'EPIC','CoRoT':'CID','corot':'CID'}
@@ -1266,7 +1266,7 @@ def GetSavename(ID, mission, how='load', suffix='mcmc.pickle', overwrite=False, 
     # - how : 'load' or 'save'
     # - suffix : final part of file string. default is _mcmc.pickle
     # - overwrite : if 'save', whether to overwrite past save or not.
-    # - savefileloc : file location of files to save (default: 'NamastePymc3/[T/K]ID[11-number ID]/
+    # - savefileloc : file location of files to save (default: 'MonoTools/[T/K]ID[11-number ID]/
     #
     # OUTPUTS:
     # - filepath

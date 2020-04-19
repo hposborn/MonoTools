@@ -12,8 +12,8 @@ import pickle
 import os
 from copy import deepcopy
 from datetime import datetime
-import .tools as namaste
-import .MonoFit
+from . import tools
+from . import MonoFit
 from scipy import optimize
 from scipy import interpolate
 import exoplanet as xo
@@ -106,7 +106,7 @@ def QuickMonoFit(lc,it0,dur,Rs=None,Ms=None,Teff=None,useL2=False,fit_poly=True,
         m_star = Ms if Ms is not None and not np.isnan(Ms) else 1.0
         Ts = Teff if Teff is not None and not np.isnan(Teff) else 5500.0
 
-        u_star = namaste.getLDs(Ts)[0]
+        u_star = tools.getLDs(Ts)[0]
         #xo.distributions.QuadLimbDark("u_star")
         if how=='periodic' and init_period is not None:
             log_per = pm.Normal("log_per", mu=np.log(init_period),sd=0.4)
@@ -1025,7 +1025,7 @@ def bin_lc_segment(lc_segment, binsize):
     
 def GenModelLc(lc,all_pls,mission,Rstar=1.0,rhostar=1.0,Teff=5800,logg=4.43):
     #Generates model planet lightcurve from dictionary of all planets
-    u = namaste.getLDs(Teff,logg=logg,FeH=0.0,mission=mission).ravel()
+    u = tools.getLDs(Teff,logg=logg,FeH=0.0,mission=mission).ravel()
     cad=np.nanmedian(np.diff(lc['time'])) 
     light_curves=[]
     for pl in all_pls:
@@ -2049,7 +2049,7 @@ def minimize_EBmodel(lc, objects, Teffs, Rs, Ms, nrep=9,try_sec=False,use_ellc=F
         for n in range(nrep):
             #Initialising priors and parameters for EB model:
             #radius_1 = R1/sma,radius_2 = R2/sma,log_sbratio = 0.25,
-            #incl=90±20,light_3=,t_zero,period,a,q,f_c,f_s,ldc_1
+            #incl=90pm20,light_3=,t_zero,period,a,q,f_c,f_s,ldc_1
             #Taking initial parameters as uniform between priors:
             init_params=init_params_0+\
                         np.random.normal(np.tile(0.0,len(init_params_0)),0.15*init_uniform_priors[:,3].astype(float))
@@ -2123,7 +2123,7 @@ def get_interpmodels(Rs,Ms,Teff,lc_time,lc_flux_unit,mission='tess',n_durs=3,tex
     if texp is None:
         texp=np.nanmedian(np.diff(lc_time))
     
-    u_star = namaste.getLDs(Teff,logg=np.log10(Ms/Rs**2)+4.431,FeH=0.0)[0]
+    u_star = tools.getLDs(Teff,logg=np.log10(Ms/Rs**2)+4.431,FeH=0.0)[0]
     
     #Computing monotransit minimum P from which to estimate durations:
     cadence=np.nanmedian(np.diff(lc_time))
@@ -2152,7 +2152,7 @@ def get_interpmodels(Rs,Ms,Teff,lc_time,lc_flux_unit,mission='tess',n_durs=3,tex
 
     return interpmodels,tdurs
 
-def InitNamaste(ID, mission, tcen=None, tdur=None, overwrite=False, do_search=True,
+def MonoVetting(ID, mission, tcen=None, tdur=None, overwrite=False, do_search=True,
                 useL2=False,PL_ror_thresh=0.2,variable_llk_thresh=5,file_loc=None,
                 plot=False,do_fit=False,re_vet=False,re_fit=False,**kwargs):
     '''#Here we're going to initialise the Monotransit fitting by searching for other planets/transits/secondaries and filtering out binaries.
@@ -2186,10 +2186,10 @@ def InitNamaste(ID, mission, tcen=None, tdur=None, overwrite=False, do_search=Tr
      '''
     if file_loc is None:
         #Creating a ID directory in the current directory for the planet fits/docs
-        file_loc=namaste.id_dic[mission]+str(ID).zfill(11)
-    elif kwargs['file_loc'][-1]=='/':
+        file_loc=tools.id_dic[mission]+str(ID).zfill(11)
+    elif file_loc[-1]=='/':
         #If we're given a directory, we'll create a ID directory in there for the planet fits/docs
-        file_loc=kwargs['file_loc']+namaste.id_dic[mission]+str(ID).zfill(11)
+        file_loc=file_loc+tools.id_dic[mission]+str(ID).zfill(11)
     kwargs['file_loc']=file_loc
     
     mono_SNR_thresh=6.5 if 'mono_SNR_thresh' not in kwargs else kwargs['mono_SNR_thresh']
@@ -2203,13 +2203,15 @@ def InitNamaste(ID, mission, tcen=None, tdur=None, overwrite=False, do_search=Tr
 
     if 'StarPars' not in kwargs:
         #loading Rstar,Tess, logg and rho from csvs:
-        if not os.path.isfile(file_loc+"/"+file_loc+'_starpars.csv') or overwrite:
-            from NamastePymc3.stellar import starpars
+        if not os.path.isfile(file_loc+"/"+file_loc.split('/')[-1]+'_starpars.csv') or overwrite:
+            from stellar import starpars
             #Gets stellar info
             info,_=starpars.getStellarInfoFromCsv(ID,mission)
-            info.to_csv(file_loc+"/"+file_loc+'_starpars.csv')
+            info.to_csv(file_loc+"/"+file_loc.split('/')[-1]+'_starpars.csv')
         else:
-            info=pd.read_csv(file_loc+"/"+file_loc+'_starpars.csv', index_col=0, header=0).T.iloc[0]
+            info=pd.read_csv(file_loc+"/"+file_loc.split('/')[-1]+'_starpars.csv', index_col=0, header=0).T.iloc[0]
+        
+        print(info.index)
         Rstar=[float(info['rad']),float(info['eneg_Rad']),float(info['epos_Rad'])]
         Teff=[float(info['Teff']),float(info['eneg_Teff']),float(info['epos_Teff'])]
         logg=[float(info['logg']),float(info['eneg_logg']),float(info['epos_logg'])]
@@ -2225,23 +2227,23 @@ def InitNamaste(ID, mission, tcen=None, tdur=None, overwrite=False, do_search=Tr
         Rstar, rhostar, Teff, logg = StarPars
         
     #opening lightcurve:
-    if not os.path.isfile(file_loc+"/"+file_loc+'_lc.pickle') or overwrite:
+    if not os.path.isfile(file_loc+"/"+file_loc.split('/')[-1]+'_lc.pickle') or overwrite:
         #Gets Lightcurve
-        lc,hdr=namaste.openLightCurve(ID,mission,use_ppt=False)
-        pickle.dump(lc,open(file_loc+"/"+file_loc+'_lc.pickle','wb'))
+        lc,hdr=tools.openLightCurve(ID,mission,use_ppt=False)
+        pickle.dump(lc,open(file_loc+"/"+file_loc.split('/')[-1]+'_lc.pickle','wb'))
         #lc=lcFlatten(lc,winsize=9*tdur,stepsize=0.1*tdur)
     else:
-        lc=pickle.load(open(file_loc+"/"+file_loc+'_lc.pickle','rb'))
+        lc=pickle.load(open(file_loc+"/"+file_loc.split('/')[-1]+'_lc.pickle','rb'))
     
     # DOING MONOTRANSIT PLANET SEARCH:
-    if (not os.path.isfile(file_loc+"/"+file_loc+'_monos.pickle') or overwrite) and do_search:
+    if (not os.path.isfile(file_loc+"/"+file_loc.split('/')[-1]+'_monos.pickle') or overwrite) and do_search:
         mono_dic, monosearchparams, monofig = MonoTransitSearch(deepcopy(lc),ID,
                                                                 Rs=Rstar[0],Ms=Ms,Teff=Teff[0],
                                                                 plot_loc=file_loc+"/", plot=plot,**kwargs)
         figs['mono']=monofig
-        pickle.dump(mono_dic,open(file_loc+"/"+file_loc+'_monos.pickle','wb'))
+        pickle.dump(mono_dic,open(file_loc+"/"+file_loc.split('/')[-1]+'_monos.pickle','wb'))
     elif do_search:
-        mono_dic=pickle.load(open(file_loc+"/"+file_loc+'_monos.pickle','rb'))
+        mono_dic=pickle.load(open(file_loc+"/"+file_loc.split('/')[-1]+'_monos.pickle','rb'))
         if plot and os.path.isfile(file_loc+"/"+str(ID).zfill(11)+'_Monotransit_Search.pdf'):
             figs['mono'] = file_loc+"/"+str(ID).zfill(11)+'_Monotransit_Search.pdf'
     elif not do_search:
@@ -2252,12 +2254,12 @@ def InitNamaste(ID, mission, tcen=None, tdur=None, overwrite=False, do_search=Tr
     #print("monos:",{pl:{'tcen':mono_dic[pl]['tcen'],'depth':mono_dic[pl]['depth']} for pl in mono_dic})
     
     # DOING PERIODIIC PLANET SEARCH:
-    if (not os.path.isfile(file_loc+"/"+file_loc+'_multis.pickle') or overwrite) and do_search:
+    if (not os.path.isfile(file_loc+"/"+file_loc.split('/')[-1]+'_multis.pickle') or overwrite) and do_search:
         both_dic, perfig = PeriodicPlanetSearch(deepcopy(lc),ID,deepcopy(mono_dic),plot_loc=file_loc+"/",plot=plot, **kwargs)
         figs['multi']=perfig
-        pickle.dump(both_dic,open(file_loc+"/"+file_loc+'_multis.pickle','wb'))
+        pickle.dump(both_dic,open(file_loc+"/"+file_loc.split('/')[-1]+'_multis.pickle','wb'))
     elif do_search:
-        both_dic=pickle.load(open(file_loc+"/"+file_loc+'_multis.pickle','rb'))
+        both_dic=pickle.load(open(file_loc+"/"+file_loc.split('/')[-1]+'_multis.pickle','rb'))
         if plot and os.path.isfile(file_loc+"/"+str(ID).zfill(11)+'_multi_search.pdf'):
             figs['multi']= file_loc+"/"+str(ID).zfill(11)+'_multi_search.pdf'
     else:
@@ -2265,7 +2267,7 @@ def InitNamaste(ID, mission, tcen=None, tdur=None, overwrite=False, do_search=Tr
     # VETTING DETECTED CANDIDATES:
     #print({pl:{'tcen':both_dic[pl]['tcen'],'depth':both_dic[pl]['depth'],'period':both_dic[pl]['period'],'orbit_flag':both_dic[pl]['orbit_flag']} for pl in both_dic})
     if len(both_dic)>0:
-        if not os.path.isfile(file_loc+"/"+file_loc+'_allpls.pickle') or overwrite or re_vet:
+        if not os.path.isfile(file_loc+"/"+file_loc.split('/')[-1]+'_allpls.pickle') or overwrite or re_vet:
             for pl in both_dic:
                 #Best-fit model params for the mono transit:
                 if both_dic[pl]['orbit_flag']=='mono':
@@ -2394,10 +2396,10 @@ def InitNamaste(ID, mission, tcen=None, tdur=None, overwrite=False, do_search=Tr
                     if 'rp_rs' in both_dic[pl] and both_dic[pl]['rp_rs']>PL_ror_thresh:
                         #Likely EB
                         both_dic[pl]['flag']='EB'
-            pickle.dump(both_dic,open(file_loc+"/"+file_loc+'_allpls.pickle','wb'))
+            pickle.dump(both_dic,open(file_loc+"/"+file_loc.split('/')[-1]+'_allpls.pickle','wb'))
 
         else:
-            both_dic = pickle.load(open(file_loc+"/"+file_loc+'_allpls.pickle','rb'))
+            both_dic = pickle.load(open(file_loc+"/"+file_loc.split('/')[-1]+'_allpls.pickle','rb'))
             monos=[pl for pl in both_dic if both_dic[pl]['orbit_flag']=='mono']
             duos=[pl for pl in both_dic if both_dic[pl]['orbit_flag']=='duo']
             multis=[pl for pl in both_dic if both_dic[pl]['orbit_flag']=='periodic']
@@ -2451,9 +2453,9 @@ def InitNamaste(ID, mission, tcen=None, tdur=None, overwrite=False, do_search=Tr
         if plot:
             #Chcking if values in df are different:
             new_df=True
-            if os.path.exists(file_loc+"/"+file_loc+'_candidates.csv') and not re_vet:
+            if os.path.exists(file_loc+"/"+file_loc.split('/')[-1]+'_candidates.csv') and not re_vet:
                 new_df=False
-                old_df=pd.read_csv(file_loc+"/"+file_loc+'_candidates.csv')
+                old_df=pd.read_csv(file_loc+"/"+file_loc.split('/')[-1]+'_candidates.csv')
                 
                 print(old_df.iloc[0],df.iloc[0])
                 #print(old_df.values,df.values, old_df.values!=df.values)
@@ -2484,8 +2486,8 @@ def InitNamaste(ID, mission, tcen=None, tdur=None, overwrite=False, do_search=Tr
                 figs['tab']=file_loc+"/"+str(ID).zfill(11)+'_table.pdf'
             else:
                 figs['tab']=file_loc+"/"+str(ID).zfill(11)+'_table.pdf'
-        if not os.path.isfile(file_loc+"/"+file_loc+'_candidates.csv') or overwrite or re_vet:
-            df.to_csv(file_loc+"/"+file_loc+'_candidates.csv')
+        if not os.path.isfile(file_loc+"/"+file_loc.split('/')[-1]+'_candidates.csv') or overwrite or re_vet:
+            df.to_csv(file_loc+"/"+file_loc.split('/')[-1]+'_candidates.csv')
         #all_cands_df.to_csv("all_cands.csv")
         
         '''
@@ -2508,7 +2510,7 @@ def InitNamaste(ID, mission, tcen=None, tdur=None, overwrite=False, do_search=Tr
             for figname in figs:
                 #print(figname,type(figs[figname]))
                 output.addPage(PdfFileReader(open(figs[figname], "rb")).getPage(0))
-            outputStream = open(file_loc+"/"+file_loc+'_report.pdf', "wb")
+            outputStream = open(file_loc+"/"+file_loc.split('/')[-1]+'_report.pdf', "wb")
             output.write(outputStream)
             outputStream.close()
         
@@ -2527,7 +2529,7 @@ def InitNamaste(ID, mission, tcen=None, tdur=None, overwrite=False, do_search=Tr
             # PLANET MODELLING:
             print({pl:{'tcen':both_dic[pl]['tcen'],'depth':both_dic[pl]['depth'],'period':both_dic[pl]['period'],'orbit_flag':both_dic[pl]['orbit_flag'],'flag':both_dic[pl]['flag']} for pl in both_dic})
             print("Planets to model:",[obj for obj in both_dic if both_dic[obj]['flag']=='planet'])
-            if not os.path.isfile(file_loc+"/"+file_loc+'_model.pickle') or overwrite or re_fit:
+            if not os.path.isfile(file_loc+"/"+file_loc.split('/')[-1]+'_model.pickle') or overwrite or re_fit:
                 mod=MonoFit.monoModel(ID, lc, {},savefileloc=file_loc+'/')
                 #If not, we have a planet.
                 #Checking if monoplanet is single, double-with-gap, or periodic.
@@ -2553,9 +2555,9 @@ def InitNamaste(ID, mission, tcen=None, tdur=None, overwrite=False, do_search=Tr
                             mod.add_duo(deepcopy(both_dic[obj]),obj)
                 mod.init_starpars(Rstar=Rstar,rhostar=rhostar,Teff=Teff,logg=logg)
                 mod.init_model(useL2=useL2,mission=mission,FeH=0.0)
-                pickle.dump(mod,open(file_loc+"/"+file_loc+'_model.pickle','wb'))
+                pickle.dump(mod,open(file_loc+"/"+file_loc.split('/')[-1]+'_model.pickle','wb'))
             else:
-                mod = pickle.load(open(file_loc+"/"+file_loc+'_model.pickle','rb'))
+                mod = pickle.load(open(file_loc+"/"+file_loc.split('/')[-1]+'_model.pickle','rb'))
             if do_fit:
                 mod.RunMcmc()
             return mod, both_dic
@@ -2568,6 +2570,8 @@ def InitNamaste(ID, mission, tcen=None, tdur=None, overwrite=False, do_search=Tr
         print("nothing detected")
         
 if __name__=='__main__':
+    import sys
+    assert(len(sys.argv)==15)
     ID=int(sys.argv[1])
     mission=sys.argv[2]
     tcen=float(sys.argv[3]) if sys.argv[3]!=0.0 else None
@@ -2577,11 +2581,12 @@ if __name__=='__main__':
     useL2=bool(sys.argv[7])
     PL_ror_thresh=float(sys.argv[8])
     variable_llk_thresh=float(sys.argv[9])
-    plot=bool(sys.argv[10])
-    do_fit=bool(sys.argv[11])
-    re_vet=bool(sys.argv[12])
-    re_fit=bool(sys.argv[13])
-    out=InitNamaste(ID,mission,
+    file_loc=sys.argv[10]
+    plot=bool(sys.argv[11])
+    do_fit=bool(sys.argv[12])
+    re_vet=bool(sys.argv[13])
+    re_fit=bool(sys.argv[14])
+    out=MonoVetting(ID,mission,
                     tcen=tcen,tdur=tdur,overwrite=overwrite,do_search=do_search,
                     useL2=useL2,PL_ror_thresh=PL_ror_thresh,variable_llk_thresh=variable_llk_thresh,file_loc=file_loc,
                     plot=plot,do_fit=do_fit,re_vet=re_vet,re_fit=re_fit)
