@@ -1,8 +1,15 @@
 *.h5
 __pycache__/
+.ipynb_checkpoints/
 data/EPIC*
 data/CorotLCs
 data/TIC*
 data/KIC*
 stellar/isoclassify/mesa.h5
-
+.DS_Store
+for_hugh.ipynb
+for_hugh_marg_all.ipynb
+for_hugh_mod2.ipynb
+k2flatten.py
+oldcode.py
+Compile TESS MES series-Copy1.ipynb
