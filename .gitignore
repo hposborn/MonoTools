@@ -1,0 +1,8 @@
+*.h5
+__pycache__/
+data/EPIC*
+data/CorotLCs
+data/TIC*
+data/KIC*
+stellar/isoclassify/mesa.h5
+
