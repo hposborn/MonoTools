@@ -115,20 +115,29 @@ class monoModel():
         # Given the time array, the t0 of transit, and the fact that two transits are observed, 
         #   we want to calculate a distribution of impossible periods to remove from the period alias list
         #finding the longest unbroken observation for P_min guess
-        P_min = np.max([self.compute_period_gaps(duo['tcen'],dur=duo['tdur']),
-                        self.compute_period_gaps(duo['tcen2'],dur=duo['tdur'])])
-        
-        check_pers_ints = np.arange(1,np.ceil(duo['period']/P_min),1.0)
+        #P_min = np.max(np.hstack((self.compute_period_gaps(duo['tcen'],dur=duo['tdur']),
+        #                          self.compute_period_gaps(duo['tcen_2'],dur=duo['tdur']))))
+        #print(P_min,np.ceil(duo['period']/P_min),np.ceil(duo['period']/P_min))
+        check_pers_ints = np.arange(1,np.ceil(duo['period']/10),1.0)
         check_pers_ix=np.tile(False,len(check_pers_ints))
-        Npts_from_known_transits=np.sum(abs(self.lc['time']-duo['tcen'])<0.3*duo['tdur']) + \
-                                 np.sum(abs(self.lc['time']-duo['tcen_2'])<0.3*duo['tdur'])
+        trans1=abs(self.lc['time'][self.lc['mask']]-duo['tcen'])<0.3*duo['tdur']
+        trans2=abs(self.lc['time'][self.lc['mask']]-duo['tcen_2'])<0.3*duo['tdur']
+        days_in_known_transits=(np.sum(trans1)*float(self.lc['cadence'][self.lc['mask']][trans1][0][1:])/1440) + \
+                               (np.sum(trans2)*float(self.lc['cadence'][self.lc['mask']][trans2][0][1:])/1440)
+        
+        print(self.lc['cadence'][100][1:])
+        
         #Looping through potential periods and counting points in-transit
         for nper,per_int in enumerate(check_pers_ints):
             per=duo['period']/per_int
-            phase=(lc_time-duo['tcen']-per*0.5)%per-per*0.5
-            Npts_in_tr=np.sum(abs(phase)<0.3*duo['tdur'])
-            check_pers_ix[nper]=Npts_in_tr<1.075*Npts_from_known_transits #Less than 15% of another eclipse is covered
+            phase=(self.lc['time'][self.lc['mask']]-duo['tcen']-per*0.5)%per-per*0.5
+            intr=abs(phase)<0.3*duo['tdur']
+            #Here we need to add up the cadences in transit (and not simply count the points) to check coverage:
+            days_in_tr=np.sum([float(self.lc['cadence'][ncad][1:]) for ncad in np.arange(len(self.lc['cadence']))[self.lc['mask']][intr]])/1440.
+            check_pers_ix[nper]=days_in_tr<1.075*days_in_known_transits #Less than 15% of another eclipse is covered
             #print(per,Npts_in_tr/Npts_from_known_transits)
+        print(check_pers_ints)
+        print([check_pers_ix])
         duo['period_int_aliases']=check_pers_ints[check_pers_ix]
         duo['period_aliases']=duo['period']/duo['period_int_aliases']
         duo['P_min']=np.min(duo['period_aliases'])
@@ -139,7 +148,7 @@ class monoModel():
         #Adds planet with two eclipses and unknown period between these
         assert pl_dic['period']==abs(pl_dic['tcen']-pl_dic['tcen_2'])
         #Calculating P_min and the integer steps
-        duo=self.compute_duo_period_aliases(duo)
+        pl_dic=self.compute_duo_period_aliases(pl_dic)
         
         self.planets[name]=pl_dic
         self.duos+=[name]
@@ -164,7 +173,7 @@ class monoModel():
         # - how : 'load' or 'save'
         # - suffix : final part of file string. default is _mcmc.pickle
         # - overwrite : if 'save', whether to overwrite past save or not.
-        # - savefileloc : file location of files to save (default: 'NamastePymc3/[T/K]ID[11-number ID]/
+        # - savefileloc : file location of files to save (default: 'MonoTools/[T/K]ID[11-number ID]/
         #
         # OUTPUTS:
         # - filepath
@@ -275,8 +284,12 @@ class monoModel():
                 for ipl in self.monos:
                     speedmask[abs(self.lc['time'][self.lc['mask']]-self.planets[ipl]['tcen'])<cutDistance]=True
                 for ipl in self.duos:
-                    speedmask[abs(self.lc['time'][self.lc['mask']]-self.planets[ipl]['tcen'])<cutDistance]=True
-                    speedmask[abs(self.lc['time'][self.lc['mask']]-self.planets[ipl]['tcen_2'])<cutDistance]=True
+                    #speedmask[abs(self.lc['time'][self.lc['mask']]-self.planets[ipl]['tcen'])<cutDistance]=True
+                    #speedmask[abs(self.lc['time'][self.lc['mask']]-self.planets[ipl]['tcen_2'])<cutDistance]=True
+                    for per in self.planets[ipl]['period_aliases']:
+                        phase=(self.lc['time'][self.lc['mask']]-self.planets[ipl]['tcen']-0.5*per)%per-0.5*per
+                        speedmask[abs(phase)<cutDistance]=True
+                        
                 self.lc['oot_mask']=self.lc['mask'][:]
                 self.lc['oot_mask'][self.lc['oot_mask']]=speedmask[:]
                 print(np.sum(~self.lc['oot_mask']),"points cut from lightcurve, compared to ",np.sum(self.lc['mask'])," in original mask, leaving ",np.sum(self.lc['oot_mask']),"points in the lc")
@@ -289,7 +302,7 @@ class monoModel():
                 min_Ps=np.array([self.planets[pls]['P_min'] for pls in self.planets if self.planets[pls]['orbit_flag']=='mono']).ravel()
                 print(min_Ps)
                 #From Dan Foreman-Mackey's thing:
-                soft_period = pm.Bound(pm.Pareto, lower=0.0, upper=1.0)("soft_period", m=min_Ps, alpha=2/3.,shape=len(min_Ps))
+                soft_period = pm.Pareto("soft_period", m=min_Ps, alpha=2/3.,shape=len(min_Ps))
             if len(self.multis)>0:
                 known_period = pm.Normal("known_period", mu=np.array([self.planets[pls]['period'] for pls in self.multis]),sd=0.1,shape=len(self.multis))
             
@@ -455,24 +468,24 @@ class monoModel():
                 per_int_steps=pm.Deterministic("per_int_steps", 
                                                tt.as_tensor_variable(self.planets[self.duos[0]]['period_int_aliases'])
                                               )
-                print(p_int_steps,range(len(p_int_steps[self.duos[0]])))
-                for i in range(len(p_int_steps[self.duos[0]])):
+                print(self.planets[self.duos[0]]['period_int_aliases'])
+                for i,p_int in enumerate(self.planets[self.duos[0]]['period_int_aliases']):
                     with pm.Model(name="per_{0}".format(i), model=model) as submodel:
                         if len(self.planets)>1:
                             #Have other planets - need to concatenate periods and t0s
                             if len(self.monos)>0 and len(self.multis)>0:
                                 print("1 duo, plus monos, plus multis")
-                                period=pm.Deterministic("period",tt.concatenate((soft_period,known_period,(t0_second_trans-t0_first_trans)/p_int_steps[self.duos[0]][i])))
+                                period=pm.Deterministic("period",tt.concatenate((soft_period,known_period,(t0_second_trans-t0_first_trans)/p_int)))
                             elif len(self.monos)>0 and len(self.multis)==0:
                                 print("1 duo, plus monos")
-                                period=pm.Deterministic("period",tt.concatenate((soft_period,(t0_second_trans-t0_first_trans)/p_int_steps[self.duos[0]][i])))
+                                period=pm.Deterministic("period",tt.concatenate((soft_period,(t0_second_trans-t0_first_trans)/p_int)))
                             elif len(self.multis)>0 and len(self.monos)==0:
                                 print("1 duo, plus multis")
-                                period=pm.Deterministic("period",tt.concatenate((known_period,(t0_second_trans-t0_first_trans)/p_int_steps[self.duos[0]][i])))
+                                period=pm.Deterministic("period",tt.concatenate((known_period,(t0_second_trans-t0_first_trans)/p_int)))
                             t0=pm.Deterministic("t0",tt.concatenate((init_t0,t0_first_trans)))
                         else:
                             print("1 duo no others")
-                            period=pm.Deterministic("period",(t0_second_trans-t0_first_trans)/p_int_steps[self.duos[0]][i])
+                            period=pm.Deterministic("period",(t0_second_trans-t0_first_trans)/p_int)
                             t0=pm.Deterministic("t0",t0_first_trans)
                         
                         logp = pm.Deterministic("logp", tt.log(period))
@@ -488,7 +501,7 @@ class monoModel():
                                 ecc=ecc, omega=omega,
                                 period=period, t0=t0, b=b)
                         print("orbit set up")
-                        vx, vy, vz = orbit.get_relative_velocity(t0_2use)
+                        vx, vy, vz = orbit.get_relative_velocity(t0)
                         #vsky[self.lc['oot_mask']] 
                         if n_pl>1:
                             vrel=pm.Deterministic("vrel",tt.diag(tt.sqrt(vx**2 + vy**2))/Rs)
@@ -538,7 +551,7 @@ class monoModel():
                         else:
                             loglike = tt.sum(pm.Normal.dist(mu=light_curve, sd=self.lc['flux_err'][self.lc['oot_mask']]).logp(self.lc['flux'][self.lc['oot_mask']]))
 
-                        logprior = tt.log(orbit.dcosidb) - 2 * tt.log(complex_pers[0][i])
+                        logprior = tt.log(orbit.dcosidb) - 2 * tt.log(self.planets[self.duos[i]]['period_aliases'])
                         logprobs.append(loglike + logprior)
 
             elif len(self.duos)==2:
