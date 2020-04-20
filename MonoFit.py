@@ -423,11 +423,11 @@ class monoModel():
                 else:
                     #We have multiple logs2 terms due to multiple telescopes:
                     self.gp={}
-                    for n in range(len(self.cads)):
-                        cad_ix=self.lc['oot_mask']&(self.lc['cadence']==self.cads[n])
-                        self.gp[self.cads[n]] = [xo.gp.GP(kernel, 
+                    for cad in range(len(self.cads)):
+                        cad_ix=self.lc['oot_mask']&(self.lc['cadence']==cad)
+                        self.gp[cad] = xo.gp.GP(kernel, 
                                           self.lc['time'][cad_ix].astype(np.float32), 
-                                          tt.exp(logs2[n]) + self.lc['flux_err'][cad_ix].astype(np.float32), J=2)]
+                                          tt.exp(logs2[n]) + self.lc['flux_err'][cad_ix].astype(np.float32), J=2)
             
             def gen_lc(mask=None,prefix=''):
                 # Short method to create stacked lightcurves, given some input time array and some input cadences:
@@ -541,7 +541,7 @@ class monoModel():
                                 llk_gp_i = []
                                 gp_pred_i= []
                                 for cad in self.cads:
-                                    llk_gp_i += [self.gp[cad].log_likelihood(self.lc['flux'][self.lc['oot_mask']&(self.lc['cadence']==self.cads[n])] - light_curve[self.lc['cadence'][self.lc['oot_mask']]==cad])]
+                                    llk_gp_i += [self.gp[cad].log_likelihood(self.lc['flux'][self.lc['oot_mask']&(self.lc['cadence']==cad)] - light_curve[self.lc['cadence'][self.lc['oot_mask']]==cad])]
                                     if pred_all_time:
                                         gp_pred_i += [self.gp[cad].predict(self.lc['time'][self.lc['cadence']==cad])]
                                 loglike = tt.sum(llk_gp_i)
@@ -610,7 +610,7 @@ class monoModel():
                                 else:
                                     #We have multiple logs2 terms due to multiple telescopes:
                                     for cad in self.cads:
-                                        llk_gp_i += [self.gp[cad].log_likelihood(self.lc['flux'][self.lc['oot_mask']&(self.lc['cadence']==self.cads[n])] - light_curve[self.lc['cadence'][self.lc['oot_mask']]==cad])]
+                                        llk_gp_i += [self.gp[cad].log_likelihood(self.lc['flux'][self.lc['oot_mask']&(self.lc['cadence']==cad)] - light_curve[self.lc['cadence'][self.lc['oot_mask']]==cad])]
                                         if pred_all_time:
                                             gp_pred_i += [self.gp[cad].predict(self.lc['time'])]
 
@@ -692,7 +692,7 @@ class monoModel():
                         llk_gp_i = []
                         gp_pred_i = []
                         for cad in self.cads:
-                            llk_gp_i += [self.gp[cad].log_likelihood(self.lc['flux'][self.lc['oot_mask']&(self.lc['cadence']==self.cads[n])] - mask_light_curve[self.lc['cadence'][self.lc['oot_mask']]==cad])]
+                            llk_gp_i += [self.gp[cad].log_likelihood(self.lc['flux'][self.lc['oot_mask']&(self.lc['cadence']==cad)] - mask_light_curve[self.lc['cadence'][self.lc['oot_mask']]==cad])]
                             if pred_all_time:
                                 gp_pred_i += [self.gp[cad].predict(self.lc['time'][self.lc['cadence']==cad])]
                         #print(gp_pred_i[0].shape,gp_pred_i[1].shape,np.hstack((gp_pred_i)))
