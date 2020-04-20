@@ -419,13 +419,13 @@ class monoModel():
             if use_GP:
                 if len(self.cads)==1:
                     #Observed by a single telescope
-                    gp = xo.gp.GP(kernel, self.lc['time'][self.lc['oot_mask']].astype(np.float32), tt.exp(logs2) + self.lc['flux_err'][self.lc['oot_mask']].astype(np.float32), J=2)
+                    self.gp = xo.gp.GP(kernel, self.lc['time'][self.lc['oot_mask']].astype(np.float32), tt.exp(logs2) + self.lc['flux_err'][self.lc['oot_mask']].astype(np.float32), J=2)
                 else:
                     #We have multiple logs2 terms due to multiple telescopes:
-                    gp_i=[]
+                    self.gp={}
                     for n in range(len(self.cads)):
                         cad_ix=self.lc['oot_mask']&(self.lc['cadence']==self.cads[n])
-                        gp_i += [xo.gp.GP(kernel, 
+                        self.gp[self.cads[n]] = [xo.gp.GP(kernel, 
                                           self.lc['time'][cad_ix].astype(np.float32), 
                                           tt.exp(logs2[n]) + self.lc['flux_err'][cad_ix].astype(np.float32), J=2)]
             
@@ -533,17 +533,17 @@ class monoModel():
                         if use_GP:
                             if len(self.cads)==1:
                                 #Observed by a single telescope
-                                loglike = tt.sum(gp.log_likelihood(self.lc['flux'][self.lc['oot_mask']] - light_curve))
+                                loglike = tt.sum(self.gp.log_likelihood(self.lc['flux'][self.lc['oot_mask']] - light_curve))
                                 if pred_all_time:
-                                    gp_pred = pm.Deterministic("gp_pred", gp.predict(self.lc['time']))
+                                    gp_pred = pm.Deterministic("gp_pred", self.gp.predict(self.lc['time']))
                             else:
                                 #We have multiple logs2 terms due to multiple telescopes:
                                 llk_gp_i = []
                                 gp_pred_i= []
-                                for n in range(len(self.cads)):
-                                    llk_gp_i += [gp_i[n].log_likelihood(self.lc['flux'][self.lc['oot_mask']&(self.lc['cadence']==self.cads[n])] - light_curve[self.lc['cadence'][self.lc['oot_mask']]==self.cads[n]])]
+                                for cad in self.cads:
+                                    llk_gp_i += [self.gp[cad].log_likelihood(self.lc['flux'][self.lc['oot_mask']&(self.lc['cadence']==self.cads[n])] - light_curve[self.lc['cadence'][self.lc['oot_mask']]==cad])]
                                     if pred_all_time:
-                                        gp_pred_i += [gp_i[n].predict(self.lc['time'][self.lc['cadence']==self.cads[n]])]
+                                        gp_pred_i += [self.gp[cad].predict(self.lc['time'][self.lc['cadence']==cad])]
                                 loglike = tt.sum(llk_gp_i)
                                 if pred_all_time:
                                     gp_pred = pm.Deterministic("gp_pred", tt.concatenate(gp_pred_i))
@@ -609,10 +609,10 @@ class monoModel():
                                         gp_pred = pm.Deterministic("gp_pred", gp.predict(self.lc['time']))
                                 else:
                                     #We have multiple logs2 terms due to multiple telescopes:
-                                    for n in range(len(self.cads)):
-                                        llk_gp_i += [gp_i[n].log_likelihood(self.lc['flux'][self.lc['oot_mask']&(self.lc['cadence']==self.cads[n])] - light_curve[self.lc['cadence'][self.lc['oot_mask']]==self.cads[n]])]
+                                    for cad in self.cads:
+                                        llk_gp_i += [self.gp[cad].log_likelihood(self.lc['flux'][self.lc['oot_mask']&(self.lc['cadence']==self.cads[n])] - light_curve[self.lc['cadence'][self.lc['oot_mask']]==cad])]
                                         if pred_all_time:
-                                            gp_pred_i += [gp_i[n].predict(self.lc['time'])]
+                                            gp_pred_i += [self.gp[cad].predict(self.lc['time'])]
 
                                     loglike = tt.sum(tt.stack(llk_gp_i))
                                     if pred_all_time:
@@ -684,17 +684,17 @@ class monoModel():
                 # Compute the model light curve using starry
                 if use_GP:
                     if len(self.cads)==1:
-                        llk_gp = pm.Potential("llk_gp", gp.log_likelihood(self.lc['flux'][self.lc['oot_mask']] - mask_light_curve))
+                        llk_gp = pm.Potential("llk_gp", self.gp.log_likelihood(self.lc['flux'][self.lc['oot_mask']] - mask_light_curve))
                         if pred_all_time:
-                            gp_pred = pm.Deterministic("gp_pred", gp.predict(self.lc['time']))
+                            gp_pred = pm.Deterministic("gp_pred", self.gp.predict(self.lc['time']))
                     else:
                         #We have multiple logs2 terms due to multiple telescopes:
                         llk_gp_i = []
                         gp_pred_i = []
-                        for n in range(len(self.cads)):
-                            llk_gp_i += [gp_i[n].log_likelihood(self.lc['flux'][self.lc['oot_mask']&(self.lc['cadence']==self.cads[n])] - mask_light_curve[self.lc['cadence'][self.lc['oot_mask']]==self.cads[n]])]
+                        for cad in self.cads:
+                            llk_gp_i += [self.gp[cad].log_likelihood(self.lc['flux'][self.lc['oot_mask']&(self.lc['cadence']==self.cads[n])] - mask_light_curve[self.lc['cadence'][self.lc['oot_mask']]==cad])]
                             if pred_all_time:
-                                gp_pred_i += [gp_i[n].predict(self.lc['time'][self.lc['cadence']==self.cads[n]])]
+                                gp_pred_i += [self.gp[cad].predict(self.lc['time'][self.lc['cadence']==cad])]
                         #print(gp_pred_i[0].shape,gp_pred_i[1].shape,np.hstack((gp_pred_i)))
                         llk_gp = pm.Potential("llk_gp", tt.stack(llk_gp_i,axis=0))
                         if pred_all_time:
@@ -959,6 +959,22 @@ class monoModel():
         # Compute the GP prediction
         if 'gp_pred' in self.trace:
             gp_mod = np.median(self.trace["gp_pred"][tracemask,:] + self.trace["mean"][tracemask, None], axis=0)
+        elif type(self.gp)==dic:
+            pred=np.zeros(len(self.lc['time']))
+            for nc,cad in enumerate(self.cads):
+                for col in ['logw0','logpower','logS0']:
+                        self.gp[cad].set_parameter(col,np.nanmedian(self.trace[col][tracemask]))
+                self.gp[cad].set_parameter('logs2',np.nanmedian(self.trace['logs2'][tracemask,nc]))
+                pred[self.lc['cadence']==cad] = self.gp[cad].predict(self.lc['time'][self.lc['cadence']==cad])
+            pred += np.nanmedian(self.trace["mean"][tracemask])
+        elif type(self.gp)==xo.gp.GP:
+            for col in ['logw0','logpower','logS0','logs2']:
+                self.gp.set_parameter(col,np.nanmedian(self.trace[col][tracemask]))
+            pred = self.gp.predict(self.lc['time']) + np.nanmedian(self.trace["mean"][tracemask])
+
+        #if self.lc['oot_mask']!=self.lc['mask']:
+        #Initialising GP was cut away from transits, so maybe we need to re-train with all the points
+
 
         '''if 'mult' in trace.varnames:
             pred = trace["light_curves"][tracemask,:,:]/np.tile(trace['mult'],(1,len(trace["light_curves"][0,:,0]),1)).swapaxes(0,2)
@@ -1151,8 +1167,27 @@ class monoModel():
         import matplotlib.pyplot as plt
         fig=plt.figure(figsize=(14,6))
         
-        lcmask=self.lc['oot_mask']
-        assert len(self.lc['time'][lcmask])==len(self.trace['gp_pred'][0,:])
+        lcmask=self.lc['oot_mask'][:]
+        
+        # Compute the GP prediction
+        if 'gp_pred' in self.trace:
+            gp_mod = np.median(self.trace["gp_pred"][tracemask,:] + self.trace["mean"][tracemask, None], axis=0)
+            assert len(self.lc['time'][lcmask])==len(gp_mod)
+        elif type(self.gp)==dic:
+            pred=np.zeros(len(self.lc['time']))
+            for nc,cad in enumerate(self.cads):
+                for col in ['logw0','logpower','logS0']:
+                        self.gp[cad].set_parameter(col,np.nanmedian(self.trace[col][tracemask]))
+                self.gp[cad].set_parameter('logs2',np.nanmedian(self.trace['logs2'][tracemask,nc]))
+                pred[self.lc['cadence']==cad] = self.gp[cad].predict(self.lc['time'][self.lc['cadence']==cad])
+            pred += np.nanmedian(self.trace["mean"][tracemask])
+        elif type(self.gp)==xo.gp.GP:
+            for col in ['logw0','logpower','logS0','logs2']:
+                self.gp.set_parameter(col,np.nanmedian(self.trace[col][tracemask]))
+            pred = self.gp.predict(self.lc['time']) + np.nanmedian(self.trace["mean"][tracemask])
+
+        #if self.lc['oot_mask']!=self.lc['mask']:
+        #Initialising GP was cut away from transits, so maybe we need to re-train with all the points
 
         #Finding if there's a single enormous gap in the lightcurve:
         x_gap=np.max(np.diff(self.lc['time'][lcmask]))>10
@@ -1168,13 +1203,12 @@ class monoModel():
             f_all=fig.add_subplot(gs[:3, :3])
             f_all_resid=fig.add_subplot(gs[3, :3])
 
-        # Compute the GP prediction
-        gp_mod = np.median(self.trace["gp_pred"][self.tracemask,:] + self.trace["mean"][self.tracemask, None], axis=0)
-
+            
         '''if 'mult' in trace.varnames:
             pred = trace["light_curves"][tracemask,:,:]/np.tile(trace['mult'],(1,len(trace["light_curves"][0,:,0]),1)).swapaxes(0,2)
         else:
-            pred = trace["light_curves"][tracemask,:,:]'''
+            pred = trace["light_curves"][tracemask,:,:]
+        '''
         pred = self.trace["light_curves"][self.tracemask,:,:]
         #Need to check how many planets are here:
         pred = np.percentile(pred, [16, 50, 84], axis=0)

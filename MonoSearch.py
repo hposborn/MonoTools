@@ -55,6 +55,7 @@ def QuickMonoFit(lc,it0,dur,Rs=None,Ms=None,Teff=None,useL2=False,fit_poly=True,
         assert init_period is not None
         xinit=(lc['time']-it0-init_period*0.5)%init_period-init_period*0.5
         nearby=(abs(xinit)<ndurs*dur)
+        assert np.sum(nearby)>0
         cad = float(int(max(set(list(lc['cadence'][nearby])), key=list(lc['cadence'][nearby]).count)[1:]))/1440
 
         x = xinit[(abs(xinit)<ndurs*dur)&lc['mask']]+it0 #re-aligning this fake "mono" with the t0 provided
@@ -71,6 +72,7 @@ def QuickMonoFit(lc,it0,dur,Rs=None,Ms=None,Teff=None,useL2=False,fit_poly=True,
     else:
         #Mono case:
         nearby=abs(lc['time']-it0)<np.clip(dur*ndurs,1,4)
+        assert np.sum(nearby)>0
         cad = float(int(max(set(list(lc['cadence'][nearby])), key=list(lc['cadence'][nearby]).count)[1:]))/1440
 
         x=lc['time'][nearby&lc['mask']].astype(np.float32)
