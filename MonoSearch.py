@@ -18,6 +18,11 @@ from scipy import optimize
 from scipy import interpolate
 import exoplanet as xo
 import pymc3 as pm
+
+import theano 
+theano.config.floatX = 'float32' 
+theano.config.set_device = 'cpu' 
+theano.config.force_device = 'True' 
 import theano.tensor as tt
 
 import scipy.interpolate as interp
@@ -309,7 +314,6 @@ def MonoTransitSearch(lc,ID,Rs=None,Ms=None,Teff=None,
 
     interpmodels,tdurs=get_interpmodels(Rs,Ms,Teff,lc['time'],lc['flux_unit'],n_durs=5,texp=binsize)
     
-    print("Searching "+str(ID)+" for monotransits")
 
     #print("Checking input model matches. flux:",np.nanmedian(uselc[:,0]),"std",np.nanstd(uselc[:,1]),"transit model:",
     #       interpmodels[0](10.0),"depth:",interpmodels[0](0.0))
@@ -321,6 +325,8 @@ def MonoTransitSearch(lc,ID,Rs=None,Ms=None,Teff=None,
         for arr in np.array_split(lc['time'][lc['mask']],1+np.where(np.diff(lc['time'][lc['mask']])>tdurs[2])[0]):
             search_xranges_n+=[np.arange(arr[0]+0.33*tdurs[n],arr[-1]-0.33*tdurs[n],tdurs[n]/n_oversamp)]
         search_xranges+=[np.hstack(search_xranges_n)]
+    
+    print(str(ID)+" - Searching "+str(np.sum([len(xr) for xr in search_xranges]))+" positions with "+str(n_durs)+" durations")
 
     #Looping through search and computing chi-sq at each position:
     outparams=pd.DataFrame()
