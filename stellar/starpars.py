@@ -1114,6 +1114,22 @@ def getStellarInfoFromCsv(ID,mission,k2tab=None):
             for key in tic_dat:
                 if key not in info:
                     info[key]=tic_dat[key]
+        if 'rad' not in info:
+            #Doing Isoclassify to get star parameters:
+            Rstar, rhos, Teff, logg, src = getStellarInfo(ID,info,mission)
+            info['rad']=Rstar[0]
+            info['eneg_Rad']=Rstar[1]
+            info['epos_Rad']=Rstar[2]
+            info['Teff']=Teff[0]
+            info['eneg_Teff']=Teff[1]
+            info['epos_Teff']=Teff[2]
+            info['logg']=logg[0]
+            info['eneg_logg']=logg[1]
+            info['epos_logg']=logg[2]
+            info['rhos']=rhos[0]
+            info['eneg_rhos']=rhos[1]
+            info['epos_rhos']=rhos[2]
+
         if 'logg' not in info:
             #Problem here - need logg. Derive from Teff and Rs, plus Dist vs. mag?
             info['logg']=np.nan
@@ -1134,6 +1150,9 @@ def getStellarInfoFromCsv(ID,mission,k2tab=None):
                 info['epos_rho']=1.411*((info['mass']+info['epos_Mass'])/(info['rad']-abs(info['eneg_Rad']))**3)-info['rho']
     
     change_cols={'Teff':'Teff','Rad':'rad','Mass':'mass','logg':'logg','Dist':'Dist','rho':'rho'}
+    
+    if [col in info.index
+    
     for col in change_cols:
         if 'eneg_'+col not in info.index and 'e_'+change_cols[col] in info.index:
             info['eneg_'+col]=info['e_'+change_cols[col]]
