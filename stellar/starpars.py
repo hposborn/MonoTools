@@ -1150,9 +1150,7 @@ def getStellarInfoFromCsv(ID,mission,k2tab=None):
                 info['epos_rho']=1.411*((info['mass']+info['epos_Mass'])/(info['rad']-abs(info['eneg_Rad']))**3)-info['rho']
     
     change_cols={'Teff':'Teff','Rad':'rad','Mass':'mass','logg':'logg','Dist':'Dist','rho':'rho'}
-    
-    if [col in info.index
-    
+        
     for col in change_cols:
         if 'eneg_'+col not in info.index and 'e_'+change_cols[col] in info.index:
             info['eneg_'+col]=info['e_'+change_cols[col]]
