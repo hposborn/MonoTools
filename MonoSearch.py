@@ -2236,17 +2236,18 @@ def MonoVetting(ID, mission, tcen=None, tdur=None, overwrite=False, do_search=Tr
         lc=pickle.load(open(file_loc+"/"+file_loc.split('/')[-1]+'_lc.pickle','rb'))
     
     # DOING MONOTRANSIT PLANET SEARCH:
-    if (not os.path.isfile(file_loc+"/"+file_loc.split('/')[-1]+'_monos.pickle') or overwrite) and do_search:
-        mono_dic, monosearchparams, monofig = MonoTransitSearch(deepcopy(lc),ID,
-                                                                Rs=Rstar[0],Ms=Ms,Teff=Teff[0],
-                                                                plot_loc=file_loc+"/", plot=plot,**kwargs)
-        figs['mono']=monofig
-        pickle.dump(mono_dic,open(file_loc+"/"+file_loc.split('/')[-1]+'_monos.pickle','wb'))
-    elif do_search:
-        mono_dic=pickle.load(open(file_loc+"/"+file_loc.split('/')[-1]+'_monos.pickle','rb'))
-        if plot and os.path.isfile(file_loc+"/"+str(ID).zfill(11)+'_Monotransit_Search.pdf'):
-            figs['mono'] = file_loc+"/"+str(ID).zfill(11)+'_Monotransit_Search.pdf'
-    elif not do_search:
+    if do_search:
+        if not os.path.isfile(file_loc+"/"+file_loc.split('/')[-1]+'_monos.pickle') or overwrite:
+            mono_dic, monosearchparams, monofig = MonoTransitSearch(deepcopy(lc),ID,
+                                                                    Rs=Rstar[0],Ms=Ms,Teff=Teff[0],
+                                                                    plot_loc=file_loc+"/", plot=plot,**kwargs)
+            figs['mono']=monofig
+            pickle.dump(mono_dic,open(file_loc+"/"+file_loc.split('/')[-1]+'_monos.pickle','wb'))
+        else:
+            mono_dic=pickle.load(open(file_loc+"/"+file_loc.split('/')[-1]+'_monos.pickle','rb'))
+            if plot and os.path.isfile(file_loc+"/"+str(ID).zfill(11)+'_Monotransit_Search.pdf'):
+                figs['mono'] = file_loc+"/"+str(ID).zfill(11)+'_Monotransit_Search.pdf'
+    else:
         intr=lc['mask']&(abs(lc['time']-tcen)<0.45*tdur)
         outtr=lc['mask']&(abs(lc['time']-tcen)<1.25*tdur)&(~intr)
         mono_dic={'00':{'tcen':tcen,'tdur':tdur,'orbit_flag':'mono','poly_DeltaBIC':0.0,
@@ -2254,14 +2255,15 @@ def MonoVetting(ID, mission, tcen=None, tdur=None, overwrite=False, do_search=Tr
     #print("monos:",{pl:{'tcen':mono_dic[pl]['tcen'],'depth':mono_dic[pl]['depth']} for pl in mono_dic})
     
     # DOING PERIODIIC PLANET SEARCH:
-    if (not os.path.isfile(file_loc+"/"+file_loc.split('/')[-1]+'_multis.pickle') or overwrite) and do_search:
-        both_dic, perfig = PeriodicPlanetSearch(deepcopy(lc),ID,deepcopy(mono_dic),plot_loc=file_loc+"/",plot=plot, **kwargs)
-        figs['multi']=perfig
-        pickle.dump(both_dic,open(file_loc+"/"+file_loc.split('/')[-1]+'_multis.pickle','wb'))
-    elif do_search:
-        both_dic=pickle.load(open(file_loc+"/"+file_loc.split('/')[-1]+'_multis.pickle','rb'))
-        if plot and os.path.isfile(file_loc+"/"+str(ID).zfill(11)+'_multi_search.pdf'):
-            figs['multi']= file_loc+"/"+str(ID).zfill(11)+'_multi_search.pdf'
+    if do_search:
+        if not os.path.isfile(file_loc+"/"+file_loc.split('/')[-1]+'_multis.pickle') or overwrite:
+            both_dic, perfig = PeriodicPlanetSearch(deepcopy(lc),ID,deepcopy(mono_dic),plot_loc=file_loc+"/",plot=plot, **kwargs)
+            figs['multi']=perfig
+            pickle.dump(both_dic,open(file_loc+"/"+file_loc.split('/')[-1]+'_multis.pickle','wb'))
+        else:
+            both_dic=pickle.load(open(file_loc+"/"+file_loc.split('/')[-1]+'_multis.pickle','rb'))
+            if plot and os.path.isfile(file_loc+"/"+str(ID).zfill(11)+'_multi_search.pdf'):
+                figs['multi']= file_loc+"/"+str(ID).zfill(11)+'_multi_search.pdf'
     else:
          both_dic=mono_dic
     # VETTING DETECTED CANDIDATES:
@@ -2464,7 +2466,7 @@ def MonoVetting(ID, mission, tcen=None, tdur=None, overwrite=False, do_search=Tr
                 
             if not os.path.isfile(file_loc+"/"+str(ID).zfill(11)+'_table.pdf') or overwrite or new_df or re_vet:
                 # Making table a plot for PDF:
-                fig=plt.figure(figsize=(11.69,4))
+                fig=plt.figure(figsize=(11.69,2+0.5*len(both_dic))
                 ax=fig.add_subplot(111)
                 fig.patch.set_visible(False)
                 ax.axis('off')

@@ -1137,8 +1137,14 @@ def getStellarInfoFromCsv(ID,mission,k2tab=None):
     for col in change_cols:
         if 'eneg_'+col not in info.index and 'e_'+change_cols[col] in info.index:
             info['eneg_'+col]=info['e_'+change_cols[col]]
+        elif col in info.index and 'eneg_'+col not in info.index and 'e_'+col not in index and 'eneg_'+change_cols[col] not in info.index and 'e_'+change_cols[col] not in index:
+            #NO ERRORS PRESENT???
+            info['eneg_'+col]=info[col]*0.5
         if 'epos_'+col not in info.index and 'e_'+change_cols[col] in info.index:
             info['epos_'+col]=info['e_'+change_cols[col]]
+        elif col in info.index and 'epos_'+col not in info.index and 'e_'+col not in index and 'epos_'+change_cols[col] not in info.index and 'e_'+change_cols[col] not in index:
+            #NO ERRORS PRESENT???
+            info['epos_'+col]=info[col]*0.5
 
     return info, k2tab
         
