@@ -20,6 +20,7 @@ warnings.filterwarnings("ignore")
 import sys
 import time
 import json
+import pickle
 
 from astropy.io import fits
 try: # Python 3.x
@@ -758,7 +759,7 @@ def Assemble_and_run_isoclassify(icid,sc,mission,survey_dat,exofop_dat,errboost=
         dustmodel,ext = LoadDust(sc,survey_dat.parallax/1000.,dust='allsky')
         paras = classify.classify(input=x, model=mod, dustmodel=dustmodel, useav=av, ext=ext, plot=0)
     except:
-        paras = classify.classify(input=x, model=mod, dustmodel=0, useav=av, ext=ext, plot=0)
+        paras = classify.classify(input=x, model=mod)
 
     ############################################
     #       Assembling all output data:        #
@@ -1175,7 +1176,9 @@ def getStellarInfoFromCsv(ID,mission,k2tab=None):
                 mags=['Vmag','V','GAIAmag','kepmag','Tmag']
                 while nomag:
                     if mags[nm] in info.index:
-                        info=info.update(MainSequenceFit(info['V'],info['d']))
+                        msinfo=MainSequenceFit(info[mags[nm]],info['d'])
+                        for col in msinfo:
+                            info[col]=msinfo[col]
                         nomag=False
                         
 
