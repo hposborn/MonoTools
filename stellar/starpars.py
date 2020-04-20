@@ -16,7 +16,7 @@ import sys
 
 import warnings
 warnings.filterwarnings("ignore")
-stellar_path = os.path.dirname(os.path.abspath( __file__ ))
+McmcTools_path = os.path.dirname(os.path.abspath( __file__ ))
 
 import sys
 import time
