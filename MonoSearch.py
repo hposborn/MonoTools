@@ -1869,7 +1869,7 @@ def log_likelihood_EBmodel(params, x, y, yerr, Ms,tsec=False):
 
 def EBmodel_neg_lnprob(params, x, y, yerr, priors, Ms,tsec=False):
     return -1*EBmodel_lnprob(params, x, y, yerr, priors, Ms,tsec=tsec)
-import ellc
+
 def EBmodel(params, t, Ms, tsec=False):
     if not tsec:
         #given omega directly as parameter:

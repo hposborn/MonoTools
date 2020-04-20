@@ -147,6 +147,9 @@ class monoModel():
         assert name not in self.planets
         #Adds planet with two eclipses and unknown period between these
         assert pl_dic['period']==abs(pl_dic['tcen']-pl_dic['tcen_2'])
+        tcens=np.array([pl_dic['tcen'],pl_dic['tcen_2']])
+        pl_dic['tcen']=np.min(tcens)
+        pl_dic['tcen_2']=np.max(tcens)
         #Calculating P_min and the integer steps
         pl_dic=self.compute_duo_period_aliases(pl_dic)
         
@@ -267,7 +270,7 @@ class monoModel():
             if len(self.duos)>0:
                 # In cases where we have two transits with a gap between, we will have two t0s for a single planet (and N periods)
                 t0_first_trans = pm.Normal("t0_first_trans",
-                                            mu=np.array([self.planets[pls]['tcen_2'] for pls in self.duos]), 
+                                            mu=np.array([self.planets[pls]['tcen'] for pls in self.duos]), 
                                             sd=np.tile(0.2,len(self.duos)),
                                             shape=len(self.duos))
                 t0_second_trans = pm.Normal("t0_second_trans",
@@ -735,6 +738,7 @@ class monoModel():
     def RunMcmc(self, n_draws=1200, plot=True, do_per_gap_cuts=True, LoadFromFile=True, **kwargs):
         if LoadFromFile and not self.overwrite:
             self.LoadPickle()
+            print("LOADED MCMC")
 
         if not hasattr(self,'trace'):
             assert hasattr(self,'init_soln')
@@ -754,16 +758,33 @@ class monoModel():
             #  - P<0.5dur away from a period gap in P_gap_cuts[:-1]
             #  - OR P is greater than P_gap_cuts[-1]
             if not hasattr(self,'tracemask'):
-                self.tracemask=np.tile(True,len(self.trace['t0'][:,0]))
+                print(self.trace.varnames)
+                self.tracemask=np.tile(True,len(self.trace['r_pl'][:,0]))
             
             for npl,pl in enumerate(self.multis+self.monos+self.duos):
                 if pl in self.monos:
-                    per_gaps=self.compute_period_gaps(np.nanmedian(self.trace['t0'][:,npl]),np.nanmedian(self.trace['tdur'][:,npl]))
+                    #In the case of duos, our orbital parameters are tied up in the marginalised parameters:
+                    if len(self.duos)==1:
+                        t0s=trace['per_0_t0'][:,npl]
+                        tdurs=trace['per_0_tdur'][:,npl]
+                        pers=trace['per_0_period'][:,npl]
+
+                    elif len(self.duos)==2:
+                        t0s=trace['per_0_0_t0'][:,npl]
+                        tdurs=trace['per_0_0_tdur'][:,npl]
+                        pers=trace['per_0_0_period'][:,npl]
+
+                    elif len(self.duos)==0:
+                        t0s=trace['t0'][:,npl]
+                        tdurs=trace['tdur'][:,npl]
+                        pers=trace['period'][:,npl]
+
+                    per_gaps=self.compute_period_gaps(np.nanmedian(t0s),np.nanmedian(tdurs))
                     #for each planet - only use monos
                     if len(per_gaps)>1:
                         #Cutting points where P<P_gap_cuts[-1] and P is not within 0.5Tdurs of a gap:
-                        gap_dists=np.nanmin(abs(self.trace['period'][:,npl][:,np.newaxis]-per_gaps[:-1][np.newaxis,:]),axis=1)
-                        self.tracemask[(self.trace['period'][:,npl]<per_gaps[-1])*(gap_dists>0.5*np.nanmedian(self.trace['tdur'][:,npl]))] = False
+                        gap_dists=np.nanmin(abs(pers[:,np.newaxis]-per_gaps[:-1][np.newaxis,:]),axis=1)
+                        self.tracemask[(pers<per_gaps[-1])*(gap_dists>0.5*np.nanmedian(tdurs))] = False
         elif not hasattr(self,'tracemask'):
             self.tracemask=None
         
@@ -777,9 +798,9 @@ class monoModel():
             with open(savenames[0].replace('mcmc.pickle','results.txt'), 'r', encoding='UTF-8') as file:
                 restable = file.read()
         else:
-            restable=ToLatexTable(trace, ID, mission=mission, varnames=None,order='columns',
-                                  savename=savenames[0].replace('mcmc.pickle','results.txt'), overwrite=False,
-                                  savefileloc=None, tracemask=tracemask)
+            restable=self.ToLatexTable(trace, ID, mission=mission, varnames=None,order='columns',
+                                       savename=savenames[0].replace('mcmc.pickle','results.txt'), overwrite=False,
+                                       savefileloc=None, tracemask=tracemask)
 
             #tracemask=np.column_stack([(np.nanmin(abs(trace['period'][:,n][:,np.newaxis]-P_gap_cuts[n][:-1][np.newaxis,:]),axis=1)<0.5*np.nanmedian(trace['tdur'][:,n]))|(trace['period'][:,n]>P_gap_cuts[n][-1]) for n in range(len(P_gap_cuts))]).any(axis=1)
             #print(np.sum(~tracemask),"(",int(100*np.sum(~tracemask)/len(tracemask)),") removed due to period gap cuts")
