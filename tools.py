@@ -37,7 +37,7 @@ import warnings
 warnings.filterwarnings("ignore")
 
 MonoTools_path = os.path.dirname(os.path.abspath( __file__ ))
-from stellar import starpars
+from .stellar import starpars
 
 id_dic={'TESS':'TIC','tess':'TIC','Kepler':'KIC','kepler':'KIC','KEPLER':'KIC',
         'K2':'EPIC','k2':'EPIC','CoRoT':'CID','corot':'CID'}
