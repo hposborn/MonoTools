@@ -235,7 +235,7 @@ urllib3==1.24.2
 vaneska==0.0.dev0
 wcwidth==0.1.7
 webencodings==0.5.1
-Werkzeug==0.14.1
+Werkzeug==0.15.3
 widgetsnbextension==3.4.2
 wrapt==1.12.1
 wurlitzer==1.0.2
