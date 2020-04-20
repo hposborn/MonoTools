@@ -18,13 +18,7 @@ from scipy import optimize
 from scipy import interpolate
 import exoplanet as xo
 import pymc3 as pm
-
-import theano 
-theano.config.floatX = 'float32' 
-theano.config.set_device = 'cpu' 
-theano.config.force_device = 'True' 
 import theano.tensor as tt
-
 import scipy.interpolate as interp
 import scipy.optimize as optim
 import matplotlib.pyplot as plt
