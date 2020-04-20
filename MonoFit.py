@@ -765,19 +765,19 @@ class monoModel():
                 if pl in self.monos:
                     #In the case of duos, our orbital parameters are tied up in the marginalised parameters:
                     if len(self.duos)==1:
-                        t0s=trace['per_0_t0'][:,npl]
-                        tdurs=trace['per_0_tdur'][:,npl]
-                        pers=trace['per_0_period'][:,npl]
+                        t0s=self.trace['per_0_t0'][:,npl]
+                        tdurs=self.trace['per_0_tdur'][:,npl]
+                        pers=self.trace['per_0_period'][:,npl]
 
                     elif len(self.duos)==2:
-                        t0s=trace['per_0_0_t0'][:,npl]
-                        tdurs=trace['per_0_0_tdur'][:,npl]
-                        pers=trace['per_0_0_period'][:,npl]
+                        t0s=self.trace['per_0_0_t0'][:,npl]
+                        tdurs=self.trace['per_0_0_tdur'][:,npl]
+                        pers=self.trace['per_0_0_period'][:,npl]
 
                     elif len(self.duos)==0:
-                        t0s=trace['t0'][:,npl]
-                        tdurs=trace['tdur'][:,npl]
-                        pers=trace['period'][:,npl]
+                        t0s=self.trace['t0'][:,npl]
+                        tdurs=self.trace['tdur'][:,npl]
+                        pers=self.trace['period'][:,npl]
 
                     per_gaps=self.compute_period_gaps(np.nanmedian(t0s),np.nanmedian(tdurs))
                     #for each planet - only use monos
