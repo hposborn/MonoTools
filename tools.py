@@ -1272,7 +1272,7 @@ def GetSavename(ID, mission, how='load', suffix='mcmc.pickle', overwrite=False, 
     # - filepath
     '''
     if savefileloc is None:
-        savefileloc=os.path.join(NamastePymc3_path,'data',id_dic[mission]+str(ID).zfill(11))
+        savefileloc=os.path.join(McmcTools_path,'data',id_dic[mission]+str(ID).zfill(11))
     if not os.path.isdir(savefileloc):
         os.mkdir(savefileloc)
     pickles=glob.glob(os.path.join(savefileloc,id_dic[mission]+str(ID).zfill(11)+"*"+suffix))
@@ -1343,7 +1343,7 @@ def getLDs(Ts,logg=4.43812,FeH=0.0,mission="TESS"):
     if mission[0]=="T" or mission[0]=="t":
         import pandas as pd
         from astropy.io import ascii
-        TessLDs=ascii.read(os.path.join(NamastePymc3_path,'data','tables','tessLDs.txt')).to_pandas()
+        TessLDs=ascii.read(os.path.join(MonoTools_path,'data','tables','tessLDs.txt')).to_pandas()
         TessLDs=TessLDs.rename(columns={'col1':'logg','col2':'Teff','col3':'FeH','col4':'L/HP','col5':'a',
                                            'col6':'b','col7':'mu','col8':'chi2','col9':'Mod','col10':'scope'})
         a_interp=ct2d(np.column_stack((TessLDs.Teff.values.astype(float),TessLDs.logg.values.astype(float))),TessLDs.a.values.astype(float))
@@ -1367,7 +1367,7 @@ def getLDs(Ts,logg=4.43812,FeH=0.0,mission="TESS"):
         else:
             print("no key...")
 
-        arr = np.genfromtxt(os.path.join(NamastePymc3_path,"data","KeplerLDlaws.txt"),skip_header=2)
+        arr = np.genfromtxt(os.path.join(MonoTools_path,"data","KeplerLDlaws.txt"),skip_header=2)
         FeHarr=np.unique(arr[:, 2])
         FeH=find_nearest_2D(FeH,FeHarr)
 
