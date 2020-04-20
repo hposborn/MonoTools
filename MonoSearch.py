@@ -2211,11 +2211,12 @@ def MonoVetting(ID, mission, tcen=None, tdur=None, overwrite=False, do_search=Tr
             info,_=starpars.getStellarInfoFromCsv(ID,mission)
             info.to_csv(file_loc+"/"+file_loc.split('/')[-1]+'_starpars.csv')
         else:
+            print("loading from ",file_loc+"/"+file_loc.split('/')[-1]+'_starpars.csv')
             info=pd.read_csv(file_loc+"/"+file_loc.split('/')[-1]+'_starpars.csv', index_col=0, header=0).T.iloc[0]
         
         print(info.index)
-        Rstar=[float(info['rad']),float(info['eneg_Rad']),float(info['epos_Rad'])]
-        Teff=[float(info['Teff']),float(info['eneg_Teff']),float(info['epos_Teff'])]
+        Rstar=[float(info['rad']),float(info['eneg_rad']),float(info['epos_rad'])]
+        Teff=[float(info['teff']),float(info['eneg_teff']),float(info['epos_teff'])]
         logg=[float(info['logg']),float(info['eneg_logg']),float(info['epos_logg'])]
         rhostar=[float(info['rho'])/1.411,float(info['eneg_rho'])/1.411,float(info['epos_rho'])/1.411]
         if 'mass' in info:

@@ -16,7 +16,6 @@ import sys
 
 import warnings
 warnings.filterwarnings("ignore")
-McmcTools_path = os.path.dirname(os.path.abspath( __file__ ))
 
 import sys
 import time
@@ -599,7 +598,7 @@ def QueryNearbyGaia(sc,CONESIZE,file=None):
 
 
 def CheckSpecCsv(radec,icid,thresh=20*u.arcsec):
-    specs=pd.read_csv(stellar_path+"/spectra_all.csv")
+    specs=pd.read_csv(os.path.join(os.path.dirname(os.path.abspath( __file__ )),"spectra_all.csv"))
     spec_coords=SkyCoord(specs['ra']*u.deg,specs['dec']*u.deg)
     seps=radec.separation(spec_coords)
     
@@ -753,12 +752,13 @@ def Assemble_and_run_isoclassify(icid,sc,mission,survey_dat,exofop_dat,errboost=
     ############################################
     #           Running isoclassify:           #
     ############################################
-    
+    print("Isoclassifying")
     mod=LoadModel()
-
-    dustmodel,ext = LoadDust(sc,survey_dat.parallax/1000.,dust='allsky')
-
-    paras = classify.classify(input=x, model=mod, dustmodel=dustmodel, useav=av, ext=ext, plot=0)
+    try:
+        dustmodel,ext = LoadDust(sc,survey_dat.parallax/1000.,dust='allsky')
+        paras = classify.classify(input=x, model=mod, dustmodel=dustmodel, useav=av, ext=ext, plot=0)
+    except:
+        paras = classify.classify(input=x, model=mod, dustmodel=0, useav=av, ext=ext, plot=0)
 
     ############################################
     #       Assembling all output data:        #
@@ -843,15 +843,16 @@ def starpars(icid,mission,errboost=0.1,return_best=True,
         while isoclass_dens_is_NaN and n_kw_to_remove<=len(order_of_kw_to_remove):
             kwars={order_of_kw_to_remove[nkw]:(True if nkw>=n_kw_to_remove else False) for nkw in range(len(order_of_kw_to_remove))}
             #print(n_kw_to_remove,'/',len(order_of_kw_to_remove),kwars)
-            try:
+            #try:
+            if 1==1:
                 isoclass_df, paras = Assemble_and_run_isoclassify(icid,coor,mission,survey_dat,exofop_dat,
                                                    errboost=errboost*(1+0.33*n_kw_to_remove),spec_dat=spec_dat,**kwars)
                 #print(isoclass_df[['rho_gcm3','rho_gcm3ep','rho_gcm3em']])
                 isoclass_dens_is_NaN=(np.isnan(isoclass_df[['rho_gcm3','rho_gcm3ep','rho_gcm3em']]).any())|(isoclass_df[['rho_gcm3','rho_gcm3ep','rho_gcm3em']]==0.0).all()
-            except Exception as e:
-                exc_type, exc_obj, exc_tb = sys.exc_info()
-                print(exc_type, exc_tb.tb_lineno)
-                isoclass_df,paras=None,None
+            #except Exception as e:
+            #    exc_type, exc_obj, exc_tb = sys.exc_info()
+            #    print(exc_type, exc_tb.tb_lineno)
+            #    isoclass_df,paras=None,None
                 #print(n_kw_to_remove,'|',isoclass_df)
             n_kw_to_remove+=1
         #Assessing which available data source is the *best* using lowest density error
@@ -1019,12 +1020,29 @@ def make_numeric(df):
             outcol[col]=df[col].values
     return outcol
 
+def MainSequenceFit(dist,V):
+    #In the case where we only have distance and an optical magnitude, let's just make a guess with the bolometric magnitude
+    
+    #Loading fits of absolute V mag versus
+    fits=pickle.load(open(os.path.join(os.path.dirname(os.path.abspath( __file__ )),"BolMag_interpolations.models"),"rb"))
+    
+    M_V = V - 5*np.log(dist/10)
+    info={'rad':fits[0](M_V),'mass':fits[1](M_V),'teff':fits[2](M_V)}
+    info['eneg_rad']=0.5*info['rad']
+    info['epos_rad']=0.5*info['rad']
+    info['eneg_mass']=0.5*info['mass']
+    info['epos_mass']=0.5*info['mass']
+    info['eneg_teff']=0.2*info['teff']
+    info['epos_teff']=0.2*info['teff']
+    return info
+
 def getStellarInfoFromCsv(ID,mission,k2tab=None):
     # Kepler on Vizier J/ApJ/866/99/table1
     # New K2: "http://kevinkhu.com/table1.txt"
     # TESS on Vizier (TICv8)
     if mission.lower()=='tess':
         info = TICdata(ID).iloc[0]
+        print(info)
         k2tab = None
     else:
         if mission.lower()=='kepler':
@@ -1114,61 +1132,85 @@ def getStellarInfoFromCsv(ID,mission,k2tab=None):
             for key in tic_dat:
                 if key not in info:
                     info[key]=tic_dat[key]
-        if 'rad' not in info:
-            print("#Doing Isoclassify to get star parameters:")
+    
+    #Switching out capitals:
+    change_cols={'Teff':'teff','Rad':'rad','Mass':'mass'}
+    for indcol in info.index:
+        found_bad_col=[col for col in change_cols if col in indcol]
+        if len(found_bad_col)>0:
+            info=info.rename(index={indcol:indcol.replace(found_bad_col[0],change_cols[found_bad_col[0]])})
+    
+    #Switching all e_ and E_ to eneg and epos:
+    for col in ['teff','rad','mass','d','logg','rho']:
+        if 'eneg_'+col not in info.index and 'e_'+col in info.index:
+            info['eneg_'+col]=info['e_'+col]
+        elif col in info.index and 'eneg_'+col not in info.index and 'e_'+col not in info.index and 'eneg_'+col not in info.index and 'e_'+col not in info.index:
+            #NO ERRORS PRESENT???
+            info['eneg_'+col]=info[col]*0.5
+        if 'epos_'+col not in info.index and 'e_'+col in info.index:
+            info['epos_'+col]=info['e_'+col]
+        elif col in info.index and 'epos_'+col not in info.index and 'e_'+col not in info.index and 'epos_'+col not in info.index and 'e_'+col not in info.index:
+            #NO ERRORS PRESENT???
+            info['epos_'+col]=info[col]*0.5
+
+    if 'rad' not in info:
+        try:
+            print("#Using Isoclassify to attempt to get star parameters:")
             Rstar, rhos, Teff, logg, src = getStellarInfo(ID,info,mission)
             info['rad']=Rstar[0]
-            info['eneg_Rad']=Rstar[1]
-            info['epos_Rad']=Rstar[2]
-            info['Teff']=Teff[0]
-            info['eneg_Teff']=Teff[1]
-            info['epos_Teff']=Teff[2]
+            info['eneg_rad']=Rstar[1]
+            info['epos_rad']=Rstar[2]
+            info['teff']=Teff[0]
+            info['eneg_teff']=Teff[1]
+            info['epos_teff']=Teff[2]
             info['logg']=logg[0]
             info['eneg_logg']=logg[1]
             info['epos_logg']=logg[2]
             info['rhos']=rhos[0]
             info['eneg_rhos']=rhos[1]
             info['epos_rhos']=rhos[2]
+        except:
+            if 'd' in info.index:
+                nm=0;nomag=True
+                mags=['Vmag','V','GAIAmag','kepmag','Tmag']
+                while nomag:
+                    if mags[nm] in info.index:
+                        info=info.update(MainSequenceFit(info['V'],info['d']))
+                        nomag=False
+                        
 
-        if 'logg' not in info:
-            #Problem here - need logg. Derive from Teff and Rs, plus Dist vs. mag?
+    if 'mass' not in info:
+        #Problem here - need mass. Derive from Teff and Rs, plus Dist vs. mag?
+        info['mass']=np.nan
+        info['eneg_mass']=np.nan
+        info['epos_mass']=np.nan
+        
+    if 'logg' not in info:
+        #Problem here - need logg. Derive from Teff and Rs, plus Dist vs. mag?
+        if not np.isnan(info['mass']):
+            info['logg']=np.power(10,info['mass']/info['rad']**2)-4.43
+            info['eneg_logg']=info['logg']-(np.power(10,(info['mass']-info['eneg_mass'])/(info['rad']+info['eneg_rad'])**2)-4.43)
+            info['epos_logg']=(np.power(10,(info['mass']+info['eneg_mass'])/(info['rad']-info['eneg_rad'])**2)-4.43)-info['logg']
+        else:
             info['logg']=np.nan
             info['eneg_logg']=np.nan
             info['epos_logg']=np.nan
 
-        if 'mass' not in info:
-            #Problem here - need mass. Derive from Teff and Rs, plus Dist vs. mag?
-            info['mass']=np.nan
-            info['eneg_Mass']=np.nan
-            info['epos_Mass']=np.nan
 
-        if 'rho' not in info:
-            #Problem here - need rho. Derive from Teff and Rs, plus Dist vs. mag?
-            if 'mass' in info and 'rad' in info:
-                info['rho']=1.411*(info['mass']/info['rad']**3)
-                info['eneg_rho']=info['rho']-1.411*((info['mass']-abs(info['eneg_Mass']))/(info['rad']+info['epos_Rad'])**3)
-                info['epos_rho']=1.411*((info['mass']+info['epos_Mass'])/(info['rad']-abs(info['eneg_Rad']))**3)-info['rho']
-    
-    change_cols={'Teff':'Teff','Rad':'rad','Mass':'mass','logg':'logg','Dist':'Dist','rho':'rho'}
-        
-    for col in change_cols:
-        if 'eneg_'+col not in info.index and 'e_'+change_cols[col] in info.index:
-            info['eneg_'+col]=info['e_'+change_cols[col]]
-        elif col in info.index and 'eneg_'+col not in info.index and 'e_'+col not in info.index and 'eneg_'+change_cols[col] not in info.index and 'e_'+change_cols[col] not in info.index:
-            #NO ERRORS PRESENT???
-            info['eneg_'+col]=info[col]*0.5
-        if 'epos_'+col not in info.index and 'e_'+change_cols[col] in info.index:
-            info['epos_'+col]=info['e_'+change_cols[col]]
-        elif col in info.index and 'epos_'+col not in info.index and 'e_'+col not in info.index and 'epos_'+change_cols[col] not in info.index and 'e_'+change_cols[col] not in info.index:
-            #NO ERRORS PRESENT???
-            info['epos_'+col]=info[col]*0.5
+    if 'rho' not in info:
+        #Problem here - need rho. Derive from Teff and Rs, plus Dist vs. mag?
+        if 'mass' in info and 'rad' in info:
+            info['rho']=1.411*(info['mass']/info['rad']**3)
+            info['eneg_rho']=info['rho']-1.411*((info['mass']-abs(info['eneg_mass']))/(info['rad']+info['epos_Rad'])**3)
+            info['epos_rho']=1.411*((info['mass']+info['epos_mass'])/(info['rad']-abs(info['eneg_Rad']))**3)-info['rho']
+
 
     return info, k2tab
         
 
 def getStellarInfo(ID,hdr,mission,overwrite=False,fileloc=None,savedf=True,use_surveys=True):
     #Compiling dfs (which may have spectra)
-    if not overwrite and os.path.exists(fileloc.replace('.csv','_best.csv')):
+    if not overwrite and fileloc is not None and os.path.exists(fileloc.replace('.csv','_best.csv')):
         print("Loading stellar params from file")
         exofop_dat=make_numeric(pd.read_csv(fileloc.replace('.csv','_exofop.csv'), index_col=0,header=None).T)
         survey_dat=make_numeric(pd.read_csv(fileloc.replace('.csv','_survey.csv'), index_col=0,header=None).T)
