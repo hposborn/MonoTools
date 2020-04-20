@@ -423,7 +423,7 @@ class monoModel():
                 else:
                     #We have multiple logs2 terms due to multiple telescopes:
                     self.gp={}
-                    for cad in range(len(self.cads)):
+                    for n,cad in enumerate(self.cads):
                         cad_ix=self.lc['oot_mask']&(self.lc['cadence']==cad)
                         self.gp[cad] = xo.gp.GP(kernel, 
                                           self.lc['time'][cad_ix].astype(np.float32), 
