@@ -535,7 +535,8 @@ class monoModel():
                                 #Observed by a single telescope
                                 loglike = tt.sum(self.gp.log_likelihood(self.lc['flux'][self.lc['oot_mask']] - light_curve))
                                 if pred_all_time:
-                                    gp_pred = pm.Deterministic("gp_pred", self.gp.predict(self.lc['time']))
+                                    gp_pred = pm.Deterministic("gp_pred", self.gp.predict(self.lc['flux']-light_curve,
+                                                                                          self.lc['time']))
                             else:
                                 #We have multiple logs2 terms due to multiple telescopes:
                                 llk_gp_i = []
@@ -543,7 +544,9 @@ class monoModel():
                                 for cad in self.cads:
                                     llk_gp_i += [self.gp[cad].log_likelihood(self.lc['flux'][self.lc['oot_mask']&(self.lc['cadence']==cad)] - light_curve[self.lc['cadence'][self.lc['oot_mask']]==cad])]
                                     if pred_all_time:
-                                        gp_pred_i += [self.gp[cad].predict(self.lc['time'][self.lc['cadence']==cad])]
+                                        gp_pred_i += [self.gp[cad].predict(self.lc['flux'][self.lc['cadence']==cad]-\
+                                                                            light_curve[self.lc['cadence']==cad],
+                                                                           self.lc['time'][self.lc['cadence']==cad])]
                                 loglike = tt.sum(llk_gp_i)
                                 if pred_all_time:
                                     gp_pred = pm.Deterministic("gp_pred", tt.concatenate(gp_pred_i))
@@ -553,9 +556,11 @@ class monoModel():
                             #llk = pm.Deterministic("llk", model.logpt)
                         else:
                             loglike = tt.sum(pm.Normal.dist(mu=light_curve, sd=self.lc['flux_err'][self.lc['oot_mask']]).logp(self.lc['flux'][self.lc['oot_mask']]))
-
-                        logprior = tt.log(orbit.dcosidb[-1]) - 2 * tt.log((t0_second_trans-t0_first_trans)/p_int)
-                        logprobs.append(loglike)
+                        
+                        pm.Deterministic("dcosidb",orbit.dcosidb)
+                        
+                        logprior = tt.log(orbit.dcosidb) - 2 * tt.log(period)
+                        logprobs.append(loglike+logprior)
 
             elif len(self.duos)==2:
                 #Two planets with two transits... This has to be the max.
@@ -686,7 +691,7 @@ class monoModel():
                     if len(self.cads)==1:
                         llk_gp = pm.Potential("llk_gp", self.gp.log_likelihood(self.lc['flux'][self.lc['oot_mask']] - mask_light_curve))
                         if pred_all_time:
-                            gp_pred = pm.Deterministic("gp_pred", self.gp.predict(self.lc['time']))
+                            gp_pred = pm.Deterministic("gp_pred", self.gp.predict(self.lc['flux']-light_curve,self.lc['time']))
                     else:
                         #We have multiple logs2 terms due to multiple telescopes:
                         llk_gp_i = []
@@ -694,7 +699,9 @@ class monoModel():
                         for cad in self.cads:
                             llk_gp_i += [self.gp[cad].log_likelihood(self.lc['flux'][self.lc['oot_mask']&(self.lc['cadence']==cad)] - mask_light_curve[self.lc['cadence'][self.lc['oot_mask']]==cad])]
                             if pred_all_time:
-                                gp_pred_i += [self.gp[cad].predict(self.lc['time'][self.lc['cadence']==cad])]
+                                gp_pred_i += [self.gp[cad].predict(self.lc['flux'][self.lc['cadence']==cad]-\
+                                                                    light_curve[self.lc['cadence']==cad],
+                                                                   self.lc['time'][self.lc['cadence']==cad])]
                         #print(gp_pred_i[0].shape,gp_pred_i[1].shape,np.hstack((gp_pred_i)))
                         llk_gp = pm.Potential("llk_gp", tt.stack(llk_gp_i,axis=0))
                         if pred_all_time:
@@ -751,42 +758,8 @@ class monoModel():
                                        step=xo.get_dense_nuts_step(target_accept=0.9),compute_convergence_checks=False)
 
             self.SavePickle()
-            
         if do_per_gap_cuts:
-            #Doing Cuts for Period gaps (i.e. where photometry rules out the periods of a planet)
-            #Only taking MCMC positions in the trace where either:
-            #  - P<0.5dur away from a period gap in P_gap_cuts[:-1]
-            #  - OR P is greater than P_gap_cuts[-1]
-            if not hasattr(self,'tracemask'):
-                print(self.trace.varnames)
-                self.tracemask=np.tile(True,len(self.trace['r_pl'][:,0]))
-            
-            for npl,pl in enumerate(self.multis+self.monos+self.duos):
-                if pl in self.monos:
-                    #In the case of duos, our orbital parameters are tied up in the marginalised parameters:
-                    if len(self.duos)==1:
-                        t0s=self.trace['per_0_t0'][:,npl]
-                        tdurs=self.trace['per_0_tdur'][:,npl]
-                        pers=self.trace['per_0_period'][:,npl]
-
-                    elif len(self.duos)==2:
-                        t0s=self.trace['per_0_0_t0'][:,npl]
-                        tdurs=self.trace['per_0_0_tdur'][:,npl]
-                        pers=self.trace['per_0_0_period'][:,npl]
-
-                    elif len(self.duos)==0:
-                        t0s=self.trace['t0'][:,npl]
-                        tdurs=self.trace['tdur'][:,npl]
-                        pers=self.trace['period'][:,npl]
-
-                    per_gaps=self.compute_period_gaps(np.nanmedian(t0s),np.nanmedian(tdurs))
-                    #for each planet - only use monos
-                    if len(per_gaps)>1:
-                        #Cutting points where P<P_gap_cuts[-1] and P is not within 0.5Tdurs of a gap:
-                        gap_dists=np.nanmin(abs(pers[:,np.newaxis]-per_gaps[:-1][np.newaxis,:]),axis=1)
-                        self.tracemask[(pers<per_gaps[-1])*(gap_dists>0.5*np.nanmedian(tdurs))] = False
-        elif not hasattr(self,'tracemask'):
-            self.tracemask=None
+            PeriodGapCuts()
         
         if plot:
             print("plotting")
@@ -801,6 +774,39 @@ class monoModel():
             restable=self.ToLatexTable(trace, ID, mission=mission, varnames=None,order='columns',
                                        savename=savenames[0].replace('mcmc.pickle','results.txt'), overwrite=False,
                                        savefileloc=None, tracemask=tracemask)
+    def PeriodGapCuts(self):
+        #Doing Cuts for Period gaps (i.e. where photometry rules out the periods of a planet)
+        #Only taking MCMC positions in the trace where either:
+        #  - P<0.5dur away from a period gap in P_gap_cuts[:-1]
+        #  - OR P is greater than P_gap_cuts[-1]
+        if not hasattr(self,'tracemask'):
+            print(self.trace.varnames)
+            self.tracemask=np.tile(True,len(self.trace['r_pl'][:,0]))
+
+        for npl,pl in enumerate(self.multis+self.monos+self.duos):
+            if pl in self.monos:
+                #In the case of duos, our orbital parameters are tied up in the marginalised parameters:
+                if len(self.duos)==1:
+                    t0s=self.trace['per_0_t0'][:,npl]
+                    tdurs=self.trace['per_0_tdur'][:,npl]
+                    pers=self.trace['per_0_period'][:,npl]
+
+                elif len(self.duos)==2:
+                    t0s=self.trace['per_0_0_t0'][:,npl]
+                    tdurs=self.trace['per_0_0_tdur'][:,npl]
+                    pers=self.trace['per_0_0_period'][:,npl]
+
+                elif len(self.duos)==0:
+                    t0s=self.trace['t0'][:,npl]
+                    tdurs=self.trace['tdur'][:,npl]
+                    pers=self.trace['period'][:,npl]
+
+                per_gaps=self.compute_period_gaps(np.nanmedian(t0s),np.nanmedian(tdurs))
+                #for each planet - only use monos
+                if len(per_gaps)>1:
+                    #Cutting points where P<P_gap_cuts[-1] and P is not within 0.5Tdurs of a gap:
+                    gap_dists=np.nanmin(abs(pers[:,np.newaxis]-per_gaps[:-1][np.newaxis,:]),axis=1)
+                    self.tracemask[(pers<per_gaps[-1])*(gap_dists>0.5*np.nanmedian(tdurs))] = False
 
             #tracemask=np.column_stack([(np.nanmin(abs(trace['period'][:,n][:,np.newaxis]-P_gap_cuts[n][:-1][np.newaxis,:]),axis=1)<0.5*np.nanmedian(trace['tdur'][:,n]))|(trace['period'][:,n]>P_gap_cuts[n][-1]) for n in range(len(P_gap_cuts))]).any(axis=1)
             #print(np.sum(~tracemask),"(",int(100*np.sum(~tracemask)/len(tracemask)),") removed due to period gap cuts")
@@ -934,15 +940,15 @@ class monoModel():
         #Plots bokeh figure
         from bokeh.plotting import figure, output_file, save
 
-        if not hasattr(self,'savename'):
-            savename=self.GetSavename(ID, mission, how='save', suffix='_TransitFit.png', 
-                                 overwrite=overwrite, savefileloc=savefileloc)[0]
-            print(savename)
+        if not hasattr(self,'savenames'):
+            self.GetSavename(how='save')
+        savename=self.savenames[0].replace('_mcmc.pickle','_transit_fit.html')
+        print(savename)
 
         output_file(savename)
 
         #Initialising figure:
-        p = figure(plot_width=1000, plot_height=600,title=str(ID)+" Transit Fit")
+        p = figure(plot_width=1000, plot_height=600,title=str(self.ID)+" Transit Fit")
 
         #Finding if there's a single enormous gap in the lightcurve:
         x_gap=np.max(np.diff(self.lc['time']))>10
@@ -955,22 +961,37 @@ class monoModel():
         else:
             f_all=figure(width=720, plot_height=400, title=None)
             f_all_resid=figure(width=720, plot_height=150, title=None)
+        
+        #In the "duo" case, we have a complicated trace, so we need to remedy this:
+        if "light_curves" in self.trace:
+            pred = self.trace["light_curves"][self.tracemask,:,:]
+        elif len(self.duos)==1:
+            pred=[]
+            for n in range(len(self.planets[self.duos[0]]['period_int_aliases'])):
+                pred+=[self.trace["per_"+str(n)+"_light_curves"][self.tracemask,:,:]]
+            pred=np.vstack(pred)
+        elif len(self.duos)==2:
+            pred=[]
+            for n1 in range(len(self.planets[self.duos[0]]['period_int_aliases'])):
+                for n2 in range(len(self.planets[self.duos[1]]['period_int_aliases'])):
+                    pred+=[self.trace["per_"+str(n1)+"_"+str(n2)+"_light_curves"][self.tracemask,:,:]]
+            pred=np.vstack(pred)
+        #Need to check how many planets are here:
+        pred = np.percentile(pred, [16, 50, 84], axis=0)
 
         # Compute the GP prediction
         if 'gp_pred' in self.trace:
-            gp_mod = np.median(self.trace["gp_pred"][tracemask,:] + self.trace["mean"][tracemask, None], axis=0)
-        elif type(self.gp)==dic:
-            pred=np.zeros(len(self.lc['time']))
+            gp_pred = np.median(self.trace["gp_pred"][self.tracemask,:] + self.trace["mean"][self.tracemask, None], axis=0)
+        elif type(self.gp)==dict:
+            gp_pred=np.zeros(len(self.lc['time']))
             for nc,cad in enumerate(self.cads):
-                for col in ['logw0','logpower','logS0']:
-                        self.gp[cad].set_parameter(col,np.nanmedian(self.trace[col][tracemask]))
-                self.gp[cad].set_parameter('logs2',np.nanmedian(self.trace['logs2'][tracemask,nc]))
-                pred[self.lc['cadence']==cad] = self.gp[cad].predict(self.lc['time'][self.lc['cadence']==cad])
-            pred += np.nanmedian(self.trace["mean"][tracemask])
+                pred[self.lc['cadence']==cad] = self.gp[cad].predict(self.lc['flux'][self.lc['cadence']==cad]-\
+                                                                      pred[self.lc['cadence']==cad,1],
+                                                                     self.lc['time'][self.lc['cadence']==cad],return_cov=False)
+            gp_pred += np.nanmedian(self.trace["mean"][self.tracemask])
         elif type(self.gp)==xo.gp.GP:
-            for col in ['logw0','logpower','logS0','logs2']:
-                self.gp.set_parameter(col,np.nanmedian(self.trace[col][tracemask]))
-            pred = self.gp.predict(self.lc['time']) + np.nanmedian(self.trace["mean"][tracemask])
+            gp_pred = self.gp.predict(self.lc['flux']-pred[1,:],
+                                      self.lc['time'],return_cov=False) + np.nanmedian(self.trace["mean"][self.tracemask])
 
         #if self.lc['oot_mask']!=self.lc['mask']:
         #Initialising GP was cut away from transits, so maybe we need to re-train with all the points
@@ -980,11 +1001,8 @@ class monoModel():
             pred = trace["light_curves"][tracemask,:,:]/np.tile(trace['mult'],(1,len(trace["light_curves"][0,:,0]),1)).swapaxes(0,2)
         else:
             pred = trace["light_curves"][tracemask,:,:]'''
-        pred = trace["light_curves"][tracemask,:,:]
-        #Need to check how many planets are here:
-        pred = np.percentile(pred, [16, 50, 84], axis=0)
 
-        gp_pred = np.percentile(pred, [16, 50, 84], axis=0)
+        gp_pred = np.percentile(gp_pred, [16, 50, 84], axis=0)
 
         #Plotting model with GPs:
         min_trans=abs(np.min(np.sum(pred[1,:,:],axis=1)))
@@ -1173,7 +1191,7 @@ class monoModel():
         if 'gp_pred' in self.trace:
             gp_mod = np.median(self.trace["gp_pred"][tracemask,:] + self.trace["mean"][tracemask, None], axis=0)
             assert len(self.lc['time'][lcmask])==len(gp_mod)
-        elif type(self.gp)==dic:
+        elif type(self.gp)==dict:
             pred=np.zeros(len(self.lc['time']))
             for nc,cad in enumerate(self.cads):
                 for col in ['logw0','logpower','logS0']:
@@ -1378,7 +1396,7 @@ class monoModel():
         print("varnames = ",varnames)
 
         if not hasattr(self,'savenames'):
-            self.savenames=self.GetSavename(self, how='save')
+            self.savenames=self.GetSavename(how='save')
         
         if self.tracemask is None:
             self.tracemask=np.tile(True,len(self.trace['Rs']))
