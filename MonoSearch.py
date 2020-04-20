@@ -2466,7 +2466,7 @@ def MonoVetting(ID, mission, tcen=None, tdur=None, overwrite=False, do_search=Tr
                 
             if not os.path.isfile(file_loc+"/"+str(ID).zfill(11)+'_table.pdf') or overwrite or new_df or re_vet:
                 # Making table a plot for PDF:
-                fig=plt.figure(figsize=(11.69,2+0.5*len(both_dic))
+                fig=plt.figure(figsize=(11.69,2+0.5*len(both_dic)))
                 ax=fig.add_subplot(111)
                 fig.patch.set_visible(False)
                 ax.axis('off')
