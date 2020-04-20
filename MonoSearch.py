@@ -2204,7 +2204,7 @@ def MonoVetting(ID, mission, tcen=None, tdur=None, overwrite=False, do_search=Tr
     if 'StarPars' not in kwargs:
         #loading Rstar,Tess, logg and rho from csvs:
         if not os.path.isfile(file_loc+"/"+file_loc.split('/')[-1]+'_starpars.csv') or overwrite:
-            from stellar import starpars
+            from .stellar import starpars
             #Gets stellar info
             info,_=starpars.getStellarInfoFromCsv(ID,mission)
             info.to_csv(file_loc+"/"+file_loc.split('/')[-1]+'_starpars.csv')
