@@ -1115,7 +1115,7 @@ def getStellarInfoFromCsv(ID,mission,k2tab=None):
                 if key not in info:
                     info[key]=tic_dat[key]
         if 'rad' not in info:
-            #Doing Isoclassify to get star parameters:
+            print("#Doing Isoclassify to get star parameters:")
             Rstar, rhos, Teff, logg, src = getStellarInfo(ID,info,mission)
             info['rad']=Rstar[0]
             info['eneg_Rad']=Rstar[1]
