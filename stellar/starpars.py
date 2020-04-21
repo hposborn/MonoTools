@@ -1043,7 +1043,7 @@ def getStellarInfoFromCsv(ID,mission,k2tab=None):
     # TESS on Vizier (TICv8)
     if mission.lower()=='tess':
         info = TICdata(ID).iloc[0]
-        print(info)
+        print("TESS object",info)
         k2tab = None
     else:
         if mission.lower()=='kepler':
@@ -1051,7 +1051,7 @@ def getStellarInfoFromCsv(ID,mission,k2tab=None):
             info['mission']='Kepler'
 
             info=info.rename(index={'KIC':'ID','Gaia':'GAIA',
-                                     'Dist':'d','E_Dist':'epos_dist','e_Dist':'eneg_dist',
+                                     'Dist':'dist','E_Dist':'epos_dist','e_Dist':'eneg_dist',
                                      'R_':'rad','E_R_':'epos_Rad', 'e_R_':'eneg_Rad',
                                      '_RA':'ra','_DE':'dec'})
             info['eneg_Teff']=info['e_Teff']
@@ -1082,7 +1082,7 @@ def getStellarInfoFromCsv(ID,mission,k2tab=None):
             info = k2tab.loc[k2tab['EPIC']==int(ID)].iloc[0]
             info['mission']='K2'
             info=info.rename(index={'EPIC':'ID','Gaia':'GAIA',
-                                      'Dist':'d','E_Dist':'epos_dist','e_Dist':'eneg_dist',
+                                      'Dist':'dist','E_Dist':'epos_dist','e_Dist':'eneg_dist',
                                       'Mstar':'mass','E_Mstar':'epos_Mass','e_Mstar':'eneg_Mass',
                                       'Rstar':'rad','E_Rstar':'epos_Rad', 'e_Rstar':'eneg_Rad',
                                       'E_logg':'epos_logg', 'e_logg':'eneg_logg',
@@ -1140,9 +1140,10 @@ def getStellarInfoFromCsv(ID,mission,k2tab=None):
         found_bad_col=[col for col in change_cols if col in indcol]
         if len(found_bad_col)>0:
             info=info.rename(index={indcol:indcol.replace(found_bad_col[0],change_cols[found_bad_col[0]])})
-    
+    if 'd' in info.index:
+        info=info.rename(index={'d':'dist'})
     #Switching all e_ and E_ to eneg and epos:
-    for col in ['teff','rad','mass','d','logg','rho']:
+    for col in ['teff','rad','mass','dist','logg','rho']:
         if 'eneg_'+col not in info.index and 'e_'+col in info.index:
             info['eneg_'+col]=info['e_'+col]
         elif col in info.index and 'eneg_'+col not in info.index and 'e_'+col not in info.index and 'eneg_'+col not in info.index and 'e_'+col not in info.index:
@@ -1171,16 +1172,18 @@ def getStellarInfoFromCsv(ID,mission,k2tab=None):
             info['eneg_rhos']=rhos[1]
             info['epos_rhos']=rhos[2]
         except:
-            if 'd' in info.index:
-                nm=0;nomag=True
-                mags=['Vmag','V','GAIAmag','kepmag','Tmag']
-                while nomag:
-                    if mags[nm] in info.index:
-                        msinfo=MainSequenceFit(info[mags[nm]],info['d'])
-                        for col in msinfo:
-                            info[col]=msinfo[col]
-                        nomag=False
-                        
+            print("getStellarInfo fails")
+            
+    if 'rad' not in info or np.isnan(info['rad']) or info['rad'] is None:
+        if 'dist' in info.index:
+            nm=0;nomag=True
+            mags=['Vmag','V','GAIAmag','kepmag','Tmag']
+            while nomag:
+                if mags[nm] in info.index:
+                    msinfo=MainSequenceFit(info[mags[nm]],info['dist'])
+                    for col in msinfo:
+                        info[col]=msinfo[col]
+                    nomag=False
 
     if 'mass' not in info:
         #Problem here - need mass. Derive from Teff and Rs, plus Dist vs. mag?
@@ -1204,8 +1207,8 @@ def getStellarInfoFromCsv(ID,mission,k2tab=None):
         #Problem here - need rho. Derive from Teff and Rs, plus Dist vs. mag?
         if 'mass' in info and 'rad' in info:
             info['rho']=1.411*(info['mass']/info['rad']**3)
-            info['eneg_rho']=info['rho']-1.411*((info['mass']-abs(info['eneg_mass']))/(info['rad']+info['epos_Rad'])**3)
-            info['epos_rho']=1.411*((info['mass']+info['epos_mass'])/(info['rad']-abs(info['eneg_Rad']))**3)-info['rho']
+            info['eneg_rho']=info['rho']-1.411*((info['mass']-abs(info['eneg_mass']))/(info['rad']+info['epos_rad'])**3)
+            info['epos_rho']=1.411*((info['mass']+info['epos_mass'])/(info['rad']-abs(info['eneg_rad']))**3)-info['rho']
 
 
     return info, k2tab
