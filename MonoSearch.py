@@ -2217,6 +2217,7 @@ def MonoVetting(ID, mission, tcen=None, tdur=None, overwrite=False, do_search=Tr
         print(info.index)
         Rstar=[float(info['rad']),float(info['eneg_rad']),float(info['epos_rad'])]
         Teff=[float(info['teff']),float(info['eneg_teff']),float(info['epos_teff'])]
+        print(type(info['logg']),type(info['eneg_logg']),type(info['epos_logg']) )
         logg=[float(info['logg']),float(info['eneg_logg']),float(info['epos_logg'])]
         rhostar=[float(info['rho'])/1.411,float(info['eneg_rho'])/1.411,float(info['epos_rho'])/1.411]
         if 'mass' in info:

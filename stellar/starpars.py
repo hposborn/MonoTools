@@ -1151,6 +1151,10 @@ def getStellarInfoFromCsv(ID,mission,k2tab=None):
             info=info.rename(index={'e_'+col:'eneg_'+col})
         if 'epos_'+captd in info.index:
             info=info.rename(index={'epos_'+captd:'epos_'+col})
+        elif 'E_'+captd in info.index:
+            info=info.rename(index={'E_'+captd:'epos_'+col})
+        elif 'E_'+col in info.index:
+            info=info.rename(index={'E_'+col:'epos_'+col})
         elif 'e_'+captd in info.index:
             info=info.rename(index={'e_'+captd:'epos_'+col})
         elif 'e_'+col in info.index:
