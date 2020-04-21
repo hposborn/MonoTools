@@ -2159,7 +2159,8 @@ def get_interpmodels(Rs,Ms,Teff,lc_time,lc_flux_unit,mission='tess',n_durs=3,tex
 
 def MonoVetting(ID, mission, tcen=None, tdur=None, overwrite=False, do_search=True,
                 useL2=False,PL_ror_thresh=0.2,variable_llk_thresh=5,file_loc=None,
-                plot=False,do_fit=False,re_vet=False,re_fit=False,**kwargs):
+                plot=False,do_fit=False,re_vet=False,re_fit=False,
+                **kwargs):
     '''#Here we're going to initialise the Monotransit fitting by searching for other planets/transits/secondaries and filtering out binaries.
     INPUTS:
     - ID
@@ -2197,8 +2198,9 @@ def MonoVetting(ID, mission, tcen=None, tdur=None, overwrite=False, do_search=Tr
         file_loc=file_loc+tools.id_dic[mission]+str(ID).zfill(11)
     kwargs['file_loc']=file_loc
     
-    mono_SNR_thresh=6.5 if 'mono_SNR_thresh' not in kwargs else kwargs['mono_SNR_thresh']
-
+    mono_SNR_thresh=7.0 if 'mono_SNR_thresh' not in kwargs else kwargs['mono_SNR_thresh']
+    mono_SNR_r_thresh=5.0 if 'mono_SNR_r_thresh' not in kwargs else kwargs['mono_SNR_r_thresh']
+    
     if not os.path.isdir(file_loc):
         os.system('mkdir '+file_loc)
     
@@ -2308,7 +2310,7 @@ def MonoVetting(ID, mission, tcen=None, tdur=None, overwrite=False, do_search=Tr
                 #update dic:
                 both_dic[pl].update(monoparams)
                 both_dic[pl]['flag']='planet'
-                if both_dic[pl]['snr']<mono_SNR_thresh or both_dic[pl]['snr_r']<(mono_SNR_thresh*0.5):
+                if both_dic[pl]['snr']<mono_SNR_thresh and both_dic[pl]['snr_r']<(mono_SNR_r_thresh):
                     both_dic[pl]['flag']='lowSNR'
                     print(pl,"lowSNR, SNR=",both_dic[pl]['snr'],"SNR_r=",both_dic[pl]['snr_r'],"depth:",both_dic[pl]['depth'],"fit:",both_dic[pl]["model_success"])
                 elif both_dic[pl]['b']>0.98 and both_dic[pl]['snr']<(mono_SNR_thresh+2):
