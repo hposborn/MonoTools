@@ -485,12 +485,12 @@ def TESS_lc(tic,sector='all',use_ppt=True, coords=None, use_eleanor=True):
                         except:
                             star = eleanor.eleanor.Source(coords=coords, sector=key)
                         try:
-                            elen_obj=eleanor.eleanor.TargetData(star, height=15, width=15, bkg_size=31, do_psf=True, do_pca=True)
+                            elen_obj=eleanor.eleanor.TargetData(star, height=15, width=15, bkg_size=31, do_psf=True, do_pca=True,save_postcard=False)
                         except:
                             try:
-                                elen_obj=eleanor.eleanor.TargetData(star, height=15, width=15, bkg_size=31, do_psf=True, do_pca=False)
+                                elen_obj=eleanor.eleanor.TargetData(star, height=15, width=15, bkg_size=31, do_psf=True, do_pca=False,save_postcard=False)
                             except:
-                                elen_obj=eleanor.eleanor.TargetData(star, height=15, width=15, bkg_size=31, do_psf=False, do_pca=False)
+                                elen_obj=eleanor.eleanor.TargetData(star, height=15, width=15, bkg_size=31, do_psf=False, do_pca=False,save_postcard=False)
                         elen_hdr={'ID':star.tic,'GaiaID':star.gaia,'Tmag':star.tess_mag,
                                   'RA':star.coords[0],'dec':star.coords[1],'mission':'TESS','campaign':key,
                                   'ap_masks':elen_obj.all_apertures,'ap_image':np.nanmedian(elen_obj.tpf[50:80],axis=0)}
@@ -1272,7 +1272,7 @@ def GetSavename(ID, mission, how='load', suffix='mcmc.pickle', overwrite=False, 
     # - filepath
     '''
     if savefileloc is None:
-        savefileloc=os.path.join(McmcTools_path,'data',id_dic[mission]+str(ID).zfill(11))
+        savefileloc=os.path.join(MonoTools_path,'data',id_dic[mission]+str(ID).zfill(11))
     if not os.path.isdir(savefileloc):
         os.mkdir(savefileloc)
     pickles=glob.glob(os.path.join(savefileloc,id_dic[mission]+str(ID).zfill(11)+"*"+suffix))
