@@ -517,13 +517,7 @@ def MonoTransitSearch(lc,ID,Rs=None,Ms=None,Teff=None,
             detns[str(nix).zfill(2)]['orbit_flag']='mono'
             detns[str(nix).zfill(2)]['snr']=detn_row['trans_snr']
             #Calculating minimum period:
-            abs_times=abs(uselc[:,1]-detn_row['tcen'])
-            abs_times=np.sort(abs_times)
-            whr=np.where(np.diff(abs_times)>detn_row['init_dur']*0.75)[0]
-            if len(whr)>0:
-                detns[str(nix).zfill(2)]['P_min']=abs_times[whr[0]]
-            else:
-                detns[str(nix).zfill(2)]['P_min']=np.max(abs_times)
+            detns[str(nix).zfill(2)]['P_min']=calc_min_P(uselc[:,0],detn_row['tcen'],detn_row['init_dur'])
             if nix>8:
                 break
     else:
@@ -534,7 +528,16 @@ def MonoTransitSearch(lc,ID,Rs=None,Ms=None,Teff=None,
         return detns, outparams, fig_loc
     else:
         return detns, outparams, None
-    
+
+def calc_min_P(time,tcen,tdur):
+    abs_times=abs(time-tcen)
+    abs_times=np.sort(abs_times)
+    whr=np.where(np.diff(abs_times)>tdur*0.75)[0]
+    if len(whr)>0:
+        return abs_times[whr[0]]
+    else:
+        return np.max(abs_times)
+
 def PlotMonoSearch(lc,ID,monosearchparams,mono_dic,interpmodels,tdurs,
                    use_flat=True,use_binned=True,use_poly=False,transit_zoom=2.5,plot_loc=None,**kwargs):
     if plot_loc is None:
@@ -2255,7 +2258,8 @@ def MonoVetting(ID, mission, tcen=None, tdur=None, overwrite=False, do_search=Tr
         intr=lc['mask']&(abs(lc['time']-tcen)<0.45*tdur)
         outtr=lc['mask']&(abs(lc['time']-tcen)<1.25*tdur)&(~intr)
         mono_dic={'00':{'tcen':tcen,'tdur':tdur,'orbit_flag':'mono','poly_DeltaBIC':0.0,
-                        'depth':np.nanmedian(lc['flux'][outtr])-np.nanmedian(lc['flux'][intr])}}
+                        'depth':np.nanmedian(lc['flux'][outtr])-np.nanmedian(lc['flux'][intr]),
+                        'P_min':calc_min_P(lc['time'],tcen,tdur)}}
     #print("monos:",{pl:{'tcen':mono_dic[pl]['tcen'],'depth':mono_dic[pl]['depth']} for pl in mono_dic})
     
     # DOING PERIODIIC PLANET SEARCH:
