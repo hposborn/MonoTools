@@ -1164,7 +1164,6 @@ def getStellarInfoFromCsv(ID,mission,k2tab=None):
             info['eneg_'+col]=info[col]*0.5
         if 'epos_'+col not in info.index and col in info:
             info['epos_'+col]=info[col]*0.5
-        print(info['eneg_logg'],type(info['eneg_logg']))
         
     if 'rad' not in info:
         try:
@@ -1220,7 +1219,6 @@ def getStellarInfoFromCsv(ID,mission,k2tab=None):
             info['eneg_rho']=info['rho']-1.411*((info['mass']-abs(info['eneg_mass']))/(info['rad']+info['epos_rad'])**3)
             info['epos_rho']=1.411*((info['mass']+info['epos_mass'])/(info['rad']-abs(info['eneg_rad']))**3)-info['rho']
 
-    print(type(info['eneg_logg']))
     return info, k2tab
         
 
