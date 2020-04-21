@@ -1083,8 +1083,8 @@ def getStellarInfoFromCsv(ID,mission,k2tab=None):
             info['mission']='K2'
             info=info.rename(index={'EPIC':'ID','Gaia':'GAIA',
                                       'Dist':'dist','E_Dist':'epos_dist','e_Dist':'eneg_dist',
-                                      'Mstar':'mass','E_Mstar':'epos_Mass','e_Mstar':'eneg_Mass',
-                                      'Rstar':'rad','E_Rstar':'epos_Rad', 'e_Rstar':'eneg_Rad',
+                                      'Mstar':'mass','E_Mstar':'eposmMass','e_Mstar':'eneg_mass',
+                                      'Rstar':'rad','E_Rstar':'epos_rad', 'e_Rstar':'eneg_rad',
                                       'E_logg':'epos_logg', 'e_logg':'eneg_logg',
                                       '[Fe/H]':'feh','E_[Fe/H]':'epos_feh','e_[Fe/H]':'eneg_feh'})
             info['eneg_Teff']=info['e_Teff']
@@ -1142,31 +1142,29 @@ def getStellarInfoFromCsv(ID,mission,k2tab=None):
         captd=col[0].upper()+col[1:]
         if captd in info.index:
             info=info.rename(index={captd:col})
-
-        if 'eneg_'+captd in info.index:
+        if 'eneg_'+captd in info.index and 'eneg_'+col not in info.index:
             info=info.rename(index={'eneg_'+captd:'eneg_'+col})
-        elif 'e_'+captd in info.index:
+        elif 'e_'+captd in info.index and 'eneg_'+col not in info.index:
             info['eneg_'+col]=info['e_'+captd]
-        elif 'e_'+col in info.index:
+        elif 'e_'+col in info.index and 'eneg_'+col not in info.index:
             info['eneg_'+col]=info['e_'+col]
         if 'epos_'+captd in info.index:
             info=info.rename(index={'epos_'+captd:'epos_'+col})
-        elif 'E_'+captd in info.index:
+        elif 'E_'+captd in info.index and 'epos_'+col not in info.index:
             info=info.rename(index={'E_'+captd:'epos_'+col})
-        elif 'E_'+col in info.index:
+        elif 'E_'+col in info.index and 'epos_'+col not in info.index:
             info=info.rename(index={'E_'+col:'epos_'+col})
-        elif 'e_'+captd in info.index:
+        elif 'e_'+captd in info.index and 'epos_'+col not in info.index:
             info['epos_'+col]=info['e_'+captd]
-        elif 'e_'+col in info.index:
+        elif 'e_'+col in info.index and 'epos_'+col not in info.index:
             info['epos_'+col]=info['e_'+col]
-
         
         if 'eneg_'+col not in info.index and col in info:
             #NO ERRORS PRESENT???
             info['eneg_'+col]=info[col]*0.5
         if 'epos_'+col not in info.index and col in info:
             info['epos_'+col]=info[col]*0.5
-
+    
     if 'rad' not in info:
         try:
             print("#Using Isoclassify to attempt to get star parameters:")
@@ -1222,7 +1220,7 @@ def getStellarInfoFromCsv(ID,mission,k2tab=None):
             info['eneg_rho']=info['rho']-1.411*((info['mass']-abs(info['eneg_mass']))/(info['rad']+info['epos_rad'])**3)
             info['epos_rho']=1.411*((info['mass']+info['epos_mass'])/(info['rad']-abs(info['eneg_rad']))**3)-info['rho']
 
-
+    print(info)
     return info, k2tab
         
 
