@@ -1135,24 +1135,32 @@ def getStellarInfoFromCsv(ID,mission,k2tab=None):
                     info[key]=tic_dat[key]
     
     #Switching out capitals:
-    change_cols={'Teff':'teff','Rad':'rad','Mass':'mass'}
-    for indcol in info.index:
-        found_bad_col=[col for col in change_cols if col in indcol]
-        if len(found_bad_col)>0:
-            info=info.rename(index={indcol:indcol.replace(found_bad_col[0],change_cols[found_bad_col[0]])})
     if 'd' in info.index:
         info=info.rename(index={'d':'dist'})
     #Switching all e_ and E_ to eneg and epos:
     for col in ['teff','rad','mass','dist','logg','rho']:
-        if 'eneg_'+col not in info.index and 'e_'+col in info.index:
-            info['eneg_'+col]=info['e_'+col]
-        elif col in info.index and 'eneg_'+col not in info.index and 'e_'+col not in info.index and 'eneg_'+col not in info.index and 'e_'+col not in info.index:
+        captd=col[0].upper()+col[1:]
+        if captd in info.index:
+            info=info.rename(index={captd:col})
+
+        if 'eneg_'+captd in info.index:
+            info=info.rename(index={'eneg_'+captd:'eneg_'+col})
+        elif 'e_'+captd in info.index:
+            info=info.rename(index={'e_'+captd:'eneg_'+col})
+        elif 'e_'+col in info.index:
+            info=info.rename(index={'e_'+col:'eneg_'+col})
+        if 'epos_'+captd in info.index:
+            info=info.rename(index={'epos_'+captd:'epos_'+col})
+        elif 'e_'+captd in info.index:
+            info=info.rename(index={'e_'+captd:'epos_'+col})
+        elif 'e_'+col in info.index:
+            info=info.rename(index={'e_'+col:'epos_'+col})
+
+        
+        if 'eneg_'+col not in info.index and col in info:
             #NO ERRORS PRESENT???
             info['eneg_'+col]=info[col]*0.5
-        if 'epos_'+col not in info.index and 'e_'+col in info.index:
-            info['epos_'+col]=info['e_'+col]
-        elif col in info.index and 'epos_'+col not in info.index and 'e_'+col not in info.index and 'epos_'+col not in info.index and 'e_'+col not in info.index:
-            #NO ERRORS PRESENT???
+        if 'epos_'+col not in info.index and col in info:
             info['epos_'+col]=info[col]*0.5
 
     if 'rad' not in info:
