@@ -438,7 +438,7 @@ class monoModel():
                 lc_cad_xs=[]
                 mask = ~np.isnan(self.lc['time']) if mask is None else mask
                 for cad in self.cads:
-                    t_cad=self.lc['time'][mask][self.lc['cadence'][mask]==cad]
+                    t_cad=self.lc['time'][mask][self.lc['cadence'][mask]==cad].astype(np.float64)
                     lc_cad_xs+=[t_cad]
                     if cad[0]=='t':
                         lc_c +=[xo.LimbDarkLightCurve(u_star_tess).get_light_curve(
@@ -559,7 +559,7 @@ class monoModel():
                         
                         pm.Deterministic("dcosidb",orbit.dcosidb)
                         
-                        logprior = tt.log(orbit.dcosidb) - 2 * tt.log(period)
+                        logprior = tt.log(orbit.dcosidb[-1]) - 2 * tt.log(period[-1])
                         logprobs.append(loglike+logprior)
 
             elif len(self.duos)==2:
@@ -631,8 +631,7 @@ class monoModel():
                                                                 sd=self.lc['flux_err'][self.lc['oot_mask']]
                                                                ).logp(self.lc['flux'][self.lc['oot_mask']]))
                             
-                            logprior = tt.sum(tt.log(orbit.dcosidb)) -\
-                                       2 * tt.log((t0_second_trans-t0_first_trans)/submodel_per_ints)
+                            logprior = tt.log(orbit.dcosidb[-2:]) - 2 * tt.log(period[-2:])
                             logprobs.append(loglike + logprior)
 
                 # Compute the marginalized probability and the posterior probability for each period
