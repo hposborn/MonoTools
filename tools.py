@@ -373,7 +373,7 @@ def getKeplerLC(kic,cadence='long',use_ppt=True):
                     if ilc is not None:
                         lcs+=[ilc]
                     hdr=hdu[1].header
-    elif cadence is 'short' and 'slc' in q:
+    elif cadence == 'short' and 'slc' in q:
         for q in [qc for qc in qcodes if qc[-4]=='_slc']:
             lcloc='http://archive.stsci.edu/pub/kepler/lightcurves/'+str(int(kic)).zfill(9)[0:4]+'/'+str(int(kic)).zfill(9)+'/kplr'+str(int(kic)).zfill(9)+'-'+str(q)+'.fits'
             h = httplib2.Http()
@@ -440,7 +440,7 @@ def getCorotLC(corid,use_ppt=True):
 
 def TESS_lc(tic,sector='all',use_ppt=True, coords=None, use_eleanor=True):
     #Downloading TESS lc 
-    if sector is 'all':
+    if sector == 'all':
         sect_obs=observed(tic)
     else:
         sect_obs={sector:True}
@@ -526,14 +526,14 @@ def openLightCurve(ID,mission,use_ppt=True,other_data=True,jd_base=2457000,**kwa
             if other!=mission.lower():
                 IDs[other]=None
     else:
-        if mission.lower() is not 'k2':
+        if mission.lower()!='k2':
             v = Vizier(catalog=['J/ApJS/224/2'])
             res = v.query_region(coor, radius=5*units.arcsec, catalog=['J/ApJS/224/2'])
             if len(res)>0 and len(res[0])>0:
                 IDs['k2']=res[0]['EPIC'][0]
             else:
                 IDs['k2']=None
-        if mission.lower() is not 'tess':
+        if mission.lower()!='tess':
             # Let's search for associated TESS lightcurve:    
             tess_id = Catalogs.query_criteria("TIC",coordinates=coor,radius=12*units.arcsec,
                                               objType="STAR",columns=['ID','KIC','Tmag']).to_pandas()
@@ -544,7 +544,7 @@ def openLightCurve(ID,mission,use_ppt=True,other_data=True,jd_base=2457000,**kwa
                 IDs['tess']=tess_id['ID'].values[0]
             else:
                 IDs['tess']=None
-        if mission.lower() is not 'kepler':
+        if mission.lower()!='kepler':
             v = Vizier(catalog=['V/133/kic'])
             res=v.query_region(coor, radius=5*units.arcsec, catalog=['V/133/kic'])
             if 'V/133/kic' in res and len(res['V/133/kic'])>0:
@@ -566,7 +566,7 @@ def openLightCurve(ID,mission,use_ppt=True,other_data=True,jd_base=2457000,**kwa
     if IDs['kepler'] is not None:
         lcs['kepler'],hdrs['kepler'] = getKeplerLC(IDs['kepler'],use_ppt=use_ppt)
         lcs['kepler']['time']-=(jd_base-2454833)
-    if mission.lower() is 'corot':
+    if mission.lower() == 'corot':
         lcs['corot'] = getCorotLC(ID,use_ppt=use_ppt)
         lcs['corot']['time']-=(jd_base-2454833)
         hdrs['corot'] = None
@@ -1243,13 +1243,13 @@ def RunFromScratch(ID, mission, tcen, tdur, ra=None, dec=None,
     else:
         #If not, we have a planet.
         #Checking if monoplanet is single, double-with-gap, or periodic.
-        if planet_dic_1['01']['flag']=='monoplanet' and planet_dic_1['01']['orbit_flag'] is 'singlemono':
+        if planet_dic_1['01']['flag']=='monoplanet' and planet_dic_1['01']['orbit_flag'] == 'singlemono':
             #Monotransit?
             print(" ")
-        elif planet_dic_1['01']['flag']=='monoplanet' and planet_dic_1['01']['orbit_flag'] is 'multimono':
+        elif planet_dic_1['01']['flag']=='monoplanet' and planet_dic_1['01']['orbit_flag'] == 'multimono':
             #Two monotransits?
             print(" ")
-        elif planet_dic_1['01']['flag']=='monoplanet' and planet_dic_1['01']['orbit_flag'] is 'doublemono':
+        elif planet_dic_1['01']['flag']=='monoplanet' and planet_dic_1['01']['orbit_flag'] == 'doublemono':
             #Monotransit with gap?
             print(" ")
         elif planet_dic_1['01']['flag']=='periodic':
@@ -1276,7 +1276,7 @@ def GetSavename(ID, mission, how='load', suffix='mcmc.pickle', overwrite=False, 
     if not os.path.isdir(savefileloc):
         os.mkdir(savefileloc)
     pickles=glob.glob(os.path.join(savefileloc,id_dic[mission]+str(ID).zfill(11)+"*"+suffix))
-    if how is 'load' and len(pickles)>1:
+    if how == 'load' and len(pickles)>1:
         #finding most recent pickle:
         date=np.max([datetime.strptime(pick.split('_')[1],"%Y-%m-%d") for pick in pickles]).strftime("%Y-%m-%d")
         datepickles=glob.glob(os.path.join(savefileloc,id_dic[mission]+str(ID).zfill(11)+"_"+date+"_*_"+suffix))
@@ -1286,7 +1286,7 @@ def GetSavename(ID, mission, how='load', suffix='mcmc.pickle', overwrite=False, 
             nsim=0
         elif len(datepickles)==0:
             print("problem - no saved mcmc files in correct format")
-    elif how is 'load' and len(pickles)==1:
+    elif how == 'load' and len(pickles)==1:
         date=pickles[0].split('_')[1]
         nsim=pickles[0].split('_')[2]
     else:
@@ -1441,7 +1441,7 @@ def ToLatexTable(trace, ID, mission='TESS', varnames='all',order='columns',
         savename=GetSavename(ID, mission, how='save', suffix='_table.txt',overwrite=False, savefileloc=savefileloc)[0]
     if tracemask is None:
         tracemask=np.tile(True,len(trace['Rs']))
-    if varnames is None or varnames is 'all':
+    if varnames is None or varnames == 'all':
         varnames=[var for var in trace.varnames if var[-2:]!='__' and var not in ['gp_pred','light_curves']]
     
     samples = pm.trace_to_dataframe(trace, varnames=varnames)
