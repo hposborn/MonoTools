@@ -306,7 +306,8 @@ def MonoTransitSearch(lc,ID,Rs=None,Ms=None,Teff=None,
     Ms=1.0 if Ms is None else float(Ms)
     Teff=5800.0 if Teff is None else float(Teff)
 
-    interpmodels,tdurs=get_interpmodels(Rs,Ms,Teff,lc['time'],lc['flux_unit'],n_durs=5,texp=binsize)
+    mincad=np.min([float(cad[1:])/1440 for cad in np.unique(lc['cadence'])])
+    interpmodels,tdurs=get_interpmodels(Rs,Ms,Teff,lc['time'],lc['flux_unit'],n_durs=5,texp=mincad)
     
 
     #print("Checking input model matches. flux:",np.nanmedian(uselc[:,0]),"std",np.nanstd(uselc[:,1]),"transit model:",
@@ -320,7 +321,7 @@ def MonoTransitSearch(lc,ID,Rs=None,Ms=None,Teff=None,
             search_xranges_n+=[np.arange(arr[0]+0.33*tdurs[n],arr[-1]-0.33*tdurs[n],tdurs[n]/n_oversamp)]
         search_xranges+=[np.hstack(search_xranges_n)]
     
-    print(str(ID)+" - Searching "+str(np.sum([len(xr) for xr in search_xranges]))+" positions with "+str(n_durs)+" durations")
+    print(str(ID)+" - Searching "+str(np.sum([len(xr) for xr in search_xranges]))+" positions with "+str(n_durs)+" durations:",','.join(list(np.round(tdurs,3).astype(str))))
 
     #Looping through search and computing chi-sq at each position:
     outparams=pd.DataFrame()
@@ -470,56 +471,49 @@ def MonoTransitSearch(lc,ID,Rs=None,Ms=None,Teff=None,
     #    signfct=np.where((outparams['sin_llk_ratio']>1.5)&(outparams['poly_llk_ratio']>3)&(outparams['trans_dep']>0.0))[0]
     #else:
     #    signfct=np.where((outparams['sin_llk_ratio']>1.0)&(outparams['poly_DeltaBIC']<mono_BIC_thresh)&(outparams['trans_dep']>0.0))[0]
-    signfct=np.where((outparams['sin_llk_ratio']>1.5)&(outparams['poly_llk_ratio']>1.5)&(outparams['poly_DeltaBIC']<mono_BIC_thresh)&(outparams['trans_snr']>(mono_SNR_thresh-0.5)))[0]
-
-    if len(signfct)>0:
-        jumps=np.hstack((0,1+np.where(np.diff(signfct)>0.66*(n_durs*0.5)*n_oversamp)[0],len(signfct)))
-        min_ixs=[]
-        #Looping through clustered regions of "detection" space and finding the maximum value within
-        for n_jump in range(len(jumps)-1):
-            ix=signfct[jumps[n_jump]:jumps[n_jump+1]]
-            if use_poly:
-                min_ix=ix[np.argmin(outparams.iloc[ix]['poly_DeltaBIC'])]
-                min_ixs+=[[min_ix,outparams.iloc[min_ix]['poly_DeltaBIC']]]
-                '''print('nearbys:',outparams[min_ix-1,6],outparams[min_ix-1,0]-outparams[min_ix-1,1],
-                                 outparams[min_ix,6],outparams[min_ix,0]-outparams[min_ix,1],
-                                 outparams[min_ix+1,6],outparams[min_ix+1,0]-outparams[min_ix+1,1])'''
-            else:
-                min_ix=ix[np.argmax(outparams.iloc[ix]['poly_llk_ratio'])]
-                min_ixs+=[[min_ix,outparams.iloc[min_ix]['poly_llk_ratio']]]
-        if use_poly:
-            min_ixs=np.array(min_ixs)
-            min_ixs=min_ixs[min_ixs[:,1].argsort()]
-        else:
-            min_ixs=np.array(min_ixs)
-            min_ixs=min_ixs[min_ixs[:,1].argsort()[::-1]]
-
-        detns = {}
-        lc_std=np.nanstd(uselc[:,1])
-        cad=np.nanmedian(np.diff(uselc[:,0]))
-        for nix,ix in enumerate(min_ixs):
-            detn_row=outparams.iloc[int(ix[0])]
+    signfct=(outparams['sin_llk_ratio']>1.5)&(outparams['poly_llk_ratio']>1.5)&(outparams['poly_DeltaBIC']<mono_BIC_thresh)&(outparams['trans_snr']>(mono_SNR_thresh-0.5))
+    n_sigs=np.sum(signfct)
+    if n_sigs>0:
+        best_ix=[]
+        nix=0
+        detns={}
+        while n_sigs>0 and nix<=8:
+            #Getting the best detection:
+            signfct_df=outparams.loc[signfct]
+            
+            #Placing the best detection info into our dict:
+            detn_row=signfct_df.loc[np.argmin(signfct_df['poly_DeltaBIC'])]
             detns[str(nix).zfill(2)]={}
-            detns[str(nix).zfill(2)]['llk_trans']=detn_row['llk_trans']
-            detns[str(nix).zfill(2)]['llk_sin']=detn_row['llk_sin']
-            detns[str(nix).zfill(2)]['llk_poly']=detn_row['llk_poly']
-            detns[str(nix).zfill(2)]['BIC_trans']=detn_row['BIC_trans']
-            detns[str(nix).zfill(2)]['BIC_sin']=detn_row['BIC_sin']
-            detns[str(nix).zfill(2)]['BIC_poly']=detn_row['BIC_poly']
-            detns[str(nix).zfill(2)]['sin_DeltaBIC']=detn_row['sin_DeltaBIC']
+            detns[str(nix).zfill(2)]['llk_trans']   = detn_row['llk_trans']
+            detns[str(nix).zfill(2)]['llk_sin']     = detn_row['llk_sin']
+            detns[str(nix).zfill(2)]['llk_poly']    = detn_row['llk_poly']
+            detns[str(nix).zfill(2)]['BIC_trans']   = detn_row['BIC_trans']
+            detns[str(nix).zfill(2)]['BIC_sin']     = detn_row['BIC_sin']
+            detns[str(nix).zfill(2)]['BIC_poly']    = detn_row['BIC_poly']
+            detns[str(nix).zfill(2)]['sin_DeltaBIC']= detn_row['sin_DeltaBIC']
             detns[str(nix).zfill(2)]['poly_DeltaBIC']=detn_row['poly_DeltaBIC']
-            detns[str(nix).zfill(2)]['tcen']=detn_row['tcen']
-            detns[str(nix).zfill(2)]['period']=np.nan
-            detns[str(nix).zfill(2)]['period_err']=np.nan
-            detns[str(nix).zfill(2)]['DeltaBIC']=ix[1]
-            detns[str(nix).zfill(2)]['tdur']=detn_row['init_dur']
-            detns[str(nix).zfill(2)]['depth']=detn_row['trans_dep']
-            detns[str(nix).zfill(2)]['orbit_flag']='mono'
-            detns[str(nix).zfill(2)]['snr']=detn_row['trans_snr']
+            detns[str(nix).zfill(2)]['tcen']        = detn_row['tcen']
+            detns[str(nix).zfill(2)]['period']      = np.nan
+            detns[str(nix).zfill(2)]['period_err']  = np.nan
+            detns[str(nix).zfill(2)]['DeltaBIC']    = detn_row['poly_DeltaBIC']
+            detns[str(nix).zfill(2)]['tdur']        = detn_row['init_dur']
+            detns[str(nix).zfill(2)]['depth']       = detn_row['trans_dep']
+            detns[str(nix).zfill(2)]['orbit_flag']  = 'mono'
+            detns[str(nix).zfill(2)]['snr']         = detn_row['trans_snr']
             #Calculating minimum period:
-            detns[str(nix).zfill(2)]['P_min']=calc_min_P(uselc[:,0],detn_row['tcen'],detn_row['init_dur'])
-            if nix>8:
-                break
+            detns[str(nix).zfill(2)]['P_min']       = calc_min_P(uselc[:,0],detn_row['tcen'],detn_row['init_dur'])
+            
+            #Removing the regions around this detection from our array
+            print(np.sum(abs(outparams['tcen']-detn_row['tcen'])<np.where(outparams['init_dur']<detn_row['init_dur'],
+                                                                0.66*detn_row['init_dur'], 0.66*outparams['init_dur'])))
+            print(np.sum(signfct[abs(outparams['tcen']-detn_row['tcen'])<np.where(outparams['init_dur']<detn_row['init_dur'],
+                                                                0.66*detn_row['init_dur'], 0.66*outparams['init_dur'])]))
+            away_from_this_detn=abs(outparams['tcen']-detn_row['tcen'])>np.where(outparams['init_dur']<detn_row['init_dur'],
+                                                                0.66*detn_row['init_dur'], 0.66*outparams['init_dur'])
+            signfct=signfct&away_from_this_detn
+            n_sigs=np.sum(signfct)
+            print(n_sigs,detns[str(nix).zfill(2)]['poly_DeltaBIC'],np.sum(signfct[abs(outparams['tcen']-detn_row['tcen'])<np.where(outparams['init_dur']<detn_row['init_dur'],0.66*detn_row['init_dur'], 0.66*outparams['init_dur'])]))
+            nix+=1
     else:
         detns={}
     if plot:
@@ -728,7 +722,7 @@ def PlotMonoSearch(lc,ID,monosearchparams,mono_dic,interpmodels,tdurs,
                 'dep':outparams[peak,0],'dur':outparams[peak,1]}
 '''
 
-def PeriodicPlanetSearch(lc,ID,planets,use_binned=None,use_flat=True,binsize=1/96.0,n_search_loops=5,
+def PeriodicPlanetSearch(lc,ID,planets,use_binned=None,use_flat=True,binsize=1/96.0,n_search_loops=5,rhostar=None,
                          multi_FAP_thresh=0.00125,multi_SNR_thresh=7.0,plot=False, plot_loc=None,**kwargs):
     #Searches an LC (ideally masked for the monotransiting planet) for other *periodic* planets.
     from transitleastsquares import transitleastsquares
@@ -745,9 +739,16 @@ def PeriodicPlanetSearch(lc,ID,planets,use_binned=None,use_flat=True,binsize=1/9
             lc=lcBin(lc,binsize=binsize,use_flat=use_flat)
             suffix='_flat'
     prefix='bin_' if use_binned else ''
+
+    p_max=0.75*(np.nanmax(lc[prefix+'time'])-np.nanmin(lc[prefix+'time']))
+    
     if use_flat:
         if 'flux_flat' not in lc:
-            lc=lcFlatten(lc)
+            #Setting the window to fit over as 5*maximum duration
+            rhostar=1.0 if rhostar==0.0 or rhostar is None else rhostar
+            durmax = (p_max/(3125*rhostar))**(1/3)
+
+            lc=lcFlatten(lc,winsize=5*durmax)
         suffix='_flat'
     else:
         suffix=''
@@ -791,7 +792,7 @@ def PeriodicPlanetSearch(lc,ID,planets,use_binned=None,use_flat=True,binsize=1/9
         if np.sum(plmask)>0:
             mody[plmask] = mody[np.random.choice(np.sum(anommask),np.sum(plmask))]
         model = transitleastsquares(modx, mody)
-        results+=[model.power(period_min=0.5,period_max=0.75*(np.nanmax(lc[prefix+'time'])-np.nanmin(lc[prefix+'time'])),
+        results+=[model.power(period_min=0.5,period_max=p_max,
                             use_threads=1,show_progress_bar=False, n_transits_min=3)]
 
         if 'FAP' in results[-1] and 'snr' in results[-1] and not np.isnan(results[-1]['snr']) and 'transit_times' in results[-1]:
@@ -1081,11 +1082,11 @@ def dopolyfit(win,mask=None,stepcent=0.0,d=3,ni=10,sigclip=3):
         # If a point's offset to the best model is great than a normally-distributed RV, it gets masked 
         # This should have the effect of cutting most "bad" points,
         #   but also potentially creating a better fit through bootstrapping:
-        randmask=abs(np.random.normal(0.0,1.0,len(best_offset)))<best_offset
+        randmask=abs(np.random.normal(0.0,1.0,len(maskedwin)))<best_offset
         new_base = np.polyfit(maskedwin[randmask,0]-stepcent,maskedwin[randmask,1],
                           w=1.0/np.power(maskedwin[randmask,2],2),deg=d)
         #winsigma = np.std(win[:,1]-np.polyval(base,win[:,0]))
-        new_offset = (maskedwin[randmask,1]-np.polyval(new_base,maskedwin[randmask,0]))**2/maskedwin[randmask,2]**2
+        new_offset = (maskedwin[:,1]-np.polyval(new_base,maskedwin[:,0]))**2/maskedwin[:,2]**2
         new_llk=-0.5 * np.sum(new_offset)
         if new_llk>best_llk:
             #If that fit is better than the last one, we update the offsets and the llk:
@@ -1756,7 +1757,7 @@ def CentroidCheck(lc,monoparams,interpmodel,ID,order=2,dur_region=3.5, plot=True
         return None
 
     
-def CheckMonoPairs(lc_time, all_pls,prox_thresh=3.0):
+def CheckMonoPairs(lc_time, all_pls,prox_thresh=3.5):
     #Loop through each pair of monos without a good period, and check:
     # - if they correspond in terms of depth/duration
     # - and whether they could be periodic given other data
@@ -2149,7 +2150,7 @@ def get_interpmodels(Rs,Ms,Teff,lc_time,lc_flux_unit,mission='tess',n_durs=3,tex
     interpt=np.linspace(-0.6*np.max(tdurs),0.6*np.max(tdurs),600)
 
     ys=xo.LimbDarkLightCurve(u_star).get_light_curve(orbit=orbits, r=np.tile(0.1*Rs,n_durs), 
-                                                     t=interpt, texp=texp
+                                                     t=interpt.astype(np.float32), texp=texp
                                                      ).eval()/lc_flux_unit
     interpmodels=[]
     for row in range(n_durs):
@@ -2198,8 +2199,8 @@ def MonoVetting(ID, mission, tcen=None, tdur=None, overwrite=False, do_search=Tr
         file_loc=file_loc+tools.id_dic[mission]+str(ID).zfill(11)
     kwargs['file_loc']=file_loc
     
-    mono_SNR_thresh=7.0 if 'mono_SNR_thresh' not in kwargs else kwargs['mono_SNR_thresh']
-    mono_SNR_r_thresh=5.0 if 'mono_SNR_r_thresh' not in kwargs else kwargs['mono_SNR_r_thresh']
+    mono_SNR_thresh=6.5 if 'mono_SNR_thresh' not in kwargs else kwargs['mono_SNR_thresh']
+    mono_SNR_r_thresh=4.75 if 'mono_SNR_r_thresh' not in kwargs else kwargs['mono_SNR_r_thresh']
     
     if not os.path.isdir(file_loc):
         os.system('mkdir '+file_loc)
@@ -2219,10 +2220,8 @@ def MonoVetting(ID, mission, tcen=None, tdur=None, overwrite=False, do_search=Tr
             print("loading from ",file_loc+"/"+file_loc.split('/')[-1]+'_starpars.csv')
             info=pd.read_csv(file_loc+"/"+file_loc.split('/')[-1]+'_starpars.csv', index_col=0, header=0).T.iloc[0]
         
-        print(info.index)
         Rstar=[float(info['rad']),float(info['eneg_rad']),float(info['epos_rad'])]
         Teff=[float(info['teff']),float(info['eneg_teff']),float(info['epos_teff'])]
-        print(type(info['logg']),type(info['eneg_logg']),type(info['epos_logg']) )
         logg=[float(info['logg']),float(info['eneg_logg']),float(info['epos_logg'])]
         rhostar=[float(info['rho'])/1.411,float(info['eneg_rho'])/1.411,float(info['epos_rho'])/1.411]
         if 'mass' in info:
@@ -2267,7 +2266,8 @@ def MonoVetting(ID, mission, tcen=None, tdur=None, overwrite=False, do_search=Tr
     # DOING PERIODIIC PLANET SEARCH:
     if do_search:
         if not os.path.isfile(file_loc+"/"+file_loc.split('/')[-1]+'_multis.pickle') or overwrite:
-            both_dic, perfig = PeriodicPlanetSearch(deepcopy(lc),ID,deepcopy(mono_dic),plot_loc=file_loc+"/",plot=plot, **kwargs)
+            both_dic, perfig = PeriodicPlanetSearch(deepcopy(lc),ID,deepcopy(mono_dic),plot_loc=file_loc+"/",plot=plot,
+                                                    rhostar=rhostar[0], **kwargs)
             figs['multi']=perfig
             pickle.dump(both_dic,open(file_loc+"/"+file_loc.split('/')[-1]+'_multis.pickle','wb'))
         else:
@@ -2310,7 +2310,7 @@ def MonoVetting(ID, mission, tcen=None, tdur=None, overwrite=False, do_search=Tr
                 #update dic:
                 both_dic[pl].update(monoparams)
                 both_dic[pl]['flag']='planet'
-                if both_dic[pl]['snr']<mono_SNR_thresh and both_dic[pl]['snr_r']<(mono_SNR_r_thresh):
+                if both_dic[pl]['snr']<mono_SNR_thresh or both_dic[pl]['snr_r']<(mono_SNR_r_thresh):
                     both_dic[pl]['flag']='lowSNR'
                     print(pl,"lowSNR, SNR=",both_dic[pl]['snr'],"SNR_r=",both_dic[pl]['snr_r'],"depth:",both_dic[pl]['depth'],"fit:",both_dic[pl]["model_success"])
                 elif both_dic[pl]['b']>0.98 and both_dic[pl]['snr']<(mono_SNR_thresh+2):
@@ -2447,7 +2447,6 @@ def MonoVetting(ID, mission, tcen=None, tdur=None, overwrite=False, do_search=Tr
             df=df.append(ser)
             #if str(ID).zfill(11)+'_'+obj not in all_cands_df.index or overwrite:
             #    all_cands_df=all_cands_df.append(ser[[ind for ind in ser.index if ind not in complexkeys]])
-        print(df.columns)
         #Adding stellar info to df:
         df['rstar']=Rstar[0]
         df['rstar_negerr']=Rstar[1]
@@ -2465,16 +2464,7 @@ def MonoVetting(ID, mission, tcen=None, tdur=None, overwrite=False, do_search=Tr
         if plot:
             #Chcking if values in df are different:
             new_df=True
-            if os.path.exists(file_loc+"/"+file_loc.split('/')[-1]+'_candidates.csv') and not re_vet:
-                new_df=False
-                old_df=pd.read_csv(file_loc+"/"+file_loc.split('/')[-1]+'_candidates.csv')
-                
-                print(old_df.iloc[0],df.iloc[0])
-                #print(old_df.values,df.values, old_df.values!=df.values)
-                if ((type(old_df.values!=df.values)==bool)&(old_df.values!=df.values)) or ((type(old_df.values!=df.values)==np.ndarray)&(old_df.values!=df.values).all()):
-                    new_df=True
-                
-            if not os.path.isfile(file_loc+"/"+str(ID).zfill(11)+'_table.pdf') or overwrite or new_df or re_vet:
+            if not os.path.exists(file_loc+"/"+file_loc.split('/')[-1]+'_candidates.csv') or re_vet:
                 # Making table a plot for PDF:
                 fig=plt.figure(figsize=(11.69,2+0.5*len(both_dic)))
                 ax=fig.add_subplot(111)
