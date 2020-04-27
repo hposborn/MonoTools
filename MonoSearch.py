@@ -482,7 +482,7 @@ def MonoTransitSearch(lc,ID,Rs=None,Ms=None,Teff=None,
             signfct_df=outparams.loc[signfct]
             
             #Placing the best detection info into our dict:
-            detn_row=signfct_df.loc[np.argmin(signfct_df['poly_DeltaBIC'])]
+            detn_row=signfct_df.iloc[np.argmin(signfct_df['poly_DeltaBIC'])]
             detns[str(nix).zfill(2)]={}
             detns[str(nix).zfill(2)]['llk_trans']   = detn_row['llk_trans']
             detns[str(nix).zfill(2)]['llk_sin']     = detn_row['llk_sin']
@@ -1053,7 +1053,7 @@ def GenModelLc(lc,all_pls,mission,Rstar=1.0,rhostar=1.0,Teff=5800,logg=4.43):
                                                                    t=lc['time'], texp=cad*0.98
                                                                    ).eval()
             light_curve[abs(lc['time']-all_pls[pl]['tcen'])>per_guess*0.4]=0.0
-            if all_pls[pl]['orbit_flag'] is 'duo' and 'tcen_2' in all_pls[pl]:
+            if all_pls[pl]['orbit_flag'] == 'duo' and 'tcen_2' in all_pls[pl]:
                 orbit2 = xo.orbits.KeplerianOrbit(r_star=Rstar, rho_star=rhostar,
                                                  period=per_guess, t0=all_pls[pl]['tcen_2'], b=0.4)
                 light_curve2 = xo.LimbDarkLightCurve(u).get_light_curve(orbit=orbit, r=np.sqrt(all_pls[pl]['depth']), 
@@ -2438,7 +2438,7 @@ def MonoVetting(ID, mission, tcen=None, tdur=None, overwrite=False, do_search=Tr
                     if type(both_dic[obj][key]) not in [float,int,str,np.float64,np.float32] or (type(both_dic[obj][key])=='str' and len(both_dic[obj][key])>100):
                         complexkeys+=[key]
                     else:
-                        if key is 'ID':
+                        if key == 'ID':
                             ser[key]=int(both_dic[obj][key])
                         elif type(both_dic[obj][key]) in [str,int]:
                             ser[key]=both_dic[obj][key]
