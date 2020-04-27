@@ -11,6 +11,9 @@ from scipy.signal import savgol_filter
 
 import pymc3 as pm
 import theano.tensor as tt
+from theano import printing, function, config
+config.exception_verbosity='high'
+
 import astropy.units as u
 from astropy.units import cds
 from astropy import constants as c
@@ -85,32 +88,64 @@ class monoModel():
     def add_multi(self, pl_dic, name):
         assert name not in self.planets
         #Adds planet with multiple eclipses
+        if not np.isfinite(pl_dic['period_err']):
+            pl_dic['period_err'] = 0.5*pl_dic['tdur']/pl_dic['period']
+
         self.planets[name]=pl_dic
         self.multis+=[name]
         
     def add_mono(self, pl_dic, name):
         #Adds planet with single eclipses
         assert name not in self.planets
-        pl_dic['per_gaps']=self.compute_period_gaps(pl_dic['tcen'],dur=pl_dic['tdur'])
-        pl_dic['P_min']=pl_dic['per_gaps'][0]
-        #print("P_min",pl_dic['P_min'],pl_dic['per_gaps'],pl_dic['tcen'],pl_dic['tdur'])
+        p_gaps=self.compute_period_gaps(pl_dic['tcen'],tdur=pl_dic['tdur'])
+        pl_dic['per_gaps']=np.column_stack((p_gaps,p_gaps[:,1]-p_gaps[:,0]))
         self.planets[name]=pl_dic
         self.monos+=[name]
-        #print("P_min after",self.planets[name]['P_min'])
+        print(self.planets[name]['per_gaps'])
         
-    def compute_period_gaps(self,t0,dur=0.5):
+    def compute_period_gaps(self,tcen,tdur,max_per=3000):
         # Given the time array, the t0 of transit, and the fact that another transit is not observed, 
         #   we want to calculate a distribution of impossible periods to remove from the Period PDF post-MCMC
         # In this case, a list of periods is returned, with all points within 0.5dur to be cut
-        dist_from_t0=np.sort(abs(t0-self.lc['time'][self.lc['mask']]))
-        gaps=np.where(np.diff(dist_from_t0)>(0.9*dur))[0]
-        listgaps=[]
-        for ng in range(len(gaps)):
-            start,end=dist_from_t0[gaps[ng]],dist_from_t0[gaps[ng]+1]
-            listgaps+=[np.linspace(start,end,int(np.ceil(2*(end-start)/dur)))]
-        listgaps+=[np.max(dist_from_t0)]
-        return np.hstack(listgaps)
+        dist_from_t0=np.sort(abs(tcen-self.lc['time'][self.lc['mask']]))
+        
+        gaps=np.where(np.diff(dist_from_t0)>(0.9*tdur))[0]
+        if len(gaps)>0:
+            #Looping from minimum distance from transit to gap, to maximum distance from transit to end-of-lc
+            checkpers=np.arange(dist_from_t0[gaps[0]]-tdur,np.max(dist_from_t0)+tdur,tdur*0.166)
+            checkpers_ix=self.CheckPeriodsHaveGaps(checkpers,tdur,tcen).astype(int) #Seeing if each period has data coverage
+            
+            #Creating an array of tuples which form start->end of specific gaps:
+            starts=checkpers[:-1][np.diff(checkpers_ix)==1.0]
+            #Because the above array ends beyond the max lc extent, we need to add the max period to this array:
+            ends=np.hstack((checkpers[1:][np.diff(checkpers_ix)==-1.0],max_per))
+            #print(starts,ends)
+            gap_start_ends=np.array([(starts[n],ends[n]) for n in range(len(starts))])
+        else:
+            gap_start_ends=np.array([(np.max(dist_from_t0),max_per)])
+        return gap_start_ends
     
+    def CheckPeriodsHaveGaps(self,pers,tdur,tcen,tcen_2=None,coverage_thresh=0.15):
+        #Looping through potential periods and counting points in-transit
+        #This
+        trans=abs(self.lc['time'][self.lc['mask']]-tcen)<0.3*tdur
+
+        days_in_known_transits = np.sum(trans)*float(self.lc['cadence'][self.lc['mask']][trans][0][1:])/1440
+        if tcen_2 is not None:
+            trans2=abs(self.lc['time'][self.lc['mask']]-tcen_2)<0.3*tdur
+            days_in_known_transits += np.sum(trans2)*float(self.lc['cadence'][self.lc['mask']][trans2][0][1:])/1440
+            coverage_thresh*=0.5 #Two transits already in number count, so to compensate we must decrease the thresh
+            
+        check_pers_ix=[]
+        for per in pers:
+            phase=(self.lc['time'][self.lc['mask']]-tcen-per*0.5)%per-per*0.5
+            intr=abs(phase)<0.3*tdur
+            #Here we need to add up the cadences in transit (and not simply count the points) to check coverage:
+            days_in_tr=np.sum([float(self.lc['cadence'][ncad][1:]) for ncad in np.arange(len(self.lc['cadence']))[self.lc['mask']][intr]])/1440.
+            check_pers_ix+=[days_in_tr<(1.0+coverage_thresh)*days_in_known_transits]
+            #Less than 15% of another eclipse is covered
+        return np.array(check_pers_ix)
+
     def compute_duo_period_aliases(self,duo,dur=0.5):
         # Given the time array, the t0 of transit, and the fact that two transits are observed, 
         #   we want to calculate a distribution of impossible periods to remove from the period alias list
@@ -119,25 +154,8 @@ class monoModel():
         #                          self.compute_period_gaps(duo['tcen_2'],dur=duo['tdur']))))
         #print(P_min,np.ceil(duo['period']/P_min),np.ceil(duo['period']/P_min))
         check_pers_ints = np.arange(1,np.ceil(duo['period']/10),1.0)
-        check_pers_ix=np.tile(False,len(check_pers_ints))
-        trans1=abs(self.lc['time'][self.lc['mask']]-duo['tcen'])<0.3*duo['tdur']
-        trans2=abs(self.lc['time'][self.lc['mask']]-duo['tcen_2'])<0.3*duo['tdur']
-        days_in_known_transits=(np.sum(trans1)*float(self.lc['cadence'][self.lc['mask']][trans1][0][1:])/1440) + \
-                               (np.sum(trans2)*float(self.lc['cadence'][self.lc['mask']][trans2][0][1:])/1440)
+        check_pers_ix = self.CheckPeriodsHaveGaps(duo['period']/check_pers_ints,duo['tdur'],duo['tcen'],tcen_2=duo['tcen_2'])
         
-        print(self.lc['cadence'][100][1:])
-        
-        #Looping through potential periods and counting points in-transit
-        for nper,per_int in enumerate(check_pers_ints):
-            per=duo['period']/per_int
-            phase=(self.lc['time'][self.lc['mask']]-duo['tcen']-per*0.5)%per-per*0.5
-            intr=abs(phase)<0.3*duo['tdur']
-            #Here we need to add up the cadences in transit (and not simply count the points) to check coverage:
-            days_in_tr=np.sum([float(self.lc['cadence'][ncad][1:]) for ncad in np.arange(len(self.lc['cadence']))[self.lc['mask']][intr]])/1440.
-            check_pers_ix[nper]=days_in_tr<1.075*days_in_known_transits #Less than 15% of another eclipse is covered
-            #print(per,Npts_in_tr/Npts_from_known_transits)
-        print(check_pers_ints)
-        print([check_pers_ix])
         duo['period_int_aliases']=check_pers_ints[check_pers_ix]
         duo['period_aliases']=duo['period']/duo['period_int_aliases']
         duo['P_min']=np.min(duo['period_aliases'])
@@ -147,6 +165,8 @@ class monoModel():
         assert name not in self.planets
         #Adds planet with two eclipses and unknown period between these
         assert pl_dic['period']==abs(pl_dic['tcen']-pl_dic['tcen_2'])
+        if not np.isfinite(pl_dic['period_err']):
+            pl_dic['period_err'] = 0.5*pl_dic['tdur']/pl_dic['period']
         tcens=np.array([pl_dic['tcen'],pl_dic['tcen_2']])
         pl_dic['tcen']=np.min(tcens)
         pl_dic['tcen_2']=np.max(tcens)
@@ -214,9 +234,206 @@ class monoModel():
 
         self.savenames=[os.path.join(self.savefileloc,self.id_dic[self.mission]+str(self.ID).zfill(11)+"_"+date+"_"+str(int(nsim))+"_"+suffix), os.path.join(self.savefileloc,self.id_dic[self.mission]+str(self.ID).zfill(11)+'_'+suffix)]
 
+    def transit_predict(self,itime,sample):
+        #Takes input sample (a dict either from init_soln, or from trace) and produces a transit model
+        trans_pred=[]
+        if 'mult' not in sample:
+            sample['mult']=1.0
+        
+        if 'ecc' not in sample:
+            orbit = xo.orbits.KeplerianOrbit(
+                r_star=sample['Rs'], rho_star=sample['rho_S'],
+                period=sample['period'], t0=sample['t0'], b=sample['b'])
+        else:
+            orbit = xo.orbits.KeplerianOrbit(
+                r_star=sample['Rs'], rho_star=sample['rho_S'],
+                period=sample['period'], t0=sample['t0'], b=sample['b'],
+                ecc=sample['ecc'], omega=sample['omega'])
+
+        if 'u_star_tess' in self.init_soln:
+            outlc=xo.LimbDarkLightCurve(self.init_soln['u_star_tess']).get_light_curve(
+                                                     orbit=orbit, r=sample['r'],
+                                                     t=itime,
+                                                     texp=np.nanmedian(np.diff(itime))
+                                                     )/(self.lc['flux_unit']*sample['mult'])
+            trans_pred+=[outlc.eval()]
+        else:
+            trans_pred+=[np.zeros((len(itime),len(self.planets)))]
+
+        if 'u_star_kep' in self.init_soln:
+            outlc = xo.LimbDarkLightCurve(u_star_kep).get_light_curve(
+                                                     orbit=orbit, r=sample['r'],
+                                                     t=itime,
+                                                     texp=np.nanmedian(np.diff(itime))
+                                                     )/(self.lc['flux_unit']*sample['mult'])
+            trans_pred+=[outlc.eval()]
+        else:
+            trans_pred+=[np.zeros((len(itime),len(self.planets)))]
+
+        #Here we're making an index for which telescope (kepler vs tess) did the observations,
+        # then we multiply the output n_time x n_pl lightcurves by the n_time x n_pl x 2 index and sum along the 3D axis
+        
+        if not hasattr(self,'cad_index'):
+            self.lc['cad_index']=np.zeros((len(self.lc['time']),len(self.planets),2))
+            for ncad in range(len(self.cads)):
+                if self.cads[ncad][0].lower()=='t':
+                    self.lc['cad_index'][:,:,0]+=self.lc['flux_err_index'][:,ncad]
+                elif self.cads[ncad][0].lower()=='k':
+                    self.lc['cad_index'][:,:,1]+=self.lc['flux_err_index'][:,ncad]
+
+        time_index = np.in1d(self.lc['time'],itime)
+        if np.sum(time_index)!=len(itime):
+            #We have time points that are not from the lightcurve - need to find nearest cadence type. One liner:
+            new_cad_index = self.lc['cad_index'][np.argmin(abs(self.lc['time'][np.newaxis,:]-itime[:,np.newaxis]),axis=0),:]
+        else:
+            #indexing the cad_index to match the times we're generating data for:
+            new_cad_index = self.lc['cad_index'][time_index,:]
+        #print(np.dstack(trans_pred).shape)
+        #print(new_cad_index.shape)
+        return np.sum(np.dstack(trans_pred)*new_cad_index,axis=2)
+
+    def gp_predict(self,itime,sample,return_var=True):
+        part_mask=np.in1d(np.round(self.lc['time'],5),np.round(itime,5))
+        if part_mask.sum()<50:
+            #Not many points - maybe we have a fine grid?
+            # in which case we should try to find nearby points and link them in to do the GP computation
+            cad=np.nanmedian(np.diff(self.lc['time']))
+            part_mask=np.sum(abs(self.lc['time'][np.newaxis,:]-itime[:,np.newaxis])<cad*0.4,axis=0)
+        
+        trans_pred=self.transit_predict(itime,sample)
+        if np.sum(self.lc['mask'][part_mask])>0:
+            with pm.Model() as gpmod:
+                log_S0=pm.Normal('logS0',mu=float(sample['logS0']),sd=0.0000000001)
+                log_w0=pm.Normal('logw0',mu=float(sample['logw0']),sd=0.0000000001)
+                logs2=pm.Normal('logs2',mu=sample['logs2'].astype(float),shape=len(sample['logs2']),sd=0.0000000001)
+                mean=pm.Normal('mean',mu=float(sample['mean']),sd=0.0000000001)
+                    #'mean',upper=sample['mean']+0.001,lower=sample['mean']-0.001,testval=sample['mean'])
+                part_gp = xo.gp.GP(xo.gp.terms.SHOTerm(log_S0=log_S0,
+                                                       log_w0=log_w0,
+                                                       Q=1/np.sqrt(2)),
+                                   self.lc['time'][part_mask&self.lc['mask']].astype(np.float32),
+                                   self.lc['flux_err'][part_mask&self.lc['mask']]**2 + \
+                                   tt.dot(self.lc['flux_err_index'][part_mask&self.lc['mask']],
+                                          tt.exp(logs2)),
+                                   J=2)
+                llk_gp = part_gp.log_likelihood(self.lc['flux'][part_mask&self.lc['mask']]-\
+                                                np.sum(trans_pred,axis=-1)[self.lc['mask'][part_mask]]-\
+                                                mean)
+                #print(llk_gp.eval())
+                #gp_pred = part_gp.predict(itime, return_var=return_var).eval()
+                gp_pred = xo.eval_in_model(part_gp.predict(itime, return_var=return_var),
+                                           {col:sample[col] for col in ['logS0','logw0','logs2',
+                                                                        'logpower_interval__','logw0_interval__',
+                                                                        'mean']})
+            return gp_pred, trans_pred
+        else:
+            return np.zeros((len(itime),2)), trans_pred
+        
+    def break_times_up(self,itime,max_len=10000,min_length_part=2500):
+        times=[itime]
+        if len(itime)>max_len:
+            #splitting time up for GP computation - doing so at natural gaps in the lc
+            max_time_len=len(itime)
+            
+            while max_time_len>max_len:
+                newtimes=[]
+                for n in range(len(times)):
+                    if len(times[n])>max_len:
+                        middle_boost=5*(0.3-((times[n][:-1]+np.diff(times[n])-np.median(times[n]))/(times[n][-1]-times[n][0]))**2)
+                        #Making sure there's no super-small pieces by not snipping near the start & end by setting diffs here to 0.0
+                        middle_boost[:min_length_part]*=0.0
+                        middle_boost[-1*min_length_part:]*=0.0
+                        cut_n=np.argmax(np.diff(times[n])*middle_boost[n])
+                        newtimes+=[times[n][:cut_n+1],times[n][cut_n+1:]]
+                    else:
+                        newtimes+=[times[n]]
+                times=newtimes
+                max_time_len=np.max([len(t) for t in times])
+        return times
+
+    def predict_all(self,itime,use_init=False,N_pred=25,max_len=12500,return_var=True):
+        self.part_times = self.break_times_up(itime,max_len)
+        
+        #extend transit model to full lc time:
+        gp_preds, trans_preds = [], []
+        if use_init or not hasattr(self,'trace'):
+            for t in self.part_times:
+                gp_pred, trans_pred=self.gp_predict(t,self.init_soln)
+                gp_preds+=[np.column_stack(gp_pred)]
+                trans_preds+=[trans_pred]
+            gp_preds, trans_preds = np.vstack(gp_preds), np.vstack(trans_preds)
+        else:
+            #Using samples from trace:
+            if not hasattr(self,'tracemask'):
+                self.PeriodGapCuts()
+            vns=[var for var in self.trace.varnames if 'curve' not in var and 'pred' not in var]
+            samples=pm.trace_to_dataframe(self.trace, varnames=vns)
+            samples=samples.loc[self.tracemask].iloc[np.random.choice(np.sum(self.tracemask),N_pred,replace=False)]
+            for rowid,row in samples.iterrows():
+                gp_pred_is, trans_pred_is = [], []
+                for t in self.part_times:
+                    gp_pred_i, trans_pred_i=self.gp_predict(t,row)
+                    gp_pred_is+=[np.column_stack(gp_pred_i)]
+                    trans_pred_is+=[trans_pred_i]
+                gp_pred_is, trans_pred_is = np.vstack(gp_pred_is), np.vstack(trans_pred_is)
+                gp_preds+=[gp_pred_is]
+                trans_preds+=[trans_pred_is]
+            gp_preds = np.dstack((gp_pred_is))
+            trans_preds = np.dstack((trans_pred_is))
+        return gp_preds,trans_preds
+    '''
+        if with_transit:
+            with pm.Model() as predict_model:
+                if use_init:
+                    pass
+                else:
+                    trans_pred = np.empty((N_pred, len(self.part_times[n])))
+                    for i, sample in enumerate(xo.get_samples_from_trace(trace, size=N_pred)):
+                        trans_pred[i] = xo.eval_in_model(pm.math.sum(gen_lc(prefix='all_time_'), axis=-1), sample)
+        
+        return gp_preds,gp_vars
+        gp_preds,gp_vars=[],[]
+        self.part_gps=[]
+        with self.model:
+            if use_init:
+                for n in range(len(self.part_times)):
+                    print(self.lc['flux'][part_mask&self.lc['mask']],np.isnan(self.lc['flux'][part_mask&self.lc['mask']]).sum())
+                    llk_gp = self.part_gps[-1].log_likelihood(self.lc['flux'][part_mask&self.lc['mask']]-\
+                                                     trans_pred[part_mask&self.lc['mask']]-\
+                                                     self.init_soln['mean'])
+                    pred_mu, pred_var = self.part_gps[-1].predict(self.part_times[n], return_var=True)+self.init_soln['mean']
+                    #pred_mu, pred_var = xo.eval_in_model(pred, self.init_soln)
+                    gp_preds+=[pred_mu]
+                    gp_vars+=[pred_var]
+                gp_preds=np.hstack(gp_preds)
+                gp_vars=np.hstack(gp_vars)
+            else:
+                for n in range(len(self.part_times)):
+                    part_mask=np.in1d(self.lc['time'],self.part_times[n])
+                    self.part_gps += [xo.gp.GP(self.gp.kernel, self.lc['time'][part_mask&self.lc['mask']].astype(np.float32),
+                                           self.lc['flux_err'][part_mask&self.lc['mask']]**2 + \
+                                           tt.dot(self.lc['flux_err_index'][part_mask&self.lc['mask']],
+                                                  tt.exp(np.nanmedian(self.trace['logs2'],axis=0))),
+                                           J=2)]
+                    llk_gp = self.part_gps[-1].log_likelihood(self.lc['flux'][part_mask&self.lc['mask']])
+
+                    pred_mu = np.empty((N_pred, len(self.part_times[n])))
+                    pred_var = np.empty((N_pred, len(self.part_times[n])))
+                    with self.model:
+                        pred = self.part_gps[n].predict(self.part_times[n], return_var=True)+mean
+                        for i, sample in enumerate(xo.get_samples_from_trace(trace, size=N_pred)):
+                            pred_mu[i], pred_var[i] = xo.eval_in_model(pred, sample)
+
+                    gp_preds+=[pred_mu]
+                    gp_vars+=[pred_var]
+                gp_preds=np.vstack(gp_preds)
+                gp_vars=np.vstack(gp_vars)
+                
+            
+        '''
     def init_model(self,assume_circ=False,
                    use_GP=True,constrain_LD=True,ld_mult=3,useL2=True,
-                   mission='TESS',FeH=0.0,LoadFromFile=False,cutDistance=5.0,
+                   mission='TESS',FeH=0.0,LoadFromFile=False,cutDistance=4.5,
                    debug=True, pred_all_time=False):
         assert len(self.planets)>0
         # lc - dictionary with arrays:
@@ -230,28 +447,70 @@ class monoModel():
         # periods - In the case where a planet is already transiting, include the period guess as a an array with length n_pl
         # constrain_LD - Boolean. Whether to use 
         # ld_mult - Multiplication factor on STD of limb darkening]
-        # cutDistance - cut out points further than this from transit. Default of zero does no cutting
+        # cutDistance - cut out points further than this multiple of transit duration from transit. Default of zero does no cutting
         
-        print(len(self.planets),self.planets,'monos:',self.monos,'multis:',self.multis,'duos:',self.duos)
+        print(len(self.planets),'monos:',self.monos,'multis:',self.multis,'duos:',self.duos)
         
         n_pl=len(self.planets)
         self.cads=np.unique(self.lc['cadence'])
+        #In the case of different cadence/missions, we need to separate their respective errors to fit two logs2
+        self.lc['flux_err_index']=np.column_stack([np.where(self.lc['cadence']==cad,1.0,0.0) for cad in self.cads])
+
+        ######################################
+        #   Creating telescope index func:
+        ######################################
+        if not hasattr(self,'tele_index'):
+            #Here we're making an index for which telescope (kepler vs tess) did the observations,
+            # then we multiply the output n_time array by the n_time x 2 index and sum along the 2nd axis
+
+            self.lc['tele_index']=np.zeros((len(self.lc['time']),2))
+            for ncad in range(len(self.cads)):
+                if self.cads[ncad][0].lower()=='t':
+                    self.lc['tele_index'][:,0]+=self.lc['flux_err_index'][:,ncad]
+                elif self.cads[ncad][0].lower()=='k':
+                    self.lc['tele_index'][:,1]+=self.lc['flux_err_index'][:,ncad]
+
+        ######################################
+        #   Masking out-of-transit flux:
+        ######################################
+        # To speed up computation, here we loop through each planet and add the region around each transit to the data to keep
+        if cutDistance>0:
+            speedmask=np.tile(False, len(self.lc['time']))
+            for ipl in self.multis:
+                phase=(self.lc['time']-self.planets[ipl]['tcen']-0.5*self.planets[ipl]['period'])%self.planets[ipl]['period']-0.5*self.planets[ipl]['period']
+                speedmask+=abs(phase)<cutDistance*self.planets[ipl]['tdur']
+            for ipl in self.monos:
+                speedmask+=abs(self.lc['time']-self.planets[ipl]['tcen'])<cutDistance*self.planets[ipl]['tdur']
+            for ipl in self.duos:
+                #speedmask[abs(self.lc['time'][self.lc['mask']]-self.planets[ipl]['tcen'])<cutDistance]=True
+                #speedmask[abs(self.lc['time'][self.lc['mask']]-self.planets[ipl]['tcen_2'])<cutDistance]=True
+                for per in self.planets[ipl]['period_aliases']:
+                    phase=(self.lc['time']-self.planets[ipl]['tcen']-0.5*per)%per-0.5*per
+                    speedmask+=abs(phase)<cutDistance*self.planets[ipl]['tdur']
+            self.lc['oot_mask']=self.lc['mask']&speedmask
+            print(np.sum(speedmask),"points in new lightcurve, compared to ",np.sum(self.lc['mask'])," in original mask, leaving ",np.sum(self.lc['oot_mask']),"points in the lc")
+
+        else:
+            #Using all points in the 
+            self.lc['oot_mask']=self.lc['mask']
 
         start=None
         with pm.Model() as model:
 
-            # We're gonna need a bounded normal:
-            #BoundedNormal = pm.Bound(pm.Normal, lower=0, upper=3)
-
-            #Stellar parameters (although these aren't really fitted.)
+            ######################################
+            #   Intialising Stellar Params:
+            ######################################
             #Using log rho because otherwise the distribution is not normal:
-            logrho_S = pm.Normal("logrho_S", mu=np.log(self.rhostar[0]), sd=np.average(abs(self.rhostar[1:]/self.rhostar[0])),testval=np.log(self.rhostar[0]))
+            logrho_S = pm.Normal("logrho_S", mu=np.log(self.rhostar[0]), 
+                                 sd=np.average(abs(self.rhostar[1:]/self.rhostar[0])),
+                                 testval=np.log(self.rhostar[0]))
             rho_S = pm.Deterministic("rho_S",tt.exp(logrho_S))
             Rs = pm.Normal("Rs", mu=self.Rstar[0], sd=np.average(abs(self.Rstar[1:])),testval=self.Rstar[0],shape=1)
             Ms = pm.Deterministic("Ms",(rho_S/1.408)*Rs**3)
 
             # The baseline flux
-            mean = pm.Normal("mean", mu=0.0, sd=1.0,testval=0.0)
+            mean=pm.Normal("mean",mu=np.median(self.lc['flux'][self.lc['mask']]),
+                                  sd=np.std(self.lc['flux'][self.lc['mask']]))
 
             # The 2nd light (not third light as companion light is not modelled) 
             # This quantity is in delta-mag
@@ -262,74 +521,105 @@ class monoModel():
                 mult=1.0
             
             print("Forming Pymc3 model with: monos:",self.monos,"multis:",self.multis,"duos:",self.duos)
-            # The time of a reference transit for each planet
-            # If multiple times are given that means multiple transits *without* a set period - a "complex" t0
-            if len(self.monos+self.multis)>0:
-                #Normal transit fit - no complex gaps
-                init_t0 = pm.Normal("init_t0", mu=[self.planets[pls]['tcen'] for pls in self.multis+self.monos], sd=0.3, shape=len(self.multis+self.monos))
-            if len(self.duos)>0:
-                # In cases where we have two transits with a gap between, we will have two t0s for a single planet (and N periods)
-                t0_first_trans = pm.Normal("t0_first_trans",
-                                            mu=np.array([self.planets[pls]['tcen'] for pls in self.duos]), 
-                                            sd=np.tile(0.2,len(self.duos)),
-                                            shape=len(self.duos))
-                t0_second_trans = pm.Normal("t0_second_trans",
-                                            mu=np.array([self.planets[pls]['tcen_2'] for pls in self.duos]), 
-                                            sd=np.tile(0.2,len(self.duos)),
-                                            shape=len(self.duos))
 
-            #Cutting points for speed of computation:
-            if len(self.duos)==0 and cutDistance is not None and cutDistance>0:
-                speedmask=np.tile(False, np.sum(self.lc['mask']))
-                for ipl in self.multis:
-                    phase=(self.lc['time'][self.lc['mask']]-self.planets[ipl]['tcen']-0.5*self.planets[ipl]['period'])%self.planets[ipl]['period']-0.5*self.planets[ipl]['period']
-                    speedmask[abs(phase)<cutDistance]=True
-                for ipl in self.monos:
-                    speedmask[abs(self.lc['time'][self.lc['mask']]-self.planets[ipl]['tcen'])<cutDistance]=True
-                for ipl in self.duos:
-                    #speedmask[abs(self.lc['time'][self.lc['mask']]-self.planets[ipl]['tcen'])<cutDistance]=True
-                    #speedmask[abs(self.lc['time'][self.lc['mask']]-self.planets[ipl]['tcen_2'])<cutDistance]=True
-                    for per in self.planets[ipl]['period_aliases']:
-                        phase=(self.lc['time'][self.lc['mask']]-self.planets[ipl]['tcen']-0.5*per)%per-0.5*per
-                        speedmask[abs(phase)<cutDistance]=True
-                        
-                self.lc['oot_mask']=self.lc['mask'][:]
-                self.lc['oot_mask'][self.lc['oot_mask']]=speedmask[:]
-                print(np.sum(~self.lc['oot_mask']),"points cut from lightcurve, compared to ",np.sum(self.lc['mask'])," in original mask, leaving ",np.sum(self.lc['oot_mask']),"points in the lc")
+            ######################################
+            #     Initialising Periods & tcens
+            ######################################
+            tcens=np.array([self.planets[pls]['tcen'] for pls in self.multis+self.monos+self.duos])
+            tdurs=np.array([self.planets[pls]['tdur'] for pls in self.multis+self.monos+self.duos])
+            print(tcens,tdurs)
+            t0 = pm.Bound(pm.Normal, upper=tcens+tdurs*0.5, lower=tcens-tdurs*0.5)("t0",mu=tcens, sd=tdurs*0.05,
+                                        shape=len(self.planets),testval=tcens)
 
-            else:
-                #Using all points in the 
-                self.lc['oot_mask']=self.lc['mask']
-            
             if len(self.monos)>0:
-                min_Ps=np.array([self.planets[pls]['P_min'] for pls in self.planets if self.planets[pls]['orbit_flag']=='mono']).ravel()
+                # The period distributions of monotransits are tricky as we often have gaps to contend with
+                # We cannot sample the full period distribution while some regions have p=0.
+                # Therefore, we need to find each possible period region and marginalise over each
+                
+                min_Ps=np.array([self.planets[pls]['P_min'] for pls in self.monos])
                 print(min_Ps)
                 #From Dan Foreman-Mackey's thing:
-                soft_period = pm.Pareto("soft_period", m=min_Ps, alpha=2/3.,shape=len(min_Ps))
+                #log_soft_per = pm.Uniform("log_soft_per", lower=np.log(min_Ps), upper=np.log(100*min_Ps),shape=len(min_Ps))
+                #soft_period = pm.Deterministic("soft_period", tt.exp(log_soft_per))
+                #pm.Potential("mono_per_prior",-2*log_soft_per) # prior from window function and occurrence rates
+                test_ps=np.array([self.planets[pls]['period'] if self.planets[pls]['period']>self.planets[pls]['P_min'] else 1.25*self.planets[pls]['P_min'] for pls in self.monos])
+                mono_periods={}
+                mono_log_periods={}
+                mono_ix_periods={}
+                for pl in self.monos:
+                    mono_log_periods[pl]=pm.Uniform("mono_uniforms_"+str(pl),0.0,1.0,
+                                                    shape=len(self.planets[pl]['per_gaps'][:,0]))
+                    mono_log_periods[pl]=pm.Deterministic("mono_logp_"+str(pl),mono_log_periods[pl] * \
+                                                          self.planets[pl]['per_gaps'][:,2] * self.planets[pl]['per_gaps'][:,0])
+                    mono_periods[pl]=pm.Deterministic("mono_period_"+str(pl),tt.exp(mono_log_periods[pl]))
+                    '''
+                    mono_log_periods[pl]=pm.Uniform("mono_logp_"+str(pl),
+                                                    lower=self.planets[pl]['per_gaps'][ngap,0],
+                                                    upper=self.planets[pl]['per_gaps'][ngap,1],
+                                                    shape=len(self.planets[pl]['per_gaps'][:,0]))
+                    mono_periods[pl]=pm.Deterministic("mono_period_"+str(pl),tt.exp(mono_log_periods[pl]))
+                    
+                    for ngap in range(len(self.planets[pl]['per_gaps'][:,0])):
+                        #Using pareto with alpha=1.0 as p ~ -1*(alpha+1)
+                        #ie prior on period is prop to 1/P (window function) x 1/P (occurrence flat in LnP) x Rs/a (added later)
+                        mono_periods[pl][ngap]=pm.Bound(pm.Pareto,
+                                                        lower=self.planets[pl]['per_gaps'][ngap,0],
+                                                        upper=self.planets[pl]['per_gaps'][ngap,1]
+                                                        )("mono_period_"+pl+'_'+str(int(ngap)), 
+                                                          m=self.planets[pl]['per_gaps'][0,0],
+                                                          alpha=1.0)
+                    '''
+            if len(self.duos)>0:
+                #Again, in the case of a duotransit, we have a series of possible periods between two know transits.
+                # TO model these we need to compute each and marginalise over them
+                duo_periods={}
+                tcens=np.array([self.planets[pls]['tcen'] for pls in self.duos])
+                tcens2=np.array([self.planets[pls]['tcen_2'] for pls in self.duos])
+                tdurs=np.array([self.planets[pls]['tdur'] for pls in self.duos])
+                t0_second_trans = pm.Bound(pm.Normal, 
+                                           upper=tcens2+tdurs*0.5, 
+                                           lower=tcens2-tdurs*0.5)("t0_second_trans",mu=tcens2,
+                                                                  sd=np.tile(0.2,len(self.duos)),
+                                                                  shape=len(self.duos),testval=tcens2)
+                for npl,pl in enumerate(self.duos):
+                    duo_periods[pl]=pm.Deterministic("duo_period_"+pl,
+                                                     abs(t0_second_trans-t0[-1*(len(self.duos)+npl)])/self.planets[pl]['period_int_aliases'])
             if len(self.multis)>0:
-                known_period = pm.Normal("known_period", mu=np.array([self.planets[pls]['period'] for pls in self.multis]),sd=0.1,shape=len(self.multis))
-            
-            #P_index = pm.Bound("P_index", upper=1.0, lower=0.0)("P_index", mu=0.5, sd=0.33, shape=n_pl)
+                #In the case of multitransiting plaets, we know the periods already, so we set a tight normal distribution
+                inipers=np.array([self.planets[pls]['period'] for pls in self.multis])
+                inipererrs=np.array([self.planets[pls]['period_err'] for pls in self.multis])
+                print("init periods:", inipers,inipererrs)
+                multi_periods = pm.Normal("multi_periods", 
+                                          mu=inipers,
+                                          sd=np.clip(inipererrs*0.25,np.tile(0.005,len(inipers)),0.02*inipers),
+                                          shape=len(self.multis),
+                                          testval=inipers)
 
+                
+            ######################################
+            #     Initialising R_p & b
+            ######################################
             # The Espinoza (2018) parameterization for the joint radius ratio and
             # impact parameter distribution
+            rpls=np.array([self.planets[pls]['r_pl'] for pls in self.multis+self.monos+self.duos])/(109.1*self.Rstar[0])
+            bs=np.array([self.planets[pls]['b'] for pls in self.multis+self.monos+self.duos])
             if useL2:
                 #EB case as second light needed:
-                RpRs, b = xo.distributions.get_joint_radius_impact(
+                r, b = xo.distributions.get_joint_radius_impact(
                     min_radius=0.001, max_radius=1.25,
-                    testval_r=np.array([self.planets[pls]['depth'] for pls in self.multis+self.monos+self.duos])**0.5,
-                    testval_b=np.random.rand(len(self.planets))
-                )
+                    testval_r=rpls, testval_b=bs)
             else:
-                RpRs, b = xo.distributions.get_joint_radius_impact(
+                r, b = xo.distributions.get_joint_radius_impact(
                     min_radius=0.001, max_radius=0.25,
-                    testval_r=np.array([self.planets[pls]['depth'] for pls in self.multis+self.monos+self.duos])**0.5,
-                    testval_b=np.random.rand(len(self.planets))
-                )
+                    testval_r=rpls, testval_b=bs)
 
-            r_pl = pm.Deterministic("r_pl", RpRs * Rs * 109.1)
+            r_pl = pm.Deterministic("r_pl", r * Rs * 109.1)
+            pm.Potential("logr_potential",tt.log(r_pl))
 
-            #Initialising Limb Darkening:
+            ######################################
+            #     Initialising Limb Darkening
+            ######################################
+            # Here we either constrain the LD params given the stellar info, OR we let exoplanet fit them
             if len(np.unique([c[0] for c in self.cads]))==1:
                 if constrain_LD:
                     n_samples=1200
@@ -377,33 +667,27 @@ class monoModel():
                     # The Kipping (2013) parameterization for quadratic limb darkening paramters
                     u_star_tess = xo.distributions.QuadLimbDark("u_star_tess", testval=np.array([0.3, 0.2]))
                     u_star_kep = xo.distributions.QuadLimbDark("u_star_kep", testval=np.array([0.3, 0.2]))
+            
+            ######################################
+            #     Initialising GP kernel
+            ######################################
+            log_flux_std=np.array([np.log(np.std(self.lc['flux'][self.lc['oot_mask']&(self.lc['cadence']==c)])) for c in self.cads]).ravel()
+            logs2 = pm.Normal("logs2", mu = 2*log_flux_std, sd = np.tile(2.0,len(log_flux_std)), shape=len(log_flux_std))
 
-            #Initialising GP kernel (i.e. without initialising Potential)
             if use_GP:
                 # Transit jitter & GP parameters
                 #logs2 = pm.Normal("logs2", mu=np.log(np.var(y[m])), sd=10)
-                print("all cadences",self.cads)
-                #Transit jitter will change if observed by Kepler/K2/TESS - need multiple logs^2
-                if len(self.cads)==1:
-                    logs2 = pm.Uniform("logs2", upper=np.log(np.std(self.lc['flux'][self.lc['oot_mask']]))+4,
-                                       lower=np.log(np.std(self.lc['flux'][self.lc['oot_mask']]))-4)
-                    min_cad=np.nanmedian(np.diff(self.lc['time']))#Limiting to <1 cadence
-                else:
-                    logs2 = pm.Uniform("logs2", upper=[np.log(np.std(self.lc['flux'][self.lc['oot_mask']&(self.lc['cadence']==c)]))+4 for c in self.cads],
-                                       lower=[np.log(np.std(self.lc['flux'][self.lc['oot_mask']&(self.lc['cadence']==c)]))-4 for c in self.cads], shape=len(self.cads))
-                    min_cad=np.min([np.nanmedian(np.diff(self.lc['time'][self.lc['cadence']==c])) for c in self.cads])
-
-                logw0_guess = np.log(2*np.pi/10)
-
                 lcrange=self.lc['time'][self.lc['oot_mask']][-1]-self.lc['time'][self.lc['oot_mask']][0]
-
+                min_cad = np.min([np.nanmedian(np.diff(self.lc['time'][self.lc['oot_mask']&(self.lc['cadence']==c)])) for c in self.cads])
                 #freqs bounded from 2pi/minimum_cadence to to 2pi/(4x lc length)
                 logw0 = pm.Uniform("logw0",lower=np.log((2*np.pi)/(4*lcrange)), 
-                                   upper=np.log((2*np.pi)/min_cad))
+                                   upper=np.log((2*np.pi)/min_cad),testval=np.log((2*np.pi)/(lcrange)))
 
                 # S_0 directly because this removes some of the degeneracies between
                 # S_0 and omega_0 prior=(-0.25*lclen)*exp(logS0)
-                logpower = pm.Uniform("logpower",lower=-20,upper=np.log(np.nanmedian(abs(np.diff(self.lc['flux'][self.lc['oot_mask']])))))
+                maxpower=np.log(np.nanmedian(abs(np.diff(self.lc['flux'][self.lc['oot_mask']]))))+1
+                logpower = pm.Uniform("logpower",lower=-20,upper=maxpower,testval=maxpower-6)
+                print("input to GP power:",maxpower-1)
                 logS0 = pm.Deterministic("logS0", logpower - 4 * logw0)
 
                 # GP model for the light curve
@@ -413,335 +697,319 @@ class monoModel():
                 # This is the eccentricity prior from Kipping (2013) / https://arxiv.org/abs/1306.4982
                 BoundedBeta = pm.Bound(pm.Beta, lower=1e-5, upper=1-1e-5)
                 ecc = BoundedBeta("ecc", alpha=0.867, beta=3.03, shape=n_pl,
-                                  testval=np.tile(0.1,n_pl))
-                omega = xo.distributions.Angle("omega", shape=n_pl, testval=np.tile(0.1,n_pl))
+                                  testval=np.tile(0.05,n_pl))
+                omega = xo.distributions.Angle("omega", shape=n_pl, testval=np.tile(0.5,n_pl))
 
             if use_GP:
-                if len(self.cads)==1:
-                    #Observed by a single telescope
-                    self.gp = xo.gp.GP(kernel, self.lc['time'][self.lc['oot_mask']].astype(np.float32), tt.exp(logs2) + self.lc['flux_err'][self.lc['oot_mask']].astype(np.float32), J=2)
-                else:
-                    #We have multiple logs2 terms due to multiple telescopes:
-                    self.gp={}
-                    for n,cad in enumerate(self.cads):
-                        cad_ix=self.lc['oot_mask']&(self.lc['cadence']==cad)
-                        self.gp[cad] = xo.gp.GP(kernel, 
-                                          self.lc['time'][cad_ix].astype(np.float32), 
-                                          tt.exp(logs2[n]) + self.lc['flux_err'][cad_ix].astype(np.float32), J=2)
+                self.gp = xo.gp.GP(kernel, self.lc['time'][self.lc['oot_mask']].astype(np.float32),
+                                   self.lc['flux_err'][self.lc['oot_mask']]**2 + \
+                                   tt.dot(self.lc['flux_err_index'][self.lc['oot_mask']],tt.exp(logs2)),
+                                   J=2)
             
-            def gen_lc(mask=None,prefix=''):
+            ################################################
+            #     Creating function to generate transits
+            ################################################
+            def gen_lc(i_orbit,i_r,n_pl,mask=None,prefix=''):
                 # Short method to create stacked lightcurves, given some input time array and some input cadences:
                 # This function is needed because we may have 
                 #   -  1) multiple cadences and 
                 #   -  2) multiple telescopes (and therefore limb darkening coefficients)
-                lc_c=[]
-                lc_cad_xs=[]
+                trans_pred=[]
                 mask = ~np.isnan(self.lc['time']) if mask is None else mask
-                for cad in self.cads:
-                    t_cad=self.lc['time'][mask][self.lc['cadence'][mask]==cad].astype(np.float64)
-                    lc_cad_xs+=[t_cad]
-                    if cad[0]=='t':
-                        lc_c +=[xo.LimbDarkLightCurve(u_star_tess).get_light_curve(
-                                                                 orbit=orbit, r=r_pl,
-                                                                 t=t_cad,
-                                                                 texp=float(int(cad[1:]))/1440.0
+                if np.sum(self.lc['tele_index'][:,0])>0:
+                    trans_pred+=[xo.LimbDarkLightCurve(u_star_tess).get_light_curve(
+                                                             orbit=i_orbit, r=i_r,
+                                                             t=self.lc['time'][mask],
+                                                             texp=np.nanmedian(np.diff(self.lc['time'][mask]))
                                                              )/(self.lc['flux_unit']*mult)]
-                        
-                    elif cad[0]=='k':
-                        lc_c += [xo.LimbDarkLightCurve(u_star_kep).get_light_curve(
-                                                                 orbit=orbit, r=r_pl,
-                                                                 t=t_cad,
-                                                                 texp=float(int(cad[1:]))/1440.0
+                else:
+                    trans_pred+=[tt.zeros(( len(self.lc['time'][mask]),n_pl ))]
+
+                if np.sum(self.lc['tele_index'][:,1])>0:
+                    trans_pred+=[xo.LimbDarkLightCurve(u_star_kep).get_light_curve(
+                                                             orbit=i_orbit, r=i_r,
+                                                             t=self.lc['time'][mask],
+                                                             texp=30/1440
                                                              )/(self.lc['flux_unit']*mult)]
-                print(lc_c[-1].shape)
-                #Sorting by time so that it's in the correct order here:
-                lc_cad_xs=np.hstack(lc_cad_xs)
-                print(len(lc_cad_xs),np.min(lc_cad_xs),np.max(lc_cad_xs),len(self.lc['time'][mask]),self.lc['time'][mask][0],self.lc['time'][mask][-1])
-                assert (np.sort(lc_cad_xs)==self.lc['time'][mask]).all()
-                return pm.Deterministic(prefix+"light_curves", tt.concatenate(lc_c,axis=0)[np.argsort(lc_cad_xs)])
-
-            # Complex T requires special treatment of orbit (i.e. period) and potential:
-            if len(self.duos)==1:
-                print("DUO - making orbital arrays","pls=",len(self.planets),"monos=",len(self.monos),"multis=",len(self.multis))
-                #Marginalising over each possible period
-                #Single planet with two transits and a gap
-                logprobs = []
-                all_lcs = []
-                
-                per_int_steps=pm.Deterministic("per_int_steps", 
-                                               tt.as_tensor_variable(self.planets[self.duos[0]]['period_int_aliases'])
-                                              )
-                print(self.planets[self.duos[0]]['period_int_aliases'])
-                for i,p_int in enumerate(self.planets[self.duos[0]]['period_int_aliases']):
-                    with pm.Model(name="per_{0}".format(i), model=model) as submodel:
-                        if len(self.planets)>1:
-                            #Have other planets - need to concatenate periods and t0s
-                            if len(self.monos)>0 and len(self.multis)>0:
-                                print("1 duo, plus monos, plus multis")
-                                period=pm.Deterministic("period",tt.concatenate((soft_period,known_period,(t0_second_trans-t0_first_trans)/p_int)))
-                            elif len(self.monos)>0 and len(self.multis)==0:
-                                print("1 duo, plus monos")
-                                period=pm.Deterministic("period",tt.concatenate((soft_period,(t0_second_trans-t0_first_trans)/p_int)))
-                            elif len(self.multis)>0 and len(self.monos)==0:
-                                print("1 duo, plus multis")
-                                period=pm.Deterministic("period",tt.concatenate((known_period,(t0_second_trans-t0_first_trans)/p_int)))
-                            t0=pm.Deterministic("t0",tt.concatenate((init_t0,t0_first_trans)))
-                        else:
-                            print("1 duo no others")
-                            period=pm.Deterministic("period",(t0_second_trans-t0_first_trans)/p_int)
-                            t0=pm.Deterministic("t0",t0_first_trans)
-                        
-                        logp = pm.Deterministic("logp", tt.log(period))
-                        
-                        # Set up a Keplerian orbit for the planets
-                        if assume_circ:
-                            orbit = xo.orbits.KeplerianOrbit(
-                                r_star=Rs, rho_star=rho_S,
-                                period=period, t0=t0, b=b)
-                        else:
-                            orbit = xo.orbits.KeplerianOrbit(
-                                r_star=Rs, rho_star=rho_S,
-                                ecc=ecc, omega=omega,
-                                period=period, t0=t0, b=b)
-                        print("orbit set up")
-                        vx, vy, vz = orbit.get_relative_velocity(t0)
-                        #vsky[self.lc['oot_mask']] 
-                        if n_pl>1:
-                            vrel=pm.Deterministic("vrel",tt.diag(tt.sqrt(vx**2 + vy**2))/Rs)
-                        else:
-                            vrel=pm.Deterministic("vrel",tt.sqrt(vx**2 + vy**2)/Rs)
-                        tdur=pm.Deterministic("tdur",(2*tt.sqrt(1-b**2))/vrel)
-
-                        print(self.lc['time'][self.lc['oot_mask']])
-                        if debug:
-                            tt.printing.Print('r_pl')(r_pl)
-                            #tt.printing.Print('mult')(mult)
-                            tt.printing.Print('tdur')(tdur)
-                            tt.printing.Print('t0')(t0)
-                            tt.printing.Print('b')(b)
-                            #tt.printing.Print('p2use')(p2use)
-                            tt.printing.Print('rho_S')(rho_S)
-                            tt.printing.Print('Rs')(Rs)
-                        # Compute the model light curve using starry
-                        light_curves = gen_lc(mask=self.lc['oot_mask'])
-                        #light_curves = xo.LimbDarkLightCurve(u_star).get_light_curve(orbit=orbit, r=r_pl,
-                        #                                     t=x[self.lc['oot_mask']])/(self.lc['flux_unit']*mult)
-                        
-                        light_curve = pm.math.sum(light_curves, axis=-1) + mean #Summing lightcurve over n planets
-                        all_lcs.append(light_curve)
-                        
-                        if use_GP:
-                            if len(self.cads)==1:
-                                #Observed by a single telescope
-                                loglike = tt.sum(self.gp.log_likelihood(self.lc['flux'][self.lc['oot_mask']] - light_curve))
-                                if pred_all_time:
-                                    gp_pred = pm.Deterministic("gp_pred", self.gp.predict(self.lc['flux']-light_curve,
-                                                                                          self.lc['time']))
-                            else:
-                                #We have multiple logs2 terms due to multiple telescopes:
-                                llk_gp_i = []
-                                gp_pred_i= []
-                                for cad in self.cads:
-                                    llk_gp_i += [self.gp[cad].log_likelihood(self.lc['flux'][self.lc['oot_mask']&(self.lc['cadence']==cad)] - light_curve[self.lc['cadence'][self.lc['oot_mask']]==cad])]
-                                    if pred_all_time:
-                                        gp_pred_i += [self.gp[cad].predict(self.lc['flux'][self.lc['cadence']==cad]-\
-                                                                            light_curve[self.lc['cadence']==cad],
-                                                                           self.lc['time'][self.lc['cadence']==cad])]
-                                loglike = tt.sum(llk_gp_i)
-                                if pred_all_time:
-                                    gp_pred = pm.Deterministic("gp_pred", tt.concatenate(gp_pred_i))
-
-                            #chisqs = pm.Deterministic("chisqs", (self.lc['flux'] - (gp_pred + tt.sum(light_curve,axis=-1)))**2/yerr**2)
-                            #avchisq = pm.Deterministic("avchisq", tt.sum(chisqs))
-                            #llk = pm.Deterministic("llk", model.logpt)
-                        else:
-                            loglike = tt.sum(pm.Normal.dist(mu=light_curve, sd=self.lc['flux_err'][self.lc['oot_mask']]).logp(self.lc['flux'][self.lc['oot_mask']]))
-                        
-                        pm.Deterministic("dcosidb",orbit.dcosidb)
-                        
-                        logprior = tt.log(orbit.dcosidb[-1]) - 2 * tt.log(period[-1])
-                        logprobs.append(loglike+logprior)
-
-            elif len(self.duos)==2:
-                #Two planets with two transits... This has to be the max.
-                for i_1, p_int_1 in enumerate(self.planets[self.duos[0]]['period_int_aliases']):
-                    for i_2, p_int_2 in enumerate(self.planets[self.duos[1]]['period_int_aliases']):
-                        with pm.Model(name="per_{0}_{1}".format(i_1,i_2), model=model) as submodel:
-                            submodel_per_ints=pm.Deterministic("submodel_per_ints", tt.as_tensor_variable([p_int_1,p_int_2]))
-                            if len(self.multis+self.monos)>0:
-                                #Have other planets - need to concatenate periods and t0s
-                                if len(self.monos)>0 and len(self.multis)>0:
-                                    period=pm.Deterministic("period",tt.concatenate((soft_period, known_period, (t0_second_trans-t0_first_trans)/submodel_per_ints)))
-                                elif len(self.monos)>0 and len(self.multis)==0:
-                                    period=pm.Deterministic("period",tt.concatenate((soft_period,(t0_second_trans-t0_first_trans)/submodel_per_ints)))
-                                elif len(self.multis)>0 and len(self.monos)==0:
-                                    period=pm.Deterministic("period",tt.concatenate((known_period,(t0_second_trans-t0_first_trans)/submodel_per_ints)))
-                                t0=pm.Deterministic("t0",tt.concatenate((init_t0,t0_first_trans)))
-                            else:
-                                period=pm.Deterministic("period",(t0_second_trans-t0_first_trans)/submodel_per_ints)
-                                t0=pm.Deterministic("t0",t0_first_trans)
-                            logp = pm.Deterministic("logp", tt.log(period))
-                            # Set up a Keplerian orbit for the planets
-                            if assume_circ:
-                                orbit = xo.orbits.KeplerianOrbit(
-                                    r_star=Rs, rho_star=rho_S,
-                                    period=period, t0=t0, b=b)
-                            else:
-                                orbit = xo.orbits.KeplerianOrbit(
-                                    r_star=Rs, rho_star=rho_S,
-                                    ecc=ecc, omega=omega,
-                                    period=period, t0=t0, b=b)
-                            vx, vy, vz = orbit.get_relative_velocity(t0)
-                            #vsky = 
-                            if n_pl>1:
-                                vrel=pm.Deterministic("vrel",tt.diag(tt.sqrt(vx**2 + vy**2))/Rs)
-                            else:
-                                vrel=pm.Deterministic("vrel",tt.sqrt(vx**2 + vy**2)/Rs)
-                            tdur=pm.Deterministic("tdur",(2*tt.sqrt(1-b**2))/vrel)
-
-                            # Compute the model light curve using starry
-                            light_curves = gen_lc(mask=self.lc['oot_mask'])
-                            #light_curves = xo.LimbDarkLightCurve(u_star).get_light_curve(orbit=orbit, r=r_pl,
-                            #                      t=x[self.lc['oot_mask']])/(self.lc['flux_unit']*mult)
-                            light_curve = pm.math.sum(light_curves, axis=-1) + mean     
-                            all_lcs.append(light_curve)
-
-                            if use_GP:
-                                if len(self.cads)==1:
-                                    #Observed by a single telescope
-                                    loglike = tt.sum(gp.log_likelihood(self.lc['flux'][self.lc['oot_mask']] - light_curve))
-                                    if pred_all_time:
-                                        gp_pred = pm.Deterministic("gp_pred", gp.predict(self.lc['time']))
-                                else:
-                                    #We have multiple logs2 terms due to multiple telescopes:
-                                    for cad in self.cads:
-                                        llk_gp_i += [self.gp[cad].log_likelihood(self.lc['flux'][self.lc['oot_mask']&(self.lc['cadence']==cad)] - light_curve[self.lc['cadence'][self.lc['oot_mask']]==cad])]
-                                        if pred_all_time:
-                                            gp_pred_i += [self.gp[cad].predict(self.lc['time'])]
-
-                                    loglike = tt.sum(tt.stack(llk_gp_i))
-                                    if pred_all_time:
-                                        gp_pred = pm.Deterministic("gp_pred", tt.stack(gp_pred_i))
-
-                                #chisqs = pm.Deterministic("chisqs", (y - (gp_pred + tt.sum(light_curve,axis=-1)))**2/yerr**2)
-                                #avchisq = pm.Deterministic("avchisq", tt.sum(chisqs))
-                                #llk = pm.Deterministic("llk", model.logpt)
-                            else:
-                                loglike = tt.sum(pm.Normal.dist(mu=light_curve, 
-                                                                sd=self.lc['flux_err'][self.lc['oot_mask']]
-                                                               ).logp(self.lc['flux'][self.lc['oot_mask']]))
-                            
-                            logprior = tt.log(orbit.dcosidb[-2:]) - 2 * tt.log(period[-2:])
-                            logprobs.append(loglike + logprior)
-
-                # Compute the marginalized probability and the posterior probability for each period
-                logprobs = tt.stack(logprobs)
-                logprob_marg = pm.math.logsumexp(logprobs)
-                logprob_class = pm.Deterministic("logprob_class", logprobs - logprob_marg)
-                pm.Potential("logprob", logprob_marg)
-
-                # Compute the marginalized light curve
-                pm.Deterministic("light_curve", tt.sum(tt.stack(all_lcs) * tt.exp(logprob_class)[:, None], axis=0))
-            else:
-                #No complex periods - i.e. no gaps:
-                t0=pm.Deterministic("t0",init_t0)
-                if len(self.monos)>0 and len(self.multis)>0:
-                    tt.printing.Print('t0')(t0)
-                    tt.printing.Print('soft_period')(soft_period)
-                    tt.printing.Print('known_period')(known_period)
-                    period=pm.Deterministic("period",tt.concatenate([soft_period,known_period]))
-                elif len(self.monos)>0 and len(self.multis)==0:
-                    period=pm.Deterministic("period",soft_period)
-                elif len(self.multis)>0 and len(self.monos)==0:
-                    period=pm.Deterministic("period",known_period)
-
-                logp = pm.Deterministic("logp", tt.log(period))
-                
+                else:
+                    trans_pred+=[tt.zeros(( len(self.lc['time'][mask]),n_pl ))]
+                # transit arrays (ntime x n_pls x 2) * telescope index (ntime x n_pls x 2), summed over dimension 2
+                return pm.Deterministic(prefix+"light_curves", 
+                                        tt.sum(tt.stack(trans_pred,axis=-1) * \
+                                               self.lc['tele_index'][self.lc['oot_mask']][:,np.newaxis,:],
+                                               axis=-1))
+            
+            ################################################
+            #     Analysing Multiplanets
+            ################################################
+            if len(self.multis)>0:
+                multi_inds=np.array([pl in self.multis for pl in self.multis+self.monos+self.duos])
                 if assume_circ:
-                    orbit = xo.orbits.KeplerianOrbit(
+                    multi_orbit = xo.orbits.KeplerianOrbit(
                         r_star=Rs, rho_star=rho_S,
-                        period=period, t0=t0, b=b)
+                        period=multi_periods, t0=t0[multi_inds], b=b[multi_inds])
                 else:
                     # This is the eccentricity prior from Kipping (2013) / https://arxiv.org/abs/1306.4982
-                    orbit = xo.orbits.KeplerianOrbit(
+                    multi_orbit = xo.orbits.KeplerianOrbit(
                         r_star=Rs, rho_star=rho_S,
-                        ecc=ecc, omega=omega,
-                        period=period, t0=t0, b=b)
-
-                vx, vy, vz = orbit.get_relative_velocity(t0)
-                #vsky = 
-                if n_pl>1:
-                    vrel=pm.Deterministic("vrel",tt.diag(tt.sqrt(vx**2 + vy**2))/Rs)
-                else:
-                    vrel=pm.Deterministic("vrel",tt.sqrt(vx**2 + vy**2)/Rs)
-
-                tdur=pm.Deterministic("tdur",(2*tt.sqrt(1-b**2))/vrel)
-                
+                        ecc=ecc[multi_inds], omega=omega[multi_inds],
+                        period=multi_periods, t0=t0[multi_inds], b=b[multi_inds])
                 #Generating lightcurves using pre-defined gen_lc function:
+                multi_mask_light_curves = gen_lc(multi_orbit,r[multi_inds],
+                                                 len(self.multis),mask=self.lc['oot_mask'],prefix='mask_')
+                multi_mask_light_curve = pm.math.sum(multi_mask_light_curves, axis=-1) #Summing lightcurve over n planets
+            else:
+                multi_mask_light_curve = tt.alloc(0.0,np.sum(self.lc['oot_mask']))
+                print(multi_mask_light_curve.shape.eval())
+                #np.zeros_like(self.lc['flux'][self.lc['oot_mask']])
+                
+            ################################################
+            #     Marginalising over Duo periods
+            ################################################
+            if len(self.duos)>0:
+                duo_per_info={}
+                for nduo,duo in enumerate(self.duos):
+                    print("#Marginalising over ",len(self.planets[duo]['period_int_aliases'])," period aliases for ",duo)
+
+                    #Marginalising over each possible period
+                    #Single planet with two transits and a gap
+                    duo_per_info[duo]={'logpriors':[],
+                                        'logliks':[],
+                                        'lcs':[]}
+                    
+                    duo_ind=np.where([pl==duo for pl in self.multis+self.monos+self.duos])[0][0]
+
+                    for i,p_int in enumerate(self.planets[duo]['period_int_aliases']):
+                        with pm.Model(name="duo_"+duo+"_per_{0}".format(i), model=model) as submodel:
+                            # Set up a Keplerian orbit for the planets
+                            if assume_circ:
+                                duoorbit = xo.orbits.KeplerianOrbit(
+                                    r_star=Rs, rho_star=rho_S,
+                                    period=duo_periods[duo][i], t0=t0[duo_ind], b=b[duo_ind])
+                            else:
+                                duoorbit = xo.orbits.KeplerianOrbit(
+                                    r_star=Rs, rho_star=rho_S,
+                                    ecc=ecc[duo_ind], omega=omega[duo_ind],
+                                    period=duo_periods[duo][i], t0=t0[duo_ind], b=b[duo_ind])
+                            print(self.lc['time'][self.lc['oot_mask']],np.sum(self.lc['oot_mask']))
+                            
+                            # Compute the model light curve using starry
+                            duo_mask_light_curves_i = gen_lc(duoorbit,r[duo_ind],1,
+                                                           mask=self.lc['oot_mask'],prefix='duo_mask_'+duo+'_')
+                            
+                            #Summing lightcurve over n planets
+                            duo_per_info[duo]['lcs'] += [tt.sum(duo_mask_light_curves_i,axis=1)]
+                                #pm.math.sum(duo_mask_light_curves_i, axis=-1)]
+                            
+                            duo_per_info[duo]['logpriors'] +=[tt.log(duoorbit.dcosidb) - 2 * tt.log(duo_periods[duo][i])]
+                            #print(duo_mask_light_curves_i.shape.eval({}))
+                            #print(duo_per_info[duo]['lcs'][-1].shape.eval({}))
+
+                            #sum_lcs = (duo_mask_light_curve+multi_mask_light_curve) + mean
+                            other_models = multi_mask_light_curve + mean
+                            comb_models = duo_per_info[duo]['lcs'][-1] + other_models
+                            resids = self.lc['flux'][self.lc['oot_mask']] - comb_models
+                            if use_GP:
+                                duo_per_info[duo]['logliks']+=[self.gp.log_likelihood(resids)]
+                            else:
+                                new_yerr = self.lc['flux_err'][self.lc['oot_mask']]**2 + \
+                                           tt.dot(self.lc['flux_err_index'][self.lc['oot_mask']],tt.exp(logs2)),
+                                duo_per_info[duo]['logliks']+=[tt.sum(pm.Normal.dist(mu=0.0,
+                                                                                     sd=new_yerr
+                                                                                    ).logp(resids))]
+                    print(tt.stack(duo_per_info[duo]['logliks']))
+                    print(tt.stack(duo_per_info[duo]['logpriors']))
+                    # Compute the marginalized probability and the posterior probability for each period
+                    logprobs = tt.stack(duo_per_info[duo]['logpriors']).squeeze() + \
+                               tt.stack(duo_per_info[duo]['logliks']).squeeze()
+                    print(logprobs.shape)
+                    logprob_marg = pm.math.logsumexp(logprobs)
+                    print(logprob_marg.shape)
+                    duo_per_info[duo]['logprob_class'] = pm.Deterministic("logprob_class_"+duo, logprobs - logprob_marg)
+                    pm.Potential("logprob_"+duo, logprob_marg)
+                    
+                    print(len(duo_per_info[duo]['lcs']))
+                    
+                    # Compute the marginalized light curve
+                    duo_per_info[duo]['marg_lc']=pm.Deterministic("light_curve_"+duo,
+                                                                  pm.math.dot(tt.stack(duo_per_info[duo]['lcs']).T,
+                                                                              tt.exp(duo_per_info[duo]['logprob_class'])))
+                #Stack the marginalized lightcurves for all duotransits:
+                duo_mask_light_curves=pm.Deterministic("duo_mask_light_curves",
+                                                  tt.stack([duo_per_info[duo]['marg_lc'] for duo in self.duos]))
+                duo_mask_light_curve=pm.Deterministic("duo_mask_light_curve",tt.sum(duo_mask_light_curves,axis=0))
+            else:
+                duo_mask_light_curve = tt.alloc(0.0,np.sum(self.lc['oot_mask']))
+
+            ################################################
+            #     Marginalising over Mono gaps
+            ################################################
+            if len(self.monos)>0:
+                mono_gap_info={}
+                for nmono,mono in enumerate(self.monos):
+                    print("#Marginalising over ",len(self.planets[mono]['per_gaps'])," period gaps for ",mono)
+                    
+                    #Single planet with one transits and multiple period gaps
+                    mono_gap_info[mono]={'logliks':[]}
+                    mono_ind=np.where([pl==mono for pl in self.multis+self.monos+self.duos])[0][0]
+                    
+                    # Set up a Keplerian orbit for the planets
+                    print(r[mono_ind].ndim,tt.tile(r[mono_ind],len(self.planets[mono]['per_gaps'][:,0])).ndim)
+
+                    if assume_circ:
+                        monoorbit = xo.orbits.KeplerianOrbit(
+                            r_star=Rs, rho_star=rho_S,
+                            period=mono_periods[mono], 
+                            t0=tt.tile(t0[mono_ind],len(self.planets[mono]['per_gaps'][:,0])),
+                            b=tt.tile(b[mono_ind],len(self.planets[mono]['per_gaps'][:,0])))
+                    else:
+                        monoorbit = xo.orbits.KeplerianOrbit(
+                            r_star=Rs, rho_star=rho_S,
+                            ecc=tt.tile(ecc[mono_ind],len(self.planets[mono]['per_gaps'][:,0])),
+                            omega=tt.tile(omega[mono_ind],len(self.planets[mono]['per_gaps'][:,0])),
+                            period=mono_periods[mono],
+                            t0=tt.tile(t0[mono_ind],len(self.planets[mono]['per_gaps'][:,0])),
+                            b=tt.tile(b[mono_ind],len(self.planets[mono]['per_gaps'][:,0])))
+                    
+                    # Compute the model light curve using starry
+                    mono_gap_info[mono]['lc'] = gen_lc(monoorbit, tt.tile(r[mono_ind],len(self.planets[mono]['per_gaps'][:,0])),
+                                                    len(self.planets[mono]['per_gaps'][:,0]),
+                                                    mask=self.lc['oot_mask'],prefix='mono_mask_'+mono+'_')
+                    
+                    #Priors - we have an occurrence rate prior (~1/P), a geometric prior (1/distance in-transit = dcosidb)
+                    # a window function log(1/P) -> -1*logP and  a factor for the width of the period bin - i.e. log(binsize)
+                    #mono_gap_info[mono]['logpriors'] = 0.0
+                    mono_gap_info[mono]['logpriors'] = tt.log(monoorbit.dcosidb) - \
+                                                        2 * mono_log_periods[mono] + \
+                                                        tt.log(self.planets[mono]['per_gaps'][:,2])
+                    
+                    other_models = duo_mask_light_curve + multi_mask_light_curve + mean
+                    
+                    #Looping over each period gap to produce loglik:
+                    for i,gap_pers in enumerate(self.planets[mono]['per_gaps']):
+                        with pm.Model(name="mono_"+mono+"_per_{0}".format(i), model=model) as submodel:
+                            comb_models = mono_gap_info[mono]['lc'][:,i] + other_models
+                            resids = self.lc['flux'][self.lc['oot_mask']] - comb_models
+                            if use_GP:
+                                mono_gap_info[mono]['logliks']+=[self.gp.log_likelihood(resids)]
+                            else:
+                                new_yerr = self.lc['flux_err'][self.lc['oot_mask']]**2 + \
+                                           tt.dot(self.lc['flux_err_index'][self.lc['oot_mask']],tt.exp(logs2)),
+                                mono_gap_info[mono]['logliks']+=[tt.sum(pm.Normal.dist(mu=0.0,sd=new_yerr).logp(resids))]
+                    
+                    # Compute the marginalized probability and the posterior probability for each period gap
+                    logprobs = mono_gap_info[mono]['logpriors'] + tt.stack(mono_gap_info[mono]['logliks'])
+                    logprob_marg = pm.math.logsumexp(logprobs)
+                    mono_gap_info[mono]['logprob_class'] = pm.Deterministic("logprob_class_"+mono, logprobs - logprob_marg)
+                    pm.Potential("logprob_"+mono, logprob_marg)
+
+                    # Compute the marginalized light curve
+                    mono_gap_info[mono]['marg_lc']=pm.Deterministic("light_curve_"+mono,
+                                                                    pm.math.dot(mono_gap_info[mono]['lc'],
+                                                                                tt.exp(mono_gap_info[mono]['logprob_class'])))
+                #Stack the marginalized lightcurves for all monotransits:
+                mono_mask_light_curves_all=pm.Deterministic("mono_mask_light_curves_all",
+                                                   tt.stack([mono_gap_info[mono]['marg_lc'] for mono in self.monos]))
+                mono_mask_light_curve=pm.Deterministic("mono_mask_light_curve",tt.sum(mono_mask_light_curves_all,axis=0))
+
+            else:
+                mono_mask_light_curve = tt.alloc(0.0,np.sum(self.lc['oot_mask']))
+
+            ################################################
+            #            Compute predicted LCs:
+            ################################################
+            #Now we have lightcurves for each of the possible parameters we want to marginalise, we need to sum them
+            print(tt.stack((mono_mask_light_curve,multi_mask_light_curve)))
+            print(tt.stack((mono_mask_light_curve,duo_mask_light_curve)))
+            mask_light_curve = pm.Deterministic("mask_light_curve", tt.sum(tt.stack((duo_mask_light_curve,
+                                                                                    multi_mask_light_curve,
+                                                                                    mono_mask_light_curve)),axis=0))
+            if use_GP:
+                total_llk = pm.Deterministic("total_llk",self.gp.log_likelihood(self.lc['flux'][self.lc['oot_mask']] - \
+                                                                                mask_light_curve - mean))
+                llk_gp = pm.Potential("llk_gp", total_llk)
+                mask_gp_pred = pm.Deterministic("mask_gp_pred", self.gp.predict(return_var=False))
                 
                 if pred_all_time:
-                    light_curves = gen_lc()
-                    light_curve = pm.math.sum(light_curves, axis=-1)
-                mask_light_curves = gen_lc(mask=self.lc['oot_mask'],prefix='mask_')
-                mask_light_curve = pm.math.sum(mask_light_curves, axis=-1)
+                    gp_pred = pm.Deterministic("gp_pred", self.gp.predict(self.lc['time'][self.lc['mask']],
+                                                                          return_var=False))
+            else:
+#gp = GP(kernel, t, tt.dot(newyerr,(1+tt.exp(ex_errs)))**2)
+                pm.Normal("obs", mu=mask_light_curve + mean, 
+                          sd=tt.sqrt(tt.dot(self.lc['flux_err_index'][self.lc['oot_mask']],tt.exp(logs2)) + \
+                                     self.lc['flux_err_index'][self.lc['oot_mask']]**2),
+                          observed=self.lc['flux'][self.lc['oot_mask']])
 
-                # Compute the model light curve using starry
-                if use_GP:
-                    if len(self.cads)==1:
-                        llk_gp = pm.Potential("llk_gp", self.gp.log_likelihood(self.lc['flux'][self.lc['oot_mask']] - mask_light_curve))
-                        if pred_all_time:
-                            gp_pred = pm.Deterministic("gp_pred", self.gp.predict(self.lc['flux']-light_curve,self.lc['time']))
-                    else:
-                        #We have multiple logs2 terms due to multiple telescopes:
-                        llk_gp_i = []
-                        gp_pred_i = []
-                        for cad in self.cads:
-                            llk_gp_i += [self.gp[cad].log_likelihood(self.lc['flux'][self.lc['oot_mask']&(self.lc['cadence']==cad)] - mask_light_curve[self.lc['cadence'][self.lc['oot_mask']]==cad])]
-                            if pred_all_time:
-                                gp_pred_i += [self.gp[cad].predict(self.lc['flux'][self.lc['cadence']==cad]-\
-                                                                    light_curve[self.lc['cadence']==cad],
-                                                                   self.lc['time'][self.lc['cadence']==cad])]
-                        #print(gp_pred_i[0].shape,gp_pred_i[1].shape,np.hstack((gp_pred_i)))
-                        llk_gp = pm.Potential("llk_gp", tt.stack(llk_gp_i,axis=0))
-                        if pred_all_time:
-                            gp_pred = pm.Deterministic("gp_pred", tt.join(gp_pred_i))
-                    #chisqs = pm.Deterministic("chisqs", (y - (gp_pred + tt.sum(light_curve,axis=-1)))**2/yerr**2)
-                    #avchisq = pm.Deterministic("avchisq", tt.sum(chisqs))
-                    #llk = pm.Deterministic("llk", model.logpt)
-                else:
-                    pm.Normal("obs", mu=mask_light_curve, 
-                              sd=self.lc['flux_err'][self.lc['oot_mask']],
-                              observed=self.lc['flux'][self.lc['oot_mask']])
-
-            tt.printing.Print('period')(period)
             tt.printing.Print('r_pl')(r_pl)
             #tt.printing.Print('t0')(t0)
             '''
             print(P_min,t0,type(x[self.lc['oot_mask']]),x[self.lc['oot_mask']][:10],np.nanmedian(np.diff(x[self.lc['oot_mask']])))'''
-            self.model=model
             # Fit for the maximum a posteriori parameters, I've found that I can get
             # a better solution by trying different combinations of parameters in turn
             if start is None:
-                start = self.model.test_point
+                start = model.test_point
             print(model.test_point)
-            if not LoadFromFile:
-                print("before",model.check_test_point())
-                map_soln = xo.optimize(start=start, vars=[RpRs, b],verbose=True)
-                map_soln = xo.optimize(start=map_soln, vars=[logs2],verbose=True)
-                map_soln = xo.optimize(start=map_soln)
-                #map_soln = xo.optimize(start=map_soln, vars=[period, t0])
-                map_soln = xo.optimize(start=map_soln, vars=[logs2, logpower])
-                map_soln = xo.optimize(start=map_soln, vars=[logw0])
-                #if not assume_circ:
-                #    map_soln = xo.optimize(start=map_soln, vars=[ecc, omega, period, t0])
-                map_soln = xo.optimize(start=map_soln, vars=[RpRs, b],verbose=True)
-                map_soln = xo.optimize(start=map_soln)
-                print("after",model.check_test_point())
-                
-                self.model = model
-                self.init_soln = map_soln
+            
+            ################################################
+            #               Optimizing:
+            ################################################
+
+            #Setting up optimization depending on what planet models we have:
+            initvars0=[r, b]
+            initvars1=[logs2]
+            initvars2=[r, b, t0, rho_S]
+            initvars3=[]
+            initvars4=[r, b]
+            if len(self.multis)>1:
+                initvars1+=[multi_periods]
+                initvars4+=[multi_periods]
+            if len(self.monos)>1:
+                for pl in self.monos:
+                    for n in range(len(self.planets[pl]['per_gaps'][:,0])):
+                        initvars1 += [mono_periods[pl][n]]
+                        initvars4 += [mono_periods[pl][n]]
+                        #exec("initvars1 += [mono_period_"+pl+"_"+str(int(n))+"]")
+                        #exec("initvars4 += [mono_period_"+pl+"_"+str(int(n))+"]")
+            if len(self.duos)>1:
+                #for pl in self.duos:
+                #    eval("initvars1+=[duo_period_"+pl+"]")
+                for pl in self.duos:
+                    initvars1 += [duo_periods[pl]]
+                    initvars4 += [duo_periods[pl]]
+                    #exec("initvars1 += [duo_period_"+pl+"]")
+                    #exec("initvars4 += [duo_period_"+pl+"]")
+                initvars2+=['t0_second_trans']
+                initvars4+=['t0_second_trans']
+            if len(self.multis)>1:
+                initvars1 += [multi_periods]
+                initvars4 += [multi_periods]
+            if not assume_circ:
+                initvars2+=[ecc, omega]
+            if use_GP:
+                initvars3+=[logs2, logpower, logw0, mean]
+            else:
+                initvars3+=[mean]
+            initvars5=initvars2+initvars3+[logs2,Rs,Ms]
+            if np.any([c[0].lower()=='t' for c in self.cads]):
+                initvars5+=[u_star_tess]
+            if np.any([c[0].lower()=='k' for c in self.cads]):
+                initvars5+=[u_star_kep]
+
+            print("before",model.check_test_point())
+            map_soln = xo.optimize(start=start, vars=initvars0,verbose=True)
+            map_soln = xo.optimize(start=map_soln, vars=initvars1,verbose=True)
+            map_soln = xo.optimize(start=map_soln, vars=initvars2,verbose=True)
+            map_soln = xo.optimize(start=map_soln, vars=initvars3,verbose=True)
+            map_soln = xo.optimize(start=map_soln, vars=initvars4,verbose=True)
+            #Doing everything except the marginalised periods:
+            map_soln = xo.optimize(start=map_soln, vars=initvars5)
+
+            print("after",model.check_test_point())
+
+            self.model = model
+            self.init_soln = map_soln
     
-    def RunMcmc(self, n_draws=1200, plot=True, do_per_gap_cuts=True, LoadFromFile=True, **kwargs):
+    def RunMcmc(self, n_draws=250, plot=True, do_per_gap_cuts=True, LoadFromFile=False, **kwargs):
         if LoadFromFile and not self.overwrite:
             self.LoadPickle()
             print("LOADED MCMC")
@@ -758,7 +1026,7 @@ class monoModel():
 
             self.SavePickle()
         if do_per_gap_cuts:
-            PeriodGapCuts()
+            self.PeriodGapCuts()
         
         if plot:
             print("plotting")
@@ -773,39 +1041,6 @@ class monoModel():
             restable=self.ToLatexTable(trace, ID, mission=mission, varnames=None,order='columns',
                                        savename=savenames[0].replace('mcmc.pickle','results.txt'), overwrite=False,
                                        savefileloc=None, tracemask=tracemask)
-    def PeriodGapCuts(self):
-        #Doing Cuts for Period gaps (i.e. where photometry rules out the periods of a planet)
-        #Only taking MCMC positions in the trace where either:
-        #  - P<0.5dur away from a period gap in P_gap_cuts[:-1]
-        #  - OR P is greater than P_gap_cuts[-1]
-        if not hasattr(self,'tracemask'):
-            print(self.trace.varnames)
-            self.tracemask=np.tile(True,len(self.trace['r_pl'][:,0]))
-
-        for npl,pl in enumerate(self.multis+self.monos+self.duos):
-            if pl in self.monos:
-                #In the case of duos, our orbital parameters are tied up in the marginalised parameters:
-                if len(self.duos)==1:
-                    t0s=self.trace['per_0_t0'][:,npl]
-                    tdurs=self.trace['per_0_tdur'][:,npl]
-                    pers=self.trace['per_0_period'][:,npl]
-
-                elif len(self.duos)==2:
-                    t0s=self.trace['per_0_0_t0'][:,npl]
-                    tdurs=self.trace['per_0_0_tdur'][:,npl]
-                    pers=self.trace['per_0_0_period'][:,npl]
-
-                elif len(self.duos)==0:
-                    t0s=self.trace['t0'][:,npl]
-                    tdurs=self.trace['tdur'][:,npl]
-                    pers=self.trace['period'][:,npl]
-
-                per_gaps=self.compute_period_gaps(np.nanmedian(t0s),np.nanmedian(tdurs))
-                #for each planet - only use monos
-                if len(per_gaps)>1:
-                    #Cutting points where P<P_gap_cuts[-1] and P is not within 0.5Tdurs of a gap:
-                    gap_dists=np.nanmin(abs(pers[:,np.newaxis]-per_gaps[:-1][np.newaxis,:]),axis=1)
-                    self.tracemask[(pers<per_gaps[-1])*(gap_dists>0.5*np.nanmedian(tdurs))] = False
 
             #tracemask=np.column_stack([(np.nanmin(abs(trace['period'][:,n][:,np.newaxis]-P_gap_cuts[n][:-1][np.newaxis,:]),axis=1)<0.5*np.nanmedian(trace['tdur'][:,n]))|(trace['period'][:,n]>P_gap_cuts[n][-1]) for n in range(len(P_gap_cuts))]).any(axis=1)
             #print(np.sum(~tracemask),"(",int(100*np.sum(~tracemask)/len(tracemask)),") removed due to period gap cuts")
@@ -1423,6 +1658,19 @@ class monoModel():
         
     def LoadPickle(self,loadname=None):
         #Pickle file style: folder/TIC[11-number ID]_[20YY-MM-DD]_[n]_mcmc.pickle
+        if loadname is not None:
+            print(self.savenames[0],"exists - loading")
+            n_bytes = 2**31
+            max_bytes = 2**31 - 1
+
+            ## read
+            bytes_in = bytearray(0)
+            input_size = os.path.getsize(loadname)
+            with open(self.savenames[0], 'rb') as f_in:
+                for _ in range(0, input_size, max_bytes):
+                    bytes_in += f_in.read(max_bytes)
+            self.trace = pickle.loads(bytes_in)
+
         if not hasattr(self, 'savenames'):
             self.savenames=self.GetSavename(how='load')
         print(self.savenames[0],os.path.exists(self.savenames[0]))
