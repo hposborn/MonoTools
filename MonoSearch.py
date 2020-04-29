@@ -10,15 +10,16 @@ import numpy as np
 import pandas as pd
 import pickle
 import os
+os.environ["THEANO_FLAGS"] = "device=cpu,floatX=float32,cxx=/usr/local/Cellar/gcc/9.3.0_1/bin/g++-9"
+import theano.tensor as tt
+import pymc3 as pm
+
 from copy import deepcopy
 from datetime import datetime
 from . import tools
-from . import MonoFit
 from scipy import optimize
 from scipy import interpolate
 import exoplanet as xo
-import pymc3 as pm
-import theano.tensor as tt
 import scipy.interpolate as interp
 import scipy.optimize as optim
 import matplotlib.pyplot as plt
@@ -379,7 +380,7 @@ def MonoTransitSearch(lc,ID,Rs=None,Ms=None,Teff=None,
         init_dep_shifts=np.exp(np.random.normal(0.0,n_oversamp*0.01,len(search_xrange)))
         randns=np.random.randint(2,size=(len(search_xrange),2))
         cad=np.nanmedian(np.diff(uselc[:,0]))
-        p_transit = 3/(len(uselc[:,0])*cad)
+        p_transit = np.clip(3/(len(uselc[:,0])*cad),0.0,0.05)
         
         #What is the probability of transit given duration (used in the prior calculation) - duration
         methods=['SLSQP','Nelder-Mead','Powell']
@@ -433,6 +434,7 @@ def MonoTransitSearch(lc,ID,Rs=None,Ms=None,Teff=None,
                 #        'BIC_sin':log_len*len(res_sin.x)+2*(res_sin.fun-np.log(1-p_transit)),
                 #        'BIC_poly':log_len*len(poly_fit)+2*(poly_neg_llik-np.log(1-p_transit)),
                 n_params=np.array([len(res_trans.x),len(res_sin.x),len(poly_fit)])
+                
                 outdic={'tcen':x2s,
                         'llk_trans':-1*res_trans.fun,
                         'llk_sin':-1*res_sin.fun,
@@ -514,7 +516,9 @@ def MonoTransitSearch(lc,ID,Rs=None,Ms=None,Teff=None,
             n_sigs=np.sum(signfct)
             print(n_sigs,detns[str(nix).zfill(2)]['poly_DeltaBIC'],np.sum(signfct[abs(outparams['tcen']-detn_row['tcen'])<np.where(outparams['init_dur']<detn_row['init_dur'],0.66*detn_row['init_dur'], 0.66*outparams['init_dur'])]))
             nix+=1
+        print(np.percentile(outparams['poly_DeltaBIC'],[5,16,50,84,95]))
     else:
+        print("n_sigs == 0")
         detns={}
     if plot:
         fig_loc= PlotMonoSearch(lc,ID,outparams,detns,interpmodels,tdurs,
@@ -1757,7 +1761,7 @@ def CentroidCheck(lc,monoparams,interpmodel,ID,order=2,dur_region=3.5, plot=True
         return None
 
     
-def CheckMonoPairs(lc_time, all_pls,prox_thresh=3.5):
+def CheckMonoPairs(lc_time, all_pls,prox_thresh=3.5, **kwargs):
     #Loop through each pair of monos without a good period, and check:
     # - if they correspond in terms of depth/duration
     # - and whether they could be periodic given other data
@@ -2125,7 +2129,7 @@ def CutAnomDiff(flux,thresh=4.2):
 
 def get_interpmodels(Rs,Ms,Teff,lc_time,lc_flux_unit,mission='tess',n_durs=3,texp=None):
     #Uses radius, mass and lightcurve duration to create fake transit models to use in monotransit search
-    
+
     if texp is None:
         texp=np.nanmedian(np.diff(lc_time))
     
@@ -2204,6 +2208,13 @@ def MonoVetting(ID, mission, tcen=None, tdur=None, overwrite=False, do_search=Tr
     
     if not os.path.isdir(file_loc):
         os.system('mkdir '+file_loc)
+        '''#Special set-up for Theano to compile directly in this directory
+        if 'compiledir' not in os.environ["THEANO_FLAGS"]:
+            if not os.path.exists(os.path.join(file_loc,".theano_compile_dir")):
+                os.mkdir(os.path.join(file_loc,".theano_compile_dir"))
+            os.environ["THEANO_FLAGS"]+="compiledir="+os.path.join(file_loc,".theano_compile_dir")
+            import theano.tensor as tt
+            import pymc3 as pm'''
     
     #Initialising figures
     if plot:
@@ -2224,6 +2235,7 @@ def MonoVetting(ID, mission, tcen=None, tdur=None, overwrite=False, do_search=Tr
         Teff=[float(info['teff']),float(info['eneg_teff']),float(info['epos_teff'])]
         logg=[float(info['logg']),float(info['eneg_logg']),float(info['epos_logg'])]
         rhostar=[float(info['rho'])/1.411,float(info['eneg_rho'])/1.411,float(info['epos_rho'])/1.411]
+        FeH=0.0 if 'FeH' not in info else float(info['FeH'])
         if 'mass' in info:
             Ms=float(info['mass'])
         else:
@@ -2390,7 +2402,7 @@ def MonoVetting(ID, mission, tcen=None, tdur=None, overwrite=False, do_search=Tr
             both_dic,monos,multis = CheckPeriodConfusedPlanets(deepcopy(lc),deepcopy(both_dic))
             print({pl:{'tcen':both_dic[pl]['tcen'],'depth':both_dic[pl]['depth'],'period':both_dic[pl]['period'],'orbit_flag':both_dic[pl]['orbit_flag'],'flag':both_dic[pl]['flag']} for pl in both_dic})
             #Check pairs of monos for potential match and period:
-            both_dic = CheckMonoPairs(lc['time'], deepcopy(both_dic))
+            both_dic = CheckMonoPairs(lc['time'], deepcopy(both_dic),**kwargs)
             monos=[pl for pl in both_dic if both_dic[pl]['orbit_flag']=='mono']
             duos=[pl for pl in both_dic if both_dic[pl]['orbit_flag']=='duo']
             multis=[pl for pl in both_dic if both_dic[pl]['orbit_flag']=='periodic']
@@ -2528,10 +2540,12 @@ def MonoVetting(ID, mission, tcen=None, tdur=None, overwrite=False, do_search=Tr
             return EBdic, both_dic
 
         elif np.any([both_dic[obj]['flag']=='planet' for obj in both_dic]):
+            from . import MonoFit #Doing this import here so that Pymc3 gains the seperate compiledir location for theano
             # PLANET MODELLING:
             print({pl:{'tcen':both_dic[pl]['tcen'],'depth':both_dic[pl]['depth'],'period':both_dic[pl]['period'],'orbit_flag':both_dic[pl]['orbit_flag'],'flag':both_dic[pl]['flag']} for pl in both_dic})
             print("Planets to model:",[obj for obj in both_dic if both_dic[obj]['flag']=='planet'])
             if not os.path.isfile(file_loc+"/"+file_loc.split('/')[-1]+'_model.pickle') or overwrite or re_fit:
+                
                 mod=MonoFit.monoModel(ID, lc, {},savefileloc=file_loc+'/')
                 #If not, we have a planet.
                 #Checking if monoplanet is single, double-with-gap, or periodic.
@@ -2556,7 +2570,7 @@ def MonoVetting(ID, mission, tcen=None, tdur=None, overwrite=False, do_search=Tr
                             #split by gap duo case:
                             mod.add_duo(deepcopy(both_dic[obj]),obj)
                 mod.init_starpars(Rstar=Rstar,rhostar=rhostar,Teff=Teff,logg=logg)
-                mod.init_model(useL2=useL2,mission=mission,FeH=0.0)
+                mod.init_model(useL2=useL2,FeH=FeH)
                 pickle.dump(mod,open(file_loc+"/"+file_loc.split('/')[-1]+'_model.pickle','wb'))
             else:
                 mod = pickle.load(open(file_loc+"/"+file_loc.split('/')[-1]+'_model.pickle','rb'))
