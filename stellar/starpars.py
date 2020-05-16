@@ -36,6 +36,7 @@ except ImportError:  # Python 2.x
     import httplib
 
 from astropy.table import Table
+from astropy.io import ascii
 
 import requests
 from lxml import html
@@ -1090,20 +1091,20 @@ def getStellarInfoFromCsv(ID,mission,k2tab=None):
             k2tab=None
         elif mission.lower()=='k2':
             if k2tab is None:
-                k2tab=ascii.read('http://kevinkhu.com/table1.txt').to_pandas()
+                k2tab=ascii.read('http://kevinkhu.com/table1.txt',header_start=93,data_start=95).to_pandas()
             info = k2tab.loc[k2tab['EPIC']==int(ID)].iloc[0]
             info['mission']='K2'
             info=info.rename(index={'EPIC':'ID','Gaia':'GAIA',
                                       'Dist':'dist','E_Dist':'epos_dist','e_Dist':'eneg_dist',
-                                      'Mstar':'mass','E_Mstar':'eposmMass','e_Mstar':'eneg_mass',
+                                      'Mstar':'mass','E_Mstar':'epos_mass','e_Mstar':'eneg_mass',
                                       'Rstar':'rad','E_Rstar':'epos_rad', 'e_Rstar':'eneg_rad',
                                       'E_logg':'epos_logg', 'e_logg':'eneg_logg',
                                       '[Fe/H]':'feh','E_[Fe/H]':'epos_feh','e_[Fe/H]':'eneg_feh'})
-            info['eneg_Teff']=info['e_Teff']
-            info['epos_Teff']=info['e_Teff']
+            info['eneg_teff']=info['e_Teff']
+            info['epos_teff']=info['e_Teff']
             info['e_d']=0.5*(abs(info['epos_dist'])+abs(info['eneg_dist']))
-            info['e_rad']=0.5*(abs(info['eneg_Rad'])+abs(info['epos_Rad']))
-            info['e_mass']=0.5*(abs(info['eneg_Mass'])+abs(info['epos_Mass']))
+            info['e_rad']=0.5*(abs(info['eneg_rad'])+abs(info['epos_rad']))
+            info['e_mass']=0.5*(abs(info['eneg_mass'])+abs(info['epos_mass']))
             info['e_logg']=0.5*(abs(info['eneg_logg'])+abs(info['epos_logg']))
             print(info['GAIA'])
             if not np.isnan(info['GAIA']):

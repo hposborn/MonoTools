@@ -9,6 +9,8 @@ from astropy.io import fits
 from astropy.io import ascii
 from scipy.signal import savgol_filter
 
+import h5py
+
 import pymc3 as pm
 import theano.tensor as tt
 import astropy.units as u
@@ -63,20 +65,31 @@ def getK2lc(epic,camp,saveloc=None,pers=None,durs=None,t0s=None,use_ppt=True):
     '''
     from urllib.request import urlopen
     import everest
+    lcs=[]
     try:
-        lc=openEverest(epic,camp,pers=pers,durs=durs,t0s=t0s,use_ppt=use_ppt)
+        lcs+=[openEverest(epic,camp,pers=pers,durs=durs,t0s=t0s,use_ppt=use_ppt)]
     except:
         print("No everest")
+    try:
+        lcs+=[openVand(epic,camp,use_ppt=use_ppt)]
+    except:
+        print("No vand")
+    if len(lcs)==0:
         try:
-            lc=openVand(epic,camp,use_ppt=use_ppt)
+            return openPDC(epic,camp,use_ppt=use_ppt)
+            
         except:
-            print("No vand")
-            try:
-                lc=openPDC(epic,camp,use_ppt=use_ppt)
-            except:
-                print("No LCs at all")
-    return lc
-
+            print("No LCs at all")
+            return None
+    elif len(lcs)==1:
+        return lcs[0]
+    elif len(lcs)>1:
+        stds = np.array([np.nanmedian(abs(np.diff(l['flux'][l['mask']]))) for l in lcs])
+        if len(lcs[0]['time'])>1.5*len(lcs[1]['time']) or ((len(lcs[0]['time'])>0.66*len(lcs[1]['time']))&(stds[0]<stds[1])):
+            lc=lcs[0]
+        else:
+            lc=lcs[1]
+        return lc
 
 def openFits(f,fname,mission,cut_all_anom_lim=4.0,use_ppt=True):
     '''
@@ -93,7 +106,8 @@ def openFits(f,fname,mission,cut_all_anom_lim=4.0,use_ppt=True):
                 lc={'time':f[1].data['T'],'flux':f[1].data['FCOR'],
                     'flux_err':np.tile(np.median(abs(np.diff(f[1].data['FCOR']))),len(f[1].data['T'])),
                     'flux_raw':f[1].data['FRAW'],
-                    'bg_flux':f[1+np.argmax([f[n].header['NPIXSAP'] for n in range(1,len(f)-3)])].data['flux_raw']}
+                    'bg_flux':f[1+np.argmax([f[n].header['NPIXSAP'] for n in range(1,len(f)-3)])].data['FRAW']-
+                              f[1+np.argmin([f[n].header['NPIXSAP'] for n in range(1,len(f)-3)])].data['FRAW']}
                     #'rawflux':,'rawflux_err':,}
             elif fname.find('everest')!=-1:
                 #logging.debug('Everest file')#Everest (Luger et al) detrending:
@@ -136,6 +150,25 @@ def openFits(f,fname,mission,cut_all_anom_lim=4.0,use_ppt=True):
                 lc['cent_1']=f[1].data['PSF_CENTR1'];lc['cent_2']=f[1].data['PSF_CENTR2']
             else:
                 lc['cent_1']=f[1].data['MOM_CENTR1'];lc['cent_2']=f[1].data['MOM_CENTR2']
+    elif type(f)==h5py._hl.files.File:
+        #QLP is defined in mags, so lets
+        def mag2flux(mags):
+            return -2.5*np.log(mags-np.nanmedian(mags))
+        def magerr2flux(magerrs,mags):
+             return mag2flux(mags)*(magerrs/(2.5/np.log(10)))
+        #QLP .h5py file
+        lc={'time':f['LightCurve']['BJD'],
+            'flux':mag2flux(f['LightCurve']['AperturePhotometry']['Aperture_002']['KSPMagnitude'][:]),
+            'raw_flux':mag2flux(f['LightCurve']['AperturePhotometry']['Aperture_002']['RawMagnitude'][:]),
+            'bg_flux':f['LightCurve']['Background']['Value'][:],
+            'cent_1':f['LightCurve']['AperturePhotometry']['Aperture_002']['X'][:],
+            'cent_2':f['LightCurve']['AperturePhotometry']['Aperture_002']['Y'][:],
+            'quality':np.array([np.power(2,15) if c=='G' else 0.0 for c in f['LightCurve']['AperturePhotometry']['Aperture_002']['QualityFlag'][:]]).astype(int),
+            'flux_sm_ap':mag2flux(f['LightCurve']['AperturePhotometry']['Aperture_000']['KSPMagnitude'][:]),
+            'flux_xl_ap':mag2flux(f['LightCurve']['AperturePhotometry']['Aperture_004']['KSPMagnitude'][:])}
+        #    'flux_err':magerr2flux(f['LightCurve']['AperturePhotometry']['Aperture_002']['RawMagnitudeError'][:],
+        #                           f['LightCurve']['AperturePhotometry']['Aperture_002']['RawMagnitude'][:]),
+        lc['flux_err']=np.tile(np.nanmedian(abs(np.diff(lc['raw_flux']))),len(lc['time']))
     elif type(f)==eleanor.targetdata.TargetData:
         #Eleanor TESS object
         lc={'time':f.time,'flux':f.corr_flux,'flux_err':f.flux_err,'raw_flux':f.raw_flux,
@@ -156,76 +189,13 @@ def openFits(f,fname,mission,cut_all_anom_lim=4.0,use_ppt=True):
         #logging.debug('Found fits file but cannot identify fits type to identify with')
         return None
     
-    # Mask bad data (nans, infs and negatives) 
-    lc['mask'] = np.isfinite(lc['flux']) & np.isfinite(lc['time']) & (lc['flux']>0.0) 
-    # Mask data if it's 4.2-sigma from its points either side (repeating at 7-sigma to get any points missed)
-    #print(np.sum(~lc['mask']),"points before quality flags")
-    if 'quality' in lc:
-        qs=[1,2,3,4,6,7,8,9,13,15,16,17]#worst flags to cut - for the moment just using those in the archive_manual
-        if type(fname)==dict and 'lcsource' in fname.keys() and fname['lcsource']=='everest':
-            qs+=[23]
-            print("EVEREST file with ",np.log(np.max(lc['quality']))/np.log(2)," max quality")
-        lc['mask']=lc['mask']&(np.sum(np.vstack([lc['quality'] & 2 ** (q - 1) for q in qs]),axis=0)==0)
-    #print(np.sum(~lc['mask']),"points after quality flags")
-    if cut_all_anom_lim>0:
-        #print(np.sum(~lc['mask']),"points before CutAnomDiff")
-        lc['mask'][lc['mask']]=CutAnomDiff(lc['flux'][lc['mask']],cut_all_anom_lim)
-        #print(np.sum(~lc['mask']),"after before CutAnomDiff")
-    mu = np.median(lc['flux'][lc['mask']])
-    if use_ppt:
-        # Convert to parts per thousand
-        lc['flux'] = (lc['flux'] / mu - 1) * 1e3
-        lc['flux_err'] *= 1e3/mu
-    else:
-        lc['flux'] = (lc['flux'] / mu - 1)
-        lc['flux_err'] /= mu
-    
-    #End-of-orbit cut
-    # Arbritrarily looking at the first/last 15 points and calculating STD of first/last 300 pts.
-    # We will cut the first/last points if the lightcurve STD is drastically better without them
-    if end_of_orbit:
-        stds=np.array([np.nanstd(lc['flux'][lc['mask']][n:(300+n)]) for n in np.arange(0,17)])
-        stds/=np.min(stds)
-        newmask=np.tile(True,np.sum(lc['mask']))
-        for n in np.arange(15):
-            if stds[n]>1.05*stds[-1]:
-                newmask[n]=False
-                newmask[n+1]=False
-        stds=np.array([np.nanstd(lc['flux'][lc['mask']][(-300+n):n]) for n in np.arange(-17,0)])
-        stds/=np.min(stds)
-        for n in np.arange(-15,0):
-            if stds[n]>1.05*stds[0]:
-                newmask[n]=False
-                newmask[n-1]=False
-        lc['mask'][lc['mask']]=newmask
-    
-    # Identify outliers
-    m2 = lc['mask']
-    
-    for i in range(10):
-        try:
-            y_prime = np.interp(lc['time'], lc['time'][m2], lc['flux'][m2])
-            smooth = savgol_filter(y_prime, 101, polyorder=3)
-            resid = lc['flux'] - smooth
-            sigma = np.sqrt(np.nanmean(resid**2))
-            #m0 = abs(resid) < cut_all_anom_lim*sigma
-            # Making this term less likely to cut low-flux points...
-            m0 = (resid < 0.66*cut_all_anom_lim*sigma)&(resid > -1*cut_all_anom_lim*sigma)
-            #print(np.sum((y_prime/y_prime)!=1.0),np.sum(m2),np.sum(m0))
-            if m2.sum() == m0.sum():
-                m2 = m0
-                break
-            m2 = m0+m2
-        except:
-            resid = np.zeros(len(lc['flux']))
-            sigma = 1.0
-            pass
+    lc['mask']=maskLc(lc,fname,cut_all_anom_lim=cut_all_anom_lim,use_ppt=use_ppt,end_of_orbit=end_of_orbit)
     
     #Including the cadence in the lightcurve as ["t2","t30","k1","k30"] mission letter + cadence
     lc['cadence']=np.tile(mission[0]+str(np.round(np.nanmedian(np.diff(lc['time']))*1440).astype(int)),len(lc['time']))
     
     # Only discard positive outliers
-    lc['mask']*=m2
+    
     print(np.sum(~lc['mask']),"points masked in lc of",len(lc['mask']))
     '''
     # Make sure that the data type is consistent
@@ -238,8 +208,85 @@ def openFits(f,fname,mission,cut_all_anom_lim=4.0,use_ppt=True):
         if key not in ['time','flux','flux_err','trend_rem']:
             lc[key]=np.ascontiguousarray(lc[key][m][m2], dtype=np.float64)
     '''
+    #Make sure no nanned times get through here:
+    for key in [key for key in lc if key!='time' and type(lc[key])==np.ndarray and len(lc[key])==len(lc['time'])]:
+        lc[key] = lc[key][np.isfinite(lc['time'])]
+    lc['time'] = lc['time'][np.isfinite(lc['time'])]
+    
     lc['flux_unit']=0.001 if use_ppt else 1.0
     return lc
+
+    
+def maskLc(lc,fhead,cut_all_anom_lim=5.0,use_ppt=False,end_of_orbit=True,use_binned=False,use_flat=False):
+    # Mask bad data (nans, infs and negatives) 
+    
+    prefix= 'bin_' if use_binned else ''
+    suffix='_flat' if use_flat else ''
+    
+    mask = np.isfinite(lc[prefix+'flux'+suffix]) & np.isfinite(lc[prefix+'time'])# & (lc[prefix+'flux'+suffix]>0.0) 
+    # Mask data if it's 4.2-sigma from its points either side (repeating at 7-sigma to get any points missed)
+    #print(np.sum(~lc['mask']),"points before quality flags")
+    if 'quality' in lc and len(lc['quality'])==len(lc[prefix+'flux'+suffix]):
+        qs=[1,2,3,4,6,7,8,9,13,15,16,17]#worst flags to cut - for the moment just using those in the archive_manual
+        if type(fhead)==dict and 'lcsource' in fhead.keys() and fhead['lcsource']=='everest':
+            qs+=[23]
+            print("EVEREST file with ",np.log(np.max(lc['quality']))/np.log(2)," max quality")
+        mask=mask&(np.sum(np.vstack([lc['quality'] & 2 ** (q - 1) for q in qs]),axis=0)==0)
+    #print(np.sum(~lc['mask']),"points after quality flags")
+    if cut_all_anom_lim>0:
+        #print(np.sum(~lc['mask']),"points before CutAnomDiff")
+        mask[mask]=CutAnomDiff(lc[prefix+'flux'+suffix][mask],cut_all_anom_lim)
+        #print(np.sum(~lc['mask']),"after before CutAnomDiff")
+    mu = np.median(lc[prefix+'flux'+suffix][mask])
+    if use_ppt:
+        # Convert to parts per thousand
+        lc[prefix+'flux'+suffix] = (lc[prefix+'flux'+suffix] / mu - 1) * 1e3
+        lc[prefix+'flux'+suffix+'_err'] *= 1e3/mu
+    else:
+        lc[prefix+'flux'+suffix] = (lc[prefix+'flux'+suffix] / mu - 1)
+        lc[prefix+'flux'+suffix+'_err'] /= mu
+    
+    #End-of-orbit cut
+    # Arbritrarily looking at the first/last 15 points and calculating STD of first/last 300 pts.
+    # We will cut the first/last points if the lightcurve STD is drastically better without them
+    if end_of_orbit:
+        stds=np.array([np.nanstd(lc[prefix+'flux'+suffix][mask][n:(300+n)]) for n in np.arange(0,17)])
+        stds/=np.min(stds)
+        newmask=np.tile(True,np.sum(mask))
+        for n in np.arange(15):
+            if stds[n]>1.05*stds[-1]:
+                newmask[n]=False
+                newmask[n+1]=False
+        stds=np.array([np.nanstd(lc[prefix+'flux'+suffix][mask][(-300+n):n]) for n in np.arange(-17,0)])
+        stds/=np.min(stds)
+        for n in np.arange(-15,0):
+            if stds[n]>1.05*stds[0]:
+                newmask[n]=False
+                newmask[n-1]=False
+        mask[mask]=newmask
+    
+    # Identify outliers
+    m2 = mask[:]
+    
+    for i in range(10):
+        try:
+            y_prime = np.interp(lc[prefix+'time'], lc[prefix+'time'][m2], lc[prefix+'flux'+suffix][m2])
+            smooth = savgol_filter(y_prime, 101, polyorder=3)
+            resid = lc[prefix+'flux'+suffix] - smooth
+            sigma = np.sqrt(np.nanmean(resid**2))
+            #m0 = abs(resid) < cut_all_anom_lim*sigma
+            # Making this term less likely to cut low-flux points...
+            m0 = (resid < 0.66*cut_all_anom_lim*sigma)&(resid > -1*cut_all_anom_lim*sigma)
+            #print(np.sum((y_prime/y_prime)!=1.0),np.sum(m2),np.sum(m0))
+            if m2.sum() == m0.sum():
+                m2 = m0
+                break
+            m2 = m0+m2
+        except:
+            resid = np.zeros(len(lc[prefix+'flux'+suffix]))
+            sigma = 1.0
+            pass
+    return mask*m2
 
 def openPDC(epic,camp,use_ppt=True):
     if camp == '10':
@@ -450,7 +497,7 @@ def TESS_lc(tic,sector='all',use_ppt=True, coords=None, use_eleanor=True):
            9:'2019058134432_0139',10:'2019085135100_0140',11:'2019112060037_0143',12:'2019140104343_0144',
            13:'2019169103026_0146',14:'2019198215352_0150',15:'2019226182529_0151',16:'2019253231442_0152',
            17:'2019279210107_0161',18:'2019306063752_0162',19:'2019331140908_0164',20:'2019357164649_0165',
-           21:'2020020091053_0167',22:'2020049080258_0174'}
+           21:'2020020091053_0167',22:'2020049080258_0174',23:'2020078014623_0177'}
     lcs=[];lchdrs=[]
     if type(sector)==str and sector=='all':
         epochs=list(epoch.keys())
@@ -463,6 +510,7 @@ def TESS_lc(tic,sector='all',use_ppt=True, coords=None, use_eleanor=True):
         #else:
         #    observed_sectors=sector
         #print(observed_sectors)
+    get_qlp=0
     for key in epochs:
         if sect_obs[key]:
             try:
@@ -477,7 +525,10 @@ def TESS_lc(tic,sector='all',use_ppt=True, coords=None, use_eleanor=True):
                 else:
                     raise Exception('No TESS lightcurve')
             except:
-                if use_eleanor:
+                if os.path.isdir(os.path.join(MonoTools_path,"data","TIC"+str(int(tic)).zfill(11) )) and len(glob.glob(os.path.join(MonoTools_path,"data","TIC"+str(int(tic)).zfill(11)+"/*.h5")))>0:
+                    get_qlp+=1
+                elif use_eleanor:
+                    print("No QLP files at",os.path.join(MonoTools_path,"data","TIC"+str(int(tic)).zfill(11)),"Loading Eleanor Lightcurve")
                     try:
                         #Getting eleanor lightcurve:
                         try:
@@ -499,6 +550,17 @@ def TESS_lc(tic,sector='all',use_ppt=True, coords=None, use_eleanor=True):
                         lchdrs+=[elen_hdr]
                     except Exception as e:
                         print(e, tic,"not observed by TESS in sector",key)
+    
+    #Acessing QLP data from local files - only happens if there's .h5 lightcurves in a TICXXXXXXX folder in the folder where this is run
+    if get_qlp>0:
+        print("# Loading QLP lightcurves")
+        print(tic,type(tic))
+        for orbit in glob.glob(os.path.join(MonoTools_path,"data","TIC"+str(int(tic)).zfill(11),"*.h5")):
+            f=h5py.File(orbit)
+            if len(lcs)==0 or np.nanmin(abs(np.nanmedian(f['LightCurve']['BJD'])-np.hstack([l['time'] for l in lcs])))>5:
+                # This speciic QLP orbit does not have a SPOC lightcurve attached (i.e. no other obs within 5days)
+                lcs+=[openFits(f,fitsloc,mission='tess',use_ppt=use_ppt)]
+                lchdrs+=[None]
     if len(lcs)>1:
         lc=lcStack(lcs)
         return lc,lchdrs[0]
@@ -587,6 +649,244 @@ def openLightCurve(ID,mission,use_ppt=True,other_data=True,jd_base=2457000,**kwa
     lc['time']=np.sort(lc['time'][~np.isnan(lc['time'])])
     
     return lc,hdrs[mission.lower()]
+
+def cutLc(lctimes,max_len=10000,return_bool=True):
+    # Naturally cut the lightcurve time into chunks smaller than max_len (e.g. for GP computations)
+    assert(np.isnan(lctimes).sum()==0)
+    if return_bool:
+        bools=[np.tile(True,len(lctimes))]
+        max_time_len=np.sum(bools[0])
+        if np.sum(bools[0])>max_len:
+            while max_time_len>max_len:
+                newbools=[]
+                for n in range(len(bools)):
+                    if np.sum(bools[n])>max_len:
+                        middle_boost=4*(0.3-((lctimes[bools[n]][:-1]+np.diff(lctimes[bools[n]]) - \
+                                              np.median(lctimes[bools[n]]))/(lctimes[bools[n]][-1]-lctimes[bools[n]][0]))**2)
+                        #And then cut along the maximum value into two new times:
+                        maxloc=np.argmax(np.diff(lctimes[bools[n]])*middle_boost)
+                        cut_time=0.5*(lctimes[bools[n]][maxloc]+lctimes[bools[n]][maxloc+1])
+                        newbools+=[bools[n]&(lctimes<=cut_time),
+                                   bools[n]&(lctimes>cut_time)]
+                    else:
+                        newbools+=[bools[n]]
+                bools=newbools
+                max_time_len=np.max([np.sum(b) for b in bools])
+            return bools
+        else:
+            return bools
+    else:
+        if len(lctimes)>max_len:
+            times=[lctimes]
+            max_time_len=len(times[0])
+            while max_time_len>max_len:
+                newtimes=[]
+                for n in range(len(times)):
+                    if len(times[n])>max_len:
+                        #For chunks larger than max_len we create a*boost* for how central they are w.r.t the full lc
+                        middle_boost=4*(0.3-((times[n][:-1]+np.diff(times[n])-np.median(times[n]))/(times[n][-1]-times[n][0]))**2)
+                        #And then cut along the maximum value of this boost multiplied by the lightcurve gapsinto two new times:
+                        cut_n=np.argmax(np.diff(times[n])*middle_boost[n])
+                        newtimes+=[times[n][:cut_n+1],times[n][cut_n+1:]]
+                    else:
+                        newtimes+=[times[n]]
+                times=newtimes
+                max_time_len=np.max([len(t) for t in times])
+            return times
+        else:
+            return [lctimes]
+
+def weighted_avg_and_std(values, errs, axis=None): 
+    """
+    Return the weighted average and standard deviation.
+
+    values, weights -- Numpy ndarrays with the same shape.
+    """
+    average = np.average(values, weights=1/errs**2,axis=axis)
+    # Fast and numerically precise:
+    variance = np.average((values-average)**2, weights=1/errs**2,axis=axis)
+    binsize_adj = np.sqrt(len(values)) if axis is None else np.sqrt(values.shape[axis])
+    return [average, np.sqrt(variance)/binsize_adj]
+
+def lcBin(lc,binsize=1/48,use_flat=True,use_masked=True):
+    #Binning lightcurve to e.g. 30-min cadence for planet search
+    # Can optionally use the flatted lightcurve
+    binlc={}
+        
+    #Using flattened lightcurve as well as normal one:
+    if use_flat and 'flux_flat' not in lc:
+        lc=lcFlatten(lc)
+    if use_flat:
+        flux_dic=['flux_flat','flux'] 
+        binlc['flux_flat']=[]
+        binlc['flux']=[]
+    else:
+        flux_dic=['flux']
+        binlc['flux']=[]
+        
+    if np.nanmax(np.diff(lc['time']))>3:
+        loop_blocks=np.array_split(np.arange(len(lc['time'])),np.where(np.diff(lc['time'])>2.0)[0])
+    else:
+        loop_blocks=[np.arange(len(lc['time']))]
+    for sh_time in loop_blocks:
+        for fkey in flux_dic:
+            if use_masked:
+                lc_segment=np.column_stack((lc['time'][sh_time][lc['mask'][sh_time]],
+                                            lc[fkey][sh_time][lc['mask'][sh_time]],
+                                            lc['flux_err'][sh_time][lc['mask'][sh_time]]))
+            else:
+                lc_segment=np.column_stack((lc['time'][sh_time],lc[fkey][sh_time],lc['flux_err'][sh_time]))
+            if binsize>(1.66*np.nanmedian(np.diff(lc['time'][sh_time]))):
+                #Only doing the binning if the cadence involved is >> the cadence
+                digi=np.digitize(lc_segment[:,0],np.arange(lc_segment[0,0],lc_segment[-1,0],binsize))
+                binlc[fkey]+=[bin_lc_segment(lc_segment, binsize)]
+            else:
+                binlc[fkey]+=[lc_segment]
+        
+    binlc={fkey:np.vstack(binlc[fkey]) for fkey in binlc}
+    lc['bin_time']=binlc['flux'][:,0]
+    for fkey in binlc:
+        lc['bin_'+fkey]=binlc[fkey][:,1]
+        #Need to clip error here as tiny (and large) errors from few points cause problems down the line.
+        lc['bin_'+fkey+'_err']=np.clip(binlc[fkey][:,2],0.9*np.nanmedian(binlc[fkey][:,2]),20*np.nanmedian(binlc[fkey][:,2]))
+    return lc
+
+def bin_lc_segment(lc_segment, binsize):
+    digi=np.digitize(lc_segment[:,0],np.arange(np.min(lc_segment[:,0]),np.max(lc_segment[:,0]),binsize))
+    return np.vstack([[[np.nanmedian(lc_segment[digi==d,0])]+\
+                       weighted_avg_and_std(lc_segment[digi==d,1],lc_segment[digi==d,2])] for d in np.unique(digi)])
+    
+
+
+def dopolyfit(win,mask=None,stepcent=0.0,d=3,ni=10,sigclip=3):
+    mask=np.tile(True,len(win)) if mask is None else mask
+    maskedwin=win[mask]
+    
+    #initial fit and llk:
+    best_base = np.polyfit(maskedwin[:,0]-stepcent,maskedwin[:,1],w=1.0/maskedwin[:,2]**2,deg=d)
+    best_offset = (maskedwin[:,1]-np.polyval(best_base,maskedwin[:,0]))**2/maskedwin[:,2]**2
+    best_llk=-0.5 * np.sum(best_offset)
+    
+    #initialising this "random mask"
+    randmask=np.tile(True,len(maskedwin))
+
+    for iter in range(ni):
+        # If a point's offset to the best model is great than a normally-distributed RV, it gets masked 
+        # This should have the effect of cutting most "bad" points,
+        #   but also potentially creating a better fit through bootstrapping:
+        randmask=abs(np.random.normal(0.0,1.0,len(maskedwin)))<best_offset
+        new_base = np.polyfit(maskedwin[randmask,0]-stepcent,maskedwin[randmask,1],
+                          w=1.0/np.power(maskedwin[randmask,2],2),deg=d)
+        #winsigma = np.std(win[:,1]-np.polyval(base,win[:,0]))
+        new_offset = (maskedwin[:,1]-np.polyval(new_base,maskedwin[:,0]))**2/maskedwin[:,2]**2
+        new_llk=-0.5 * np.sum(new_offset)
+        if new_llk>best_llk:
+            #If that fit is better than the last one, we update the offsets and the llk:
+            best_llk=new_llk
+            best_offset=new_offset[:]
+            best_base=new_base[:]
+    return best_base
+
+def formwindow(dat,cent,size,boxsize,gapthresh=1.0):
+    
+    win = (dat[:,0]>cent-size/2.)&(dat[:,0]<cent+size/2.)
+    box = (dat[:,0]>cent-boxsize/2.)&(dat[:,0]<cent+boxsize/2.)
+    if np.sum(win)>0:
+        high=dat[win,0][-1]
+        low=dat[win,0][0]
+        highgap = high < (cent+size/2.)-gapthresh
+        lowgap = low > (cent-size/2.)+gapthresh
+
+        if highgap and not lowgap:
+            win = (dat[:,0] > high-size)&(dat[:,0] <= high)
+        elif lowgap and not highgap:
+            win = (dat[:,0] < low+size)&(dat[:,0] >= low)
+
+        win = win&(~box)
+    return win, box
+
+def lcFlatten(lc, winsize = 3.5, stepsize = 0.15, polydegree = 2, 
+              niter = 10, sigmaclip = 3., gapthreshold = 1.0,
+              use_binned=False, use_mask=True, reflect=True, transit_mask=None):
+    '''#Flattens any lightcurve while maintaining in-transit depth.
+
+    Args:
+    lc.           # dictionary with time,flux,flux_err, flux_unit (1.0 or 0.001 [ppt]) and mask
+    winsize = 2   #days, size of polynomial fitting region
+    stepsize = 0.2  #days, size of region within polynomial region to detrend
+    polydegree = 3  #degree of polynomial to fit to local curve
+    niter = 20      #number of iterations to fit polynomial, clipping points significantly deviant from curve each time.
+    sigmaclip = 3.   #significance at which points are clipped (as niter)
+    gapthreshold = 1.0  #days, threshold at which a gap in the time series is detected and the local curve is adjusted to not run over it
+    use_binned = False. #Using the binned values in the lc dict
+    use_mask = True.    #Use the lightcurve mask to remove pre-determined anomalous values from fitting
+    reflect = True      #Whether to use end-of-lightcurve reflection to remove poor end-of-lc detrending
+    transit_mask = None #bolean array masking known transits so that their depressed flux wont influence the polynomial fitting
+    '''
+    winsize=3.9 if np.isnan(winsize) else winsize
+    stepsize=0.15 if np.isnan(stepsize) else stepsize
+    
+    prefix='bin_' if use_binned else ''
+    
+    lc[prefix+'flux_flat']=np.zeros(len(lc[prefix+'time']))
+    #general setup
+    uselc=np.column_stack((lc[prefix+'time'][:],lc[prefix+'flux'][:],lc[prefix+'flux_err'][:]))
+    if len(lc['mask'])==len(uselc[:,0]) and use_mask:
+        initmask=(lc['mask']&(lc['flux']/lc['flux']==1.0)).astype(int)[:]
+    else:
+        initmask=np.isfinite(uselc[:,1]).astype(int)
+    if transit_mask is not None:
+        print("transit mask:",type(initmask),len(initmask),initmask[0],type(transit_mask),len(transit_mask),transit_mask[0])
+        initmask=(initmask.astype(bool)&transit_mask).astype(int)
+    uselc=np.column_stack((uselc,initmask))
+    uselc[:,1:3]/=lc['flux_unit']
+    uselc[:,1]-=np.nanmedian(lc[prefix+'flux'])
+    
+    jumps=np.hstack((0,np.where(np.diff(uselc[:,0])>winsize*0.8)[0]+1,len(uselc[:,3]) )).astype(int)
+    stepcentres=[]
+    uselc_w_reflect=[]
+    
+    for n in range(len(jumps)-1):
+        stepcentres+=[np.arange(uselc[jumps[n],0],
+                                uselc[np.clip(jumps[n+1],0,len(uselc)-1),0],
+                                stepsize) + 0.5*stepsize]
+        if reflect:
+            partlc=uselc[jumps[n]:jumps[n+1]]
+            incad=np.nanmedian(np.diff(partlc[:,0]))
+            xx=[np.arange(np.nanmin(partlc[:,0])-winsize*0.4,np.nanmin(partlc[:,0])-incad,incad),
+                np.arange(np.nanmax(partlc[:,0])+incad,np.nanmax(partlc[:,0])+winsize*0.4,incad)]
+            #Adding the lc, plus a reflected region either side of each part. 
+            # Also adding a boolean array to show where the reflected parts are
+            refl_t=np.hstack((xx[0],partlc[:,0],xx[1]))
+            refl_flux=np.vstack((partlc[:len(xx[0]),1:][::-1],
+                                 partlc[:,1:], 
+                                 partlc[-1*len(xx[1]):,1:][::-1]  ))
+            refl_bool=np.hstack((np.zeros(len(xx[0])),np.tile(1.0,len(partlc[:,0])),np.zeros(len(xx[1]))))
+            print(partlc.shape,len(xx[0]),len(xx[1]),refl_t.shape,refl_flux.shape,refl_bool.shape)
+            uselc_w_reflect+=[np.column_stack((refl_t,refl_flux,refl_bool))]
+    stepcentres=np.hstack(stepcentres)
+    if reflect:
+        uselc=np.vstack(uselc_w_reflect)
+    else:
+        uselc=np.column_stack((uselc,np.ones(len(uselc[:,0])) ))
+    uselc[:,2]=np.clip(uselc[:,2],np.nanmedian(uselc[:,2])*0.8,100)
+    print(len(uselc),np.sum(uselc[:,3]),np.sum(uselc[:,4]))
+    #now for each step centre we perform the flattening:
+    #actual flattening
+    for s,stepcent in enumerate(stepcentres):
+        win,box = formwindow(uselc,stepcent,winsize,stepsize,gapthreshold)  #should return window around box not including box
+        newbox=box[uselc[:,4].astype(bool)] # Excluding from our box any points which are actually part of the "reflection"
+        #Checking that we have points in the box where the window is not entirely junk/masked
+        if np.sum(newbox)>0 and np.sum(win&uselc[:,3].astype(bool))>0:
+            #Forming the polynomial fit from the window around the box:
+            baseline = dopolyfit(uselc[win,:3],mask=uselc[win,3].astype(bool),
+                                 stepcent=stepcent,d=polydegree,ni=niter,sigclip=sigmaclip)
+            lc[prefix+'flux_flat'][newbox] = lc[prefix+'flux'][newbox] - np.polyval(baseline,lc[prefix+'time'][newbox]-stepcent)*lc['flux_unit']
+            #Here we have 
+        
+    return lc
+    
+
 
 def init_model(lc, initdepth, initt0, Rstar, rhostar, Teff, logg=np.array([4.3,1.0,1.0]),initdur=None, 
                periods=None,assume_circ=False,
