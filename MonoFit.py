@@ -547,6 +547,11 @@ class monoModel():
             #Using all points in the 
             self.lc['oot_mask']=self.lc['mask']
         
+        if self.use_GP:
+            self.gp={}
+            if self.train_GP and not hasattr(self,'gp_init_trace'):
+                self.GP_training()
+
         if use_pymc3:
             self.init_pymc3()
         elif use_multinest:
@@ -567,21 +572,21 @@ class monoModel():
 
             # Transit jitter & GP parameters
             #logs2 = pm.Normal("logs2", mu=np.log(np.var(y[m])), sd=10)
-            lcrange = self.lc['time'][~self.lc['in_trans_mask']][-1]-self.lc['time'][~self.lc['in_trans_mask']][0]
-            min_cad = np.nanmin([np.nanmedian(np.diff(self.lc['time'][~self.lc['in_trans_mask']&(self.lc['cadence']==c)])) for c in self.cads])
+            lcrange=self.lc['time'][self.lc['oot_mask']][-1]-self.lc['time'][self.lc['oot_mask']][0]
+            min_cad = np.nanmin([np.nanmedian(np.diff(self.lc['time'][self.lc['oot_mask']&(self.lc['cadence']==c)])) for c in self.cads])
             #freqs bounded from 2pi/minimum_cadence to to 2pi/(4x lc length)
-            logw0 = pm.Uniform("logw0",lower=np.log((2*np.pi)/(4*lcrange)), 
-                               upper=np.log((2*np.pi)/min_cad),testval=np.log((2*np.pi)/(lcrange)))
+            w0 = pm.InverseGamma("w0",testval=(2*np.pi)/10,
+                                 **xo.estimate_inverse_gamma_parameters(lower=(2*np.pi)/(4*lcrange),
+                                                                        upper=(2*np.pi)/(3*min_cad)))
+            maxpower=25*np.nanstd(self.lc['flux'][self.lc['oot_mask']])
+            minpower=0.01*np.nanmedian(abs(np.diff(self.lc['flux'][self.lc['oot_mask']])))
+            power = pm.InverseGamma("power",testval=maxpower/25,
+                                    **xo.estimate_inverse_gamma_parameters(lower=maxpower, upper=minpower))
 
-            # S_0 directly because this removes some of the degeneracies between
-            # S_0 and omega_0 prior=(-0.25*lclen)*exp(logS0)
-            maxpower = np.log(np.nanmedian(abs(np.diff(self.lc['flux'][~self.lc['in_trans_mask']]))))+1
-            logpower = pm.Uniform("logpower",lower=-20,upper=maxpower,testval=maxpower-6)
-            print("input to GP power:",maxpower-1)
-            logS0 = pm.Deterministic("logS0", logpower - 4 * logw0)
+            S0 = pm.Deterministic("S0", power/(w0**4))
 
             # GP model for the light curve
-            kernel = xo.gp.terms.SHOTerm(log_S0=logS0, log_w0=logw0, Q=1/np.sqrt(2))
+            kernel = xo.gp.terms.SHOTerm(S0=S0, w0=w0, Q=1/np.sqrt(2))
 
             self.gp['train'] = xo.gp.GP(kernel, self.lc['time'][~self.lc['in_trans_mask']].astype(np.float32),
                                    self.lc['flux_err'][~self.lc['in_trans_mask']].astype(np.float32)**2 + \
@@ -590,7 +595,7 @@ class monoModel():
             
             self.gp['train'].log_likelihood(self.lc['flux'][~self.lc['in_trans_mask']]-mean)
 
-            self.gp_init_soln = xo.optimize(start=None, vars=[logs2, logpower, logw0, mean],verbose=True)
+            self.gp_init_soln = xo.optimize(start=None, vars=[logs2, power, w0, mean],verbose=True)
             
             self.gp_init_trace = pm.sample(tune=int(n_draws*0.66), draws=n_draws, start=self.gp_init_soln, chains=4,
                                            step=xo.get_dense_nuts_step(target_accept=0.9),compute_convergence_checks=False)
@@ -598,10 +603,6 @@ class monoModel():
 
     def init_pymc3(self,ld_mult=1.5):
         
-        if self.use_GP:
-            self.gp={}
-            if self.train_GP and not hasattr(self,'gp_init_trace'):
-                self.GP_training()
         start=None
         with pm.Model() as model:            
 
@@ -727,7 +728,7 @@ class monoModel():
                         elif len(self.planets)>1:
                             # The eccentricity prior distribution from Van Eylen for multiplanets (lower-e than single planets)
                             duo_eccs[pl] = pm.Bound(pm.Weibull, lower=1e-5, upper=1-1e-5)("duo_eccs_"+pl, alpha= 0.049,beta=2,
-                                                                                            testval=0.05,shape=len(self.duos))
+                                                                                            testval=0.05)
                         duo_omegas[pl] = xo.distributions.Angle("duo_omegas_"+pl)
 
 
@@ -811,14 +812,14 @@ class monoModel():
                 logs2 = pm.Normal("logs2", mu = log_flux_std+1, sd = np.tile(2.0,len(log_flux_std)), shape=len(log_flux_std))
                 if self.train_GP:
                     #Taking trained values from out-of-transit to use as inputs to GP:
-                    minmax=np.percentile(self.gp_init_trace["logw0"],[0.5,99.5])
-                    logw0=pm.Interpolated("logw0", x_points=np.linspace(minmax[0],minmax[1],201)[1::2],
-                                          pdf_points=np.histogram(self.gp_init_trace["logw0"],
+                    minmax=np.percentile(self.gp_init_trace["w0"],[0.5,99.5])
+                    w0=pm.Interpolated("w0", x_points=np.linspace(minmax[0],minmax[1],201)[1::2],
+                                          pdf_points=np.histogram(self.gp_init_trace["w0"],
                                                                   np.linspace(minmax[0],minmax[1],101))[0]
                                          )
-                    minmax=np.percentile(self.gp_init_trace["logpower"],[0.5,99.5])
-                    logpower=pm.Interpolated("logpower", x_points=np.linspace(minmax[0],minmax[1],201)[1::2],
-                                          pdf_points=np.histogram(self.gp_init_trace["logpower"],
+                    minmax=np.percentile(self.gp_init_trace["power"],[0.5,99.5])
+                    power=pm.Interpolated("power", x_points=np.linspace(minmax[0],minmax[1],201)[1::2],
+                                          pdf_points=np.histogram(self.gp_init_trace["power"],
                                                                   np.linspace(minmax[0],minmax[1],101))[0]
                                          )
                 else:
@@ -827,18 +828,19 @@ class monoModel():
                     lcrange=self.lc['time'][self.lc['oot_mask']][-1]-self.lc['time'][self.lc['oot_mask']][0]
                     min_cad = np.nanmin([np.nanmedian(np.diff(self.lc['time'][self.lc['oot_mask']&(self.lc['cadence']==c)])) for c in self.cads])
                     #freqs bounded from 2pi/minimum_cadence to to 2pi/(4x lc length)
-                    logw0 = pm.Uniform("logw0",lower=np.log((2*np.pi)/(4*lcrange)), 
-                                       upper=np.log((2*np.pi)/min_cad),testval=np.log((2*np.pi)/(lcrange)))
+                    w0 = pm.InverseGamma("w0",testval=(2*np.pi)/10,
+                                         **xo.estimate_inverse_gamma_parameters(lower=(2*np.pi)/(4*lcrange),
+                                                                                upper=(2*np.pi)/(3*min_cad)))
+                    maxpower=25*np.nanstd(self.lc['flux'][self.lc['oot_mask']])
+                    minpower=0.01*np.nanmedian(abs(np.diff(self.lc['flux'][self.lc['oot_mask']])))
+                    power = pm.InverseGamma("power",testval=maxpower/25,
+                                            **xo.estimate_inverse_gamma_parameters(lower=maxpower, upper=minpower))
 
-                    # S_0 directly because this removes some of the degeneracies between
-                    # S_0 and omega_0 prior=(-0.25*lclen)*exp(logS0)
-                    maxpower=np.log(np.nanmedian(abs(np.diff(self.lc['flux'][self.lc['oot_mask']]))))+1
-                    logpower = pm.Uniform("logpower",lower=-20,upper=maxpower,testval=maxpower-6)
                     print("input to GP power:",maxpower-1)
-                logS0 = pm.Deterministic("logS0", logpower - 4 * logw0)
+                S0 = pm.Deterministic("S0", power/(w0**4))
 
                 # GP model for the light curve
-                kernel = xo.gp.terms.SHOTerm(log_S0=logS0, log_w0=logw0, Q=1/np.sqrt(2))
+                kernel = xo.gp.terms.SHOTerm(S0=S0, w0=w0, Q=1/np.sqrt(2))
 
                 self.gp['oot'] = xo.gp.GP(kernel, self.lc['time'][self.lc['oot_mask']].astype(np.float32),
                                    self.lc['flux_err'][self.lc['oot_mask']].astype(np.float32)**2 + \
@@ -874,7 +876,7 @@ class monoModel():
                                                                  texp=np.nanmedian(np.diff(self.lc['time'][cadmask]))
                                                                  )/(self.lc['flux_unit']*mult)]
                     elif cad[0]=='k':
-                        cad_index+=[(self.lc['tele_index'][mask,1])&cadmask[mask]]
+                        cad_index+=[(self.lc['tele_index'][mask,1]).astype(bool)&cadmask[mask]]
                         trans_pred+=[xo.LimbDarkLightCurve(u_star_kep).get_light_curve(
                                                                  orbit=i_orbit, r=i_r,
                                                                  t=self.lc['time'][mask].astype(np.float32),
@@ -913,9 +915,10 @@ class monoModel():
                                                  len(self.multis),mask=self.lc['oot_mask'],
                                                  prefix='multi_mask_',make_deterministic=True)
                 print("summing multi lcs:")
-
-                multi_mask_light_curve = pm.math.sum(multi_mask_light_curves, axis=1) #Summing lightcurve over n planets
-
+                if len(self.multis)>1:
+                    multi_mask_light_curve = pm.math.sum(multi_mask_light_curves, axis=1) #Summing lightcurve over n planets
+                else:
+                    multi_mask_light_curve=multi_mask_light_curves
                 #Multitransiting planet potentials:
                 '''if self.use_GP:
                     pm.Potential("multi_obs",
@@ -1258,7 +1261,7 @@ class monoModel():
                     if not self.assume_circ:
                         initvars2+=[duo_eccs[pl], duo_omegas[pl]]
             if self.use_GP:
-                initvars3+=[logs2, logpower, logw0, mean]
+                initvars3+=[logs2, power, w0, mean]
             else:
                 initvars3+=[mean]
             initvars5=initvars2+initvars3+[logs2,Rs,Ms]
@@ -1664,7 +1667,7 @@ class monoModel():
                         u_kep=np.array([2.*np.sqrt(cube[self.cube_indeces['u_star_kep_0']])*cube[self.cube_indeces['u_star_kep_1']],
                                         np.sqrt(cube[self.cube_indeces['u_star_kep_0']])*(1.-2.*cube[self.cube_indeces['u_star_kep_1']])])
 
-                    cad_index+=[(self.lc['tele_index'][self.lc['oot_mask'],1])&cadmask[self.lc['oot_mask']]]
+                    cad_index+=[(self.lc['tele_index'][self.lc['oot_mask'],1].astype(bool))&cadmask[self.lc['oot_mask']]]
                     trans_pred+=[xo.LimbDarkLightCurve(u_kep).get_light_curve(
                                                              orbit=orbit, r=i_r,
                                                              t=self.lc['time'][self.lc['oot_mask']],
@@ -2682,8 +2685,8 @@ class monoModel():
                 f_out.write(bytes_out[idx:idx+max_bytes])
 
     def getLDs(self,n_samples,mission='tess',how='2'):
-        Teff_samples = np.random.normal(self.Teff[0],self.Teff[1],n_samples)
-        logg_samples = np.random.normal(self.logg[0],self.logg[1],n_samples)
+        Teff_samples = np.random.normal(self.Teff[0],np.average(abs(self.Teff[1:])),n_samples)
+        logg_samples = np.random.normal(self.logg[0],np.average(abs(self.logg[1:])),n_samples)
         
         from scipy.interpolate import CloughTocher2DInterpolator as ct2d
 

@@ -60,10 +60,11 @@ def least_sq(pars,x,y,yerr):
     return chisq
 
 def QuickMonoFit(lc,it0,dur,Rs=None,Ms=None,Teff=None,useL2=False,fit_poly=True,
-                 polyorder=2,ndurs=3.2, how='mono', init_period=None,fluxindex='flux_flat',mask=None):
+                 polyorder=2, ndurs=3.2, how='mono', init_period=None,fluxindex='flux_flat',mask=None):
     # Performs simple planet fit to monotransit dip given the detection data.
     #Initial depth estimate:
     dur=0.3 if dur/dur!=1.0 else dur #Fixing duration if it's broken/nan.
+    winsize=np.clip(dur*ndurs,0.75,3.5)
     
     if mask is None and ((fluxindex=='flux_flat')|(fluxindex=='flux')):
         mask=lc['mask']
@@ -76,10 +77,10 @@ def QuickMonoFit(lc,it0,dur,Rs=None,Ms=None,Teff=None,useL2=False,fit_poly=True,
     if how=='periodic':
         assert init_period is not None
         xinit=(lc[timeindex]-it0-init_period*0.5)%init_period-init_period*0.5
-        nearby=(abs(xinit)<ndurs*dur)
+        nearby=(abs(xinit)<winsize)
     else:
         xinit=lc[timeindex]-it0
-        nearby=abs(xinit)<np.clip(dur*ndurs,1,4)
+        nearby=abs(xinit)<winsize
         assert np.sum(nearby)>0
     cad = np.nanmedian(np.diff(lc[timeindex])) if 'bin_' in fluxindex else float(int(max(set(list(lc['cadence'][nearby])), key=list(lc['cadence'][nearby]).count)[1:]))/1440
 
@@ -239,7 +240,7 @@ def QuickMonoFit(lc,it0,dur,Rs=None,Ms=None,Teff=None,useL2=False,fit_poly=True,
                     t=interpt
                 )/(1+map_soln['third_light'])
         '''
-    interpt=np.linspace(map_soln['tcen']-ndurs*float(dur),map_soln['tcen']+ndurs*float(dur),600)
+    interpt=np.linspace(map_soln['tcen']-winsize,map_soln['tcen']+winsize,600)
     if 'third_light' not in map_soln:
         map_soln['third_light']=np.array(0.0)
     
@@ -286,18 +287,18 @@ def QuickMonoFit(lc,it0,dur,Rs=None,Ms=None,Teff=None,useL2=False,fit_poly=True,
         best_fit['cdpp']=1.05*np.nanmedian(abs(np.diff(binlc[:,1])))
         best_fit['Ntrans']=1
     else:
-        phase=(abs(lc[timeindex]-best_fit['tcen']+0.5*best_fit['tdur'])%init_period)
-        oot_mask=mask&(phase>best_fit['tdur'])
-        binlc=tools.bin_lc_segment(np.column_stack((lc[timeindex][oot_mask],lc[fluxindex][oot_mask],
-                                                    lc[fluxerrindex][oot_mask])),best_fit['tdur'])
-        durobs=0
-        if 'bin_' not in fluxindex:
-            for cad in np.unique(lc['cadence']):
-                durobs+=np.sum(phase[mask&(lc['cadence']==cad)]<best_fit['tdur'])*float(int(cad[1:]))/1440
+        phase=(abs(lc['time']-best_fit['tcen']+0.5*best_fit['tdur'])%init_period)
+        if len(mask)==len(phase):
+            oot_mask=mask&(phase>best_fit['tdur'])
         else:
-            durobs=cad*len(phase[mask])
+            oot_mask=lc['mask']&(phase>best_fit['tdur'])
+        binlc=tools.bin_lc_segment(np.column_stack((lc['time'][oot_mask],lc['flux'][oot_mask],
+                                                    lc['flux_err'][oot_mask])),best_fit['tdur'])
+        durobs=0
+        for cad in np.unique(lc['cadence']):
+            durobs+=np.sum(phase[mask&(lc['cadence']==cad)]<best_fit['tdur'])*float(int(cad[1:]))/1440
         best_fit['Ntrans']=durobs/best_fit['tdur']
-        best_fit['cdpp']=1.05*np.nanmedian(abs(np.diff(binlc[:,1])))
+        best_fit['cdpp']=1.05*np.nanstd(binlc[:,1])
 
     best_fit['snr_r']=best_fit['depth']/(best_fit['cdpp']/np.sqrt(best_fit['Ntrans']))
     
@@ -857,8 +858,8 @@ def PeriodicPlanetSearch(lc,ID,planets,use_binned=False,use_flat=True,binsize=15
             
         phase_nr_trans=(lc[prefix+'time'][~plmask&anommask]-results[-1]['T0']-0.5*results[-1]['period'])%results[-1]['period']-0.5*results[-1]['period']
         if 'FAP' in results[-1] and 'snr' in results[-1] and np.sum(abs(phase_nr_trans)<0.5*np.clip(results[-1]['duration'],0.2,2))>3:
-            plparams = QuickMonoFit(deepcopy(lc),results[-1]['T0'],results[-1]['duration'], init_period=results[-1]['period'],
-                                    how='periodic',ndurs=4.5,Teff=Teff,Rs=Rs,Ms=Ms,
+            plparams = QuickMonoFit(deepcopy(lc),results[-1]['T0'],np.clip(results[-1]['duration'],0.15,3),
+                                    init_period=results[-1]['period'],how='periodic',ndurs=4.5,Teff=Teff,Rs=Rs,Ms=Ms,
                                     fluxindex=prefix+'flux'+suffix,mask=~plmask&anommask)
             SNR=np.max([plparams['snr'],results[-1].snr])
             FAP=results[-1]['FAP']
@@ -910,18 +911,19 @@ def PeriodicPlanetSearch(lc,ID,planets,use_binned=False,use_flat=True,binsize=15
         n_pl+=1
 
     if plot:
-        n_multis=np.sum([planets[pl]['orbit_flag']=='periodic' for pl in planets])
-        if n_multis==0:
+        multis=[pl for pl in planets if planets[pl]['orbit_flag']=='periodic']
+        print(multis)
+        if len(multis)==0:
             plt.subplot(311)
             plt.plot(results[0].periods,results[0].power)
         else:
-            for n_m,mult in enumerate([pl for pl in planets if planets[pl]['orbit_flag']=='periodic']):
+            for n_m,mult in enumerate(multis):
                 print(planets[mult]['depth'], planets[mult]['interpmodel'](0.0), np.nanstd(lc[prefix+'flux'+suffix]),
                       np.min(lc[prefix+'flux'+suffix]),np.max(lc[prefix+'flux'+suffix]))
                 phase=(lc[prefix+'time']-planets[mult]['tcen']-0.5*planets[mult]['period'])%planets[mult]['period']-0.5*planets[mult]['period']
-                plt.subplot(3, n_multis, n_multis*2+n_m)
+                plt.subplot(3, len(multis), len(multis)*2+n_m+1)
                 time_shift=0.4*np.nanstd(lc[prefix+'flux'+suffix][abs(phase)<1.2])*(lc[prefix+'time'][abs(phase)<1.2]-planets[mult]['tcen'])/planets[mult]['period']
-                plt.scatter(phase[abs(phase)<1.2],time_shift*lc[prefix+'flux'+suffix][abs(phase)<1.2],
+                plt.scatter(phase[abs(phase)<1.2],time_shift+lc[prefix+'flux'+suffix][abs(phase)<1.2],
                             s=3,c=lc[prefix+'time'][abs(phase)<1.2])
                 plt.plot(phase[abs(phase)<1.2],planets[mult]['interpmodel'](phase[abs(phase)<1.2]),'.',alpha=0.3)
         if plot_loc is None:
@@ -2147,7 +2149,8 @@ def VetCand(pl_dic,pl,ID,lc,Rs=1.0,Ms=1.0,Teff=5800,
             vetfig=plt.figure(figsize=(8.2,3.25))
             var_ax=vetfig.add_subplot(121)
             cent_ax=vetfig.add_subplot(122)
-
+    else:
+        var_ax=None
     #update dic:
     if do_fit:
         pl_dic.update(monoparams)
@@ -2364,7 +2367,7 @@ def MonoVetting(ID, mission, tcen=None, tdur=None, overwrite=False, do_search=Tr
                 #Best-fit model params for the mono transit:
                 pl_dic, vet_fig = VetCand(both_dic[pl],pl,ID,lc,Rs=Rstar[0],Ms=Ms,Teff=Teff[0],
                                           mono_SNR_thresh=mono_SNR_thresh,mono_SNR_r_thresh=mono_SNR_r_thresh,
-                                          variable_llk_thresh=variable_llk_thresh,plot=plot,file_loc=file_loc+'/',
+                                          variable_llk_thresh=variable_llk_thresh,plot=plot,
                                           do_fit=True,**kwargs)
                 if plot:
                     figs[pl]=vet_fig
@@ -2584,6 +2587,7 @@ def MonoVetting(ID, mission, tcen=None, tdur=None, overwrite=False, do_search=Tr
                             #split by gap duo case:
                             mod.add_duo(deepcopy(both_dic[obj]),obj)
                 mod.init_starpars(Rstar=Rstar,rhostar=rhostar,Teff=Teff,logg=logg)
+                pickle.dump(mod,open(file_loc+"/"+file_loc.split('/')[-1]+'_model.pickle','wb'))
                 mod.init_model(useL2=useL2,FeH=FeH,**kwargs)
                 pickle.dump(mod,open(file_loc+"/"+file_loc.split('/')[-1]+'_model.pickle','wb'))
             else:
