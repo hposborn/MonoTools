@@ -20,7 +20,6 @@ from copy import deepcopy
 from datetime import datetime
 from . import tools
 from scipy import optimize
-from scipy import interpolate
 import exoplanet as xo
 import scipy.interpolate as interp
 import scipy.optimize as optim
@@ -31,8 +30,15 @@ import seaborn as sns
 import logging
 logging.getLogger('matplotlib.font_manager').disabled = True
 
+MonoData_tablepath = os.path.join(os.path.dirname(os.path.abspath( __file__ )),'data','tables')
+if os.environ.get('MONOTOOLSPATH') is None:
+    MonoData_savepath = os.path.join(os.path.dirname(os.path.abspath( __file__ )),'data')
+else:
+    MonoData_savepath = os.environ.get('MONOTOOLSPATH')
+    
 #creating new hidden directory for theano compilations:
-theano_dir=os.path.dirname(os.path.abspath( __file__ ))+'/.theano_dir_'+str(np.random.randint(8))
+theano_dir=MonoData_savepath+'/.theano_dir_'+str(np.random.randint(8))
+
 if not os.path.isdir(theano_dir):
     os.mkdir(theano_dir)
 os.environ["THEANO_FLAGS"] = "device=cpu,floatX=float32,cxx=/usr/local/Cellar/gcc/9.3.0_1/bin/g++-9,cxxflags = -fbracket-depth=1024,base_compiledir="+theano_dir
@@ -42,8 +48,8 @@ import theano
 theano.config.print_test_value = True
 theano.config.exception_verbosity='high'
 
-from . import MonoFit
 from . import tools
+from . import MonoFit
 
 def transit(pars,x):
     log_per,b,t0,log_r_pl,u1,u2=pars
@@ -281,10 +287,10 @@ def QuickMonoFit(lc,it0,dur,Rs=None,Ms=None,Teff=None,useL2=False,fit_poly=True,
           "\ndepth stuff:",best_fit['depth'],best_fit['depth_err'],lc['flux_unit'],np.min(transit_zoom),np.min(map_soln['light_curve']))'''
     #Calculating std in typical bin with width of the transit duration, to compute SNR_red
     if how=='mono' or init_period is None:
-        oot_mask=mask&(abs(lc[timeindex]-best_fit['tcen'])>0.5)
+        oot_mask=mask&(abs(lc[timeindex]-best_fit['tcen'])>0.5)&(abs(lc[timeindex]-best_fit['tcen'])<25)
         binlc=tools.bin_lc_segment(np.column_stack((lc[timeindex][oot_mask],lc[fluxindex][oot_mask],
                                                     lc[fluxerrindex][oot_mask])),best_fit['tdur'])
-        best_fit['cdpp']=1.05*np.nanmedian(abs(np.diff(binlc[:,1])))
+        best_fit['cdpp'] = np.nanstd(binlc[:,1])
         best_fit['Ntrans']=1
     else:
         phase=(abs(lc['time']-best_fit['tcen']+0.5*best_fit['tdur'])%init_period)
@@ -292,17 +298,21 @@ def QuickMonoFit(lc,it0,dur,Rs=None,Ms=None,Teff=None,useL2=False,fit_poly=True,
             oot_mask=mask&(phase>best_fit['tdur'])
         else:
             oot_mask=lc['mask']&(phase>best_fit['tdur'])
-        binlc=tools.bin_lc_segment(np.column_stack((lc['time'][oot_mask],lc['flux'][oot_mask],
+        binlc=tools.bin_lc_segment(np.column_stack((lc['time'][oot_mask],lc['flux_flat'][oot_mask],
                                                     lc['flux_err'][oot_mask])),best_fit['tdur'])
         durobs=0
         for cad in np.unique(lc['cadence']):
-            durobs+=np.sum(phase[mask&(lc['cadence']==cad)]<best_fit['tdur'])*float(int(cad[1:]))/1440
+            if len(mask)==len(phase):
+                durobs+=np.sum(phase[mask&(lc['cadence']==cad)]<best_fit['tdur'])*float(int(cad[1:]))/1440
+            else:
+                durobs+=np.sum(phase[lc['mask']&(lc['cadence']==cad)]<best_fit['tdur'])*float(int(cad[1:]))/1440
+
         best_fit['Ntrans']=durobs/best_fit['tdur']
-        best_fit['cdpp']=1.05*np.nanstd(binlc[:,1])
+        best_fit['cdpp'] = np.nanstd(binlc[:,1])
 
     best_fit['snr_r']=best_fit['depth']/(best_fit['cdpp']/np.sqrt(best_fit['Ntrans']))
     
-    best_fit['interpmodel']=interpolate.interp1d(np.hstack((-10000,interpt-best_fit['tcen'],10000)),
+    best_fit['interpmodel']=interp.interp1d(np.hstack((-10000,interpt-best_fit['tcen'],10000)),
                                      np.hstack((0.0,transit_zoom,0.0)))
     if how=='periodic':
         for col in ['period','vrel']:
@@ -393,6 +403,9 @@ def MonoTransitSearch(lc,ID,Rs=None,Ms=None,Teff=None,
         model=x*params[1]+np.exp(params[0])*(amp*np.sin(newt-np.pi*0.5)-0.1)
         return 0.5 * np.sum((y - model)**2 / sigma2 + np.log(sigma2))
     
+    from progress.bar import IncrementalBar
+    bar = IncrementalBar('Searching for monotransit', max = np.sum([len(xr) for xr in search_xranges]))
+
     #For each duration we scan across the lightcurve and compare a transit model to others:
     for n,search_xrange in enumerate(search_xranges):
         tdur=tdurs[n%n_durs]
@@ -425,12 +438,13 @@ def MonoTransitSearch(lc,ID,Rs=None,Ms=None,Teff=None,
         logmodeldep=np.log(abs(interpmodels[n](0.0)))
 
         for n_mod,x2s in enumerate(search_xrange):
+            bar.next()
             #minimise single params - depth
             round_tr=abs(uselc[:,0]-x2s)<(transit_zoom*tdur)
             #Centering x array on epoch to search
             x=uselc[round_tr,0]-x2s
             in_tr=abs(x)<(0.45*tdur)
-            if not np.isnan(x[in_tr]).all():
+            if len(x[in_tr])>0 and not np.isnan(x[in_tr]).all() and len(x[~in_tr])>0 and not np.isnan(x[~in_tr]).all():
                 
                 y=uselc[round_tr,1]
                 oot_median=np.nanmedian(y[~in_tr])
@@ -495,6 +509,7 @@ def MonoTransitSearch(lc,ID,Rs=None,Ms=None,Teff=None,
                     #outdic.update({'sin_poly_'+str(n):res_sin.x[1+n] for n in range(poly_order)})
                 outparams=outparams.append(pd.Series(outdic,name=len(outparams)))
         #print(n,len(outparams))
+    bar.finish()
     outparams=outparams.sort_values('tcen')
     #Transit model has to be better than the sin model AND the DeltaBIC w.r.t to the polynomial must be <-10.
     # transit depth must be <0.0,
@@ -777,7 +792,7 @@ def PeriodicPlanetSearch(lc,ID,planets,use_binned=False,use_flat=True,binsize=15
     use_binned=True if len(lc['flux'])>10000 else use_binned
     
     #Max period is half the total observed time NOT half the distance from t[0] to t[-1]
-    p_max=0.5*np.sum(np.diff(lc['time'])[np.diff(lc['time'])<0.4])
+    p_max=0.66*np.sum(np.diff(lc['time'])[np.diff(lc['time'])<0.4])
     #np.clip(0.75*(np.nanmax(lc[prefix+'time'])-np.nanmin(lc[prefix+'time'])),10,80)
     suffix='_flat' if use_flat else ''
     if use_flat:
@@ -792,10 +807,11 @@ def PeriodicPlanetSearch(lc,ID,planets,use_binned=False,use_flat=True,binsize=15
                 plmask_0+=abs(lc['time']-planets[pl]['tcen'])<0.6*planets[pl]['tdur']
             
         lc=tools.lcFlatten(lc,winsize=11*durmax,transit_mask=~plmask_0)
+        print("after flattening:",np.sum(lc['mask']))
 
     if use_binned:
         lc=tools.lcBin(lc,binsize=binsize,use_flat=use_flat)
-        print("binned",lc.keys)
+        #print("binned",lc.keys,np.sum(lc['mask']))
         suffix='_flat'
     else:
         print(use_binned, 'bin_flux' in lc)
@@ -840,11 +856,14 @@ def PeriodicPlanetSearch(lc,ID,planets,use_binned=False,use_flat=True,binsize=15
             lc=tools.lcFlatten(lc,winsize=11*durmax,use_binned=use_binned,transit_mask=~plmask)
         '''
         modx = lc[prefix+'time']
-        mody = lc[prefix+'flux'+suffix]*lc['flux_unit']+(1.0-np.nanmedian(lc[prefix+'flux'+suffix][anommask])*lc['flux_unit'])
+        mody = lc[prefix+'flux'+suffix] * lc['flux_unit']+(1.0-np.nanmedian(lc[prefix+'flux'+suffix][anommask])*lc['flux_unit'])
+        #print(n_pl,len(mody),len(anommask),np.sum(anommask),len(plmask),np.sum(plmask))
         if np.sum(plmask)>0:
-            print(len(mody),len(anommask),np.sum(anommask),len(plmask),np.sum(plmask))
+            print(n_pl,np.sum(plmask),np.sum(anommask))
             mody[plmask] = mody[anommask][np.random.choice(np.sum(anommask),np.sum(plmask))][:]
-        anommask*=tools.CutAnomDiff(mody)
+            print(n_pl,np.sum(plmask),np.sum(anommask))
+        #anommask *= tools.CutAnomDiff(mody)
+        #print(n_pl,"norm_mask:",np.sum(lc['mask']),"anoms:",np.sum(anommask),"pl mask",np.sum(plmask),"total len",len(anommask))
         model = transitleastsquares(modx[anommask], mody[anommask])
         results+=[model.power(period_min=1.1,period_max=p_max,duration_grid_step=1.0625,Rstar=Rs,Mstar=Ms,
                               use_threads=1,show_progress_bar=False, n_transits_min=3)]
@@ -880,8 +899,7 @@ def PeriodicPlanetSearch(lc,ID,planets,use_binned=False,use_flat=True,binsize=15
                          linewidth=4.5,alpha=0.4,c=sns.color_palette()[n_pl-init_n_pl],label=planet_name+'/det_'+str(n_pl))
                 plt.plot(results[-1].periods,results[-1].power,c=sns.color_palette()[n_pl-init_n_pl])
                 plt.subplot(312)
-                plt.plot(results[-1]['model_lightcurve_time'][results[-1]['model_lightcurve_model']<0.999],
-                         results[-1]['model_lightcurve_model'][results[-1]['model_lightcurve_model']<0.999],'.',
+                plt.plot(results[-1]['model_lightcurve_time'],results[-1]['model_lightcurve_model'],'.',
                          alpha=0.75,c=sns.color_palette()[n_pl-init_n_pl],label=planet_name+'/det='+str(n_pl),
                          rasterized=True)
 
@@ -898,34 +916,50 @@ def PeriodicPlanetSearch(lc,ID,planets,use_binned=False,use_flat=True,binsize=15
             #Removing planet from future data to be searched
             this_pl_masked=(((lc[prefix+'time']-planets[planet_name]['tcen']+0.7*planets[planet_name]['tdur'])%planets[planet_name]['period'])<(1.4*planets[planet_name]['tdur']))
             plmask=plmask+this_pl_masked#Masking previously-detected transits
-            print("pl_mask",np.sum(this_pl_masked)," total:",np.sum(plmask))
+            #print(n_pl,results[-1].period,plparams['tdur'],np.sum(this_pl_masked),np.sum(plmask))
+            #print(n_pl,"pl_mask",np.sum(this_pl_masked)," total:",np.sum(plmask))
         elif SNR>multi_SNR_thresh:
             # pseudo-fails - we have a high-SNR detection but it's a duo or a mono.
             this_pl_masked=(((lc[prefix+'time']-plparams['tcen']+0.7*plparams['tdur'])%results[-1].period)<(1.4*plparams['tdur']))
+            #print(n_pl,results[-1].period,plparams['tdur'],np.sum(this_pl_masked))
             plmask=plmask+this_pl_masked
             SNR_last_planet=SNR
         else:
             # Fails
-            print("detection at ",results[-1].period," with ",len(trans)," transits does not meet SNR ",SNR,"or FAP",results[-1].FAP)
+            print(n_pl,"detection at ",results[-1].period," with ",len(trans)," transits does not meet SNR ",SNR,"or FAP",results[-1].FAP)
             SNR_last_planet=0
         n_pl+=1
 
     if plot:
         multis=[pl for pl in planets if planets[pl]['orbit_flag']=='periodic']
-        print(multis)
         if len(multis)==0:
             plt.subplot(311)
             plt.plot(results[0].periods,results[0].power)
         else:
             for n_m,mult in enumerate(multis):
-                print(planets[mult]['depth'], planets[mult]['interpmodel'](0.0), np.nanstd(lc[prefix+'flux'+suffix]),
-                      np.min(lc[prefix+'flux'+suffix]),np.max(lc[prefix+'flux'+suffix]))
-                phase=(lc[prefix+'time']-planets[mult]['tcen']-0.5*planets[mult]['period'])%planets[mult]['period']-0.5*planets[mult]['period']
-                plt.subplot(3, len(multis), len(multis)*2+n_m+1)
-                time_shift=0.4*np.nanstd(lc[prefix+'flux'+suffix][abs(phase)<1.2])*(lc[prefix+'time'][abs(phase)<1.2]-planets[mult]['tcen'])/planets[mult]['period']
-                plt.scatter(phase[abs(phase)<1.2],time_shift+lc[prefix+'flux'+suffix][abs(phase)<1.2],
-                            s=3,c=lc[prefix+'time'][abs(phase)<1.2])
-                plt.plot(phase[abs(phase)<1.2],planets[mult]['interpmodel'](phase[abs(phase)<1.2]),'.',alpha=0.3)
+                #print(planets[mult]['depth'], planets[mult]['interpmodel'](0.0), np.nanstd(lc[prefix+'flux'+suffix]),
+                #      np.min(lc[prefix+'flux'+suffix]),np.max(lc[prefix+'flux'+suffix]))
+                phase=(lc['time']-planets[mult]['tcen']-0.5*planets[mult]['period'])%planets[mult]['period']-0.5*planets[mult]['period']
+                lc=tools.lcFlatten(lc,winsize=11*durmax,transit_mask=abs(phase)>0.6*planets[mult]['tdur'])
+
+                plt.subplot(3, len(multis), len(multis)*2+1+n_m)
+                #print("subplot ",3, len(multis), len(multis)*2+1+n_m)
+                bin_phase=tools.bin_lc_segment(np.column_stack((np.sort(phase[abs(phase)<1.2]),
+                                                                lc['flux'][abs(phase)<1.2][np.argsort(phase[abs(phase)<1.2])],
+                                                                lc['flux_err'][abs(phase)<1.2][np.argsort(phase[abs(phase)<1.2])])),binsize=planets[mult]['tdur']*0.15)
+                time_shift=0.4*np.nanstd(bin_phase[:,1])*(lc['time'][abs(phase)<1.2][np.argsort(phase[abs(phase)<1.2])] - \
+                                                                                                planets[mult]['tcen'])/planets[mult]['period']
+                #plt.scatter(phase[abs(phase)<1.2],time_shift+lc['flux'][abs(phase)<1.2],
+                plt.scatter(phase[abs(phase)<1.2],lc['flux'][abs(phase)<1.2],
+                            s=3,c='k',alpha=0.4)
+                plt.scatter(bin_phase[:,0],bin_phase[:,1],s=8,
+                            c=sns.color_palette()[n_pl-init_n_pl])
+                plt.plot(np.sort(phase[abs(phase)<1.2]),
+                         planets[mult]['interpmodel'](phase[abs(phase)<1.2][np.argsort(phase[abs(phase)<1.2])]),
+                         c=sns.color_palette()[n_pl-init_n_pl],alpha=0.4)
+                plt.ylim(np.nanmin(bin_phase[:,1])-2*np.nanstd(bin_phase[:,1]),
+                         np.nanmax(bin_phase[:,1])+2*np.nanstd(bin_phase[:,1]))
+                plt.gca().set_title(planet_name+'/det='+str(n_pl))
         if plot_loc is None:
             plot_loc = str(ID).zfill(11)+"_multi_search.pdf"
         elif plot_loc[-1]=='/':
@@ -948,97 +982,6 @@ def PeriodicPlanetSearch(lc,ID,planets,use_binned=False,use_flat=True,binsize=15
     else:
         return planets, None
 
-def CheckPeriodConfusedPlanets(lc,all_dets):
-    #Merges dic of mono detections with a dic of periodic planet detections
-    #Performs 3 steps: 
-    # - Checks monos against themselves
-    # - Checks periodic planets (and duos detected in the periodic search) against themselves
-    # - Checks periodic planets (and duos detected in the periodic search) against monotransits
-    # In each case, the signal with the highest SNR is kept (and assumed to be the correct one)
-    # The other signal is removed from the list, but kept in the detn dictionary
-    #
-    #INPUTS:
-    # - lc dict
-    # - detection dict
-    #RETURNS:
-    # - detection dict
-    # - list of monos
-    # - list of multis/duos
-    
-    mono_detns=[pl for pl in all_dets if (all_dets[pl]['orbit_flag']=='mono')&(all_dets[pl]['flag'] not in ['asteroid','EB','instrumental','lowSNR','variability'])]
-    #print([all_dets[pl]['flag'] for pl in mono_detns])
-    if len(mono_detns)>1:
-        #removing monos which are effectively the same. Does this through tcen/tdur matching.
-        for monopl in mono_detns:
-            if all_dets[monopl]['orbit_flag'][:2]!='FP':
-                other_dets=np.array([[other,all_dets[other]['tcen'],all_dets[other]['tdur']] for other in mono_detns if other !=monopl])
-                trans_prox=np.min(abs(all_dets[monopl]['tcen']-other_dets[:,1].astype(float))) #Proximity to a transit
-                prox_stats=abs(trans_prox/(0.5*(all_dets[monopl]['tdur']+other_dets[:,2].astype(float))))
-                print("Mono-mono compare",monopl,all_dets[monopl]['tcen'],other_dets[:,1],prox_stats)
-                if np.min(prox_stats)<0.5:
-                    other=other_dets[np.argmin(prox_stats),0]
-                    if all_dets[other]['snr']>all_dets[monopl]['snr']:
-                        all_dets[monopl]['orbit_flag']='FP - confusion with '+other
-                    else:
-                        all_dets[other]['orbit_flag']='FP - confusion with '+monopl
-    mono_detns=[pl for pl in all_dets if (all_dets[pl]['orbit_flag']=='mono')&(all_dets[pl]['flag'] not in ['asteroid','EB','instrumental','lowSNR','variability'])]
-                    
-    perdc_detns=[pl for pl in all_dets if (all_dets[pl]['orbit_flag'] in ['periodic','duo'])&(all_dets[pl]['orbit_flag']!='variability')]
-    if len(perdc_detns)>1:
-        #removing periodics which are effectively the same. Does this through cadence correlation.
-        for perpl in perdc_detns:
-            new_trans_arr=((lc['time'][lc['mask']]-all_dets[perpl]['tcen']+0.5*all_dets[perpl]['tdur'])%all_dets[perpl]['period'])<all_dets[perpl]['tdur']
-
-            for perpl2 in perdc_detns:
-                if perpl!=perpl2 and all_dets[perpl]['orbit_flag'][:2]!='FP' and all_dets[perpl2]['orbit_flag'][:2]!='FP':
-                    new_trans_arr2=((lc['time'][lc['mask']]-all_dets[perpl2]['tcen']+0.5*all_dets[perpl2]['tdur'])%all_dets[perpl2]['period'])<all_dets[perpl2]['tdur']
-                    sum_overlap=np.sum(new_trans_arr&new_trans_arr2)
-                    prox_arr=np.hypot(sum_overlap/np.sum(new_trans_arr),sum_overlap/np.sum(new_trans_arr2))
-                    print("Multi-multi compare",perpl,all_dets[perpl]['period'],perpl2,all_dets[perpl2]['period'],prox_arr)
-                    if prox_arr>0.6:
-                        #These overlap - taking the highest SNR signal
-                        if all_dets[perpl]['snr']>all_dets[perpl2]['snr']:
-                            all_dets[perpl2]['orbit_flag']='FP - confusion with '+perpl2
-                        else:
-                            all_dets[perpl]['orbit_flag']='FP - confusion with '+perpl
-    perdc_detns=[pl for pl in all_dets if (all_dets[pl]['orbit_flag'] in ['periodic','duo'])&(all_dets[pl]['orbit_flag']!='variability')]
-    trans_arr=[]
-    #print(mono_detns,perdc_detns,len(mono_detns)>0 and len(perdc_detns)>0)
-    if len(mono_detns)>0 and len(perdc_detns)>0:
-        confused_mono=[]
-        #Looping over periodic signals and checking if the array of transit times (and durations) matches
-        for perpl in perdc_detns:
-            new_trans_arr=((lc['time'][lc['mask']]-all_dets[perpl]['tcen']+0.5*all_dets[perpl]['tdur'])%all_dets[perpl]['period'])<all_dets[perpl]['tdur']
-            #trans_arr=np.hstack((np.arange(all_dets[perpl]['tcen'],np.nanmin(lc['time'])-all_dets[perpl]['tdur'],-1*all_dets[perpl]['period'])[::-1],np.arange(all_dets[perpl]['tcen']+all_dets[perpl]['period'],np.nanmax(lc['time'])+all_dets[perpl]['tdur'],all_dets[perpl]['period'])))
-            #print(perpl,trans_arr)
-            for monopl in mono_detns:
-                if all_dets[monopl]['orbit_flag'][:2]!='FP' and all_dets[perpl]['orbit_flag'][:2]!='FP':
-                    roundtr=abs(lc['time'][lc['mask']]-all_dets[monopl]['tcen'])<(2.5*all_dets[monopl]['tdur'])
-                    new_trans_arr2=abs(lc['time'][lc['mask']][roundtr]-all_dets[monopl]['tcen'])<(0.5*all_dets[monopl]['tdur'])
-                    sum_overlap=np.sum(new_trans_arr[roundtr]&new_trans_arr2)
-                    prox_stat=sum_overlap/np.hypot(np.sum(new_trans_arr[roundtr]),np.sum(new_trans_arr2))
-                    #adding depth comparison - if depths are a factor of >3different we start reducing prox_stat by the log ratio
-                    prox_stat/=np.clip(abs(np.log(all_dets[perpl]['depth']/all_dets[monopl]['depth'])),1.0,20)
-                    '''
-                    nearest_trans=trans_arr[np.argmin(abs(all_dets[monopl]['tcen']-trans_arr))] #Proximity to a transit
-                    trans_perdic=abs(lc['time'][lc['mask']]-nearest_trans)<(0.5*all_dets[perpl]['tdur'])
-                    trans_mono=abs(lc['time'][lc['mask']]-all_dets[monopl]['tcen'])<(0.5*all_dets[monopl]['tdur'])
-                    prox_stat=np.hypot(np.sum(trans_perdic&trans_mono)/np.sum(trans_perdic),
-                                       np.sum(trans_perdic&trans_mono)/np.sum(trans_mono))
-                    '''
-                    print("Multi-mono compare",perpl,all_dets[perpl]['tdur'],"|",monopl,all_dets[monopl]['tcen'],all_dets[monopl]['tdur'],prox_stat)
-                    if prox_stat>0.33:
-                        #These overlap - taking the highest SNR signal
-                        print("correlation - ",all_dets[perpl]['snr'],all_dets[monopl]['snr'])
-                        if all_dets[perpl]['snr']>=all_dets[monopl]['snr']:
-                            all_dets[monopl]['orbit_flag']= 'FP - confusion with '+perpl
-                        elif all_dets[perpl]['snr']<all_dets[monopl]['snr']:
-                            all_dets[perpl]['orbit_flag']= 'FP - confusion with '+monopl
-
-    mono_detns=[pl for pl in all_dets if (all_dets[pl]['orbit_flag']=='mono')&(all_dets[pl]['flag'] not in ['asteroid','EB','instrumental','lowSNR','variability','step'])]
-    perdc_detns=[pl for pl in all_dets if (all_dets[pl]['orbit_flag'] in ['periodic','duo'])&(all_dets[pl]['orbit_flag']!='variability')]
-
-    return all_dets, mono_detns, perdc_detns
 
 def GenModelLc(lc,all_pls,mission,Rstar=1.0,rhostar=1.0,Teff=5800,logg=4.43):
     #Generates model planet lightcurve from dictionary of all planets
@@ -1074,6 +1017,112 @@ def GenModelLc(lc,all_pls,mission,Rstar=1.0,rhostar=1.0,Teff=5800,logg=4.43):
                 light_curve=light_curve+light_curve2
             light_curves+=[light_curve]
     return np.column_stack(light_curves)
+
+
+def xoEB():
+    with pm.Model() as model:
+
+        # Systemic parameters
+        mean_lc = pm.Normal("mean_lc", mu=0.0, sd=5.0)
+        u1 = xo.QuadLimbDark("u1")
+        u2 = xo.QuadLimbDark("u2")
+
+        # Parameters describing the primary
+        M1 = pm.Lognormal("M1", mu=0.0, sigma=10.0)
+        R1 = pm.Lognormal("R1", mu=0.0, sigma=10.0)
+
+        # Secondary ratios
+        R2R1 = pm.Lognormal("R2R1", mu=0.0, sigma=10.0)  # radius ratio
+        M2M1 = pm.Lognormal("M2M1", mu=0.0, sigma=10.0)  # mass ratio
+        sbr = pm.Lognormal("sbr", mu=np.log(0.5), sigma=10.0)  # surface brightness ratio
+
+        # Prior on flux ratio
+        pm.Normal(
+            "flux_prior",
+            mu=lit_flux_ratio[0],
+            sigma=lit_flux_ratio[1],
+            observed=R2R1 ** 2 * sbr,
+        )
+
+        # Parameters describing the orbit
+        b = xo.ImpactParameter("b", ror=R2R1, testval=1.5)
+        period = pm.Lognormal("period", mu=np.log(lit_period), sigma=1.0)
+        t0 = pm.Normal("t0", mu=lit_t0, sigma=1.0)
+
+        # Parameters describing the eccentricity: ecs = [e * cos(w), e * sin(w)]
+        ecs = xo.UnitDisk("ecs", testval=np.array([1e-5, 0.0]))
+        ecc = pm.Deterministic("ecc", tt.sqrt(tt.sum(ecs ** 2)))
+        omega = pm.Deterministic("omega", tt.arctan2(ecs[1], ecs[0]))
+
+        # Build the orbit
+        R2 = pm.Deterministic("R2", R2R1 * R1)
+        M2 = pm.Deterministic("M2", M2M1 * M1)
+        orbit = xo.orbits.KeplerianOrbit(
+            period=period,
+            t0=t0,
+            ecc=ecc,
+            omega=omega,
+            b=b,
+            r_star=R1,
+            m_star=M1,
+            m_planet=M2,
+        )
+
+        # Track some other orbital elements
+        pm.Deterministic("incl", orbit.incl)
+        pm.Deterministic("a", orbit.a)
+
+        # Noise model for the light curve
+        sigma_lc = pm.InverseGamma(
+            "sigma_lc", testval=1.0, **xo.estimate_inverse_gamma_parameters(0.1, 2.0)
+        )
+        S_tot_lc = pm.InverseGamma(
+            "S_tot_lc", testval=2.5, **xo.estimate_inverse_gamma_parameters(1.0, 5.0)
+        )
+        ell_lc = pm.InverseGamma(
+            "ell_lc", testval=2.0, **xo.estimate_inverse_gamma_parameters(1.0, 5.0)
+        )
+        kernel_lc = xo.gp.terms.SHOTerm(
+            S_tot=S_tot_lc, w0=2 * np.pi / ell_lc, Q=1.0 / 3
+        )
+
+
+        # Set up the light curve model
+        lc = xo.SecondaryEclipseLightCurve(u1, u2, sbr)
+
+        def model_lc(t):
+            return (
+                mean_lc
+                + 1e3 * lc.get_light_curve(orbit=orbit, r=R2, t=t, texp=texp)[:, 0]
+            )
+
+        # Condition the light curve model on the data
+        gp_lc = xo.gp.GP(
+            kernel_lc, x[mask], tt.zeros(mask.sum()) ** 2 + sigma_lc ** 2, mean=model_lc
+        )
+        gp_lc.marginal("obs_lc", observed=y[mask])
+
+        # Set up the radial velocity model
+        def model_rv1(t):
+            return mean_rv + 1e-3 * orbit.get_radial_velocity(t)
+
+        def model_rv2(t):
+            return mean_rv - 1e-3 * orbit.get_radial_velocity(t) / M2M1
+
+        # Optimize the logp
+        map_soln = model.test_point
+
+        # Then the LC parameters
+        map_soln = xo.optimize(map_soln, [mean_lc, R1, R2R1, sbr, b])
+        map_soln = xo.optimize(map_soln, [mean_lc, R1, R2R1, sbr, b, u1, u2])
+        map_soln = xo.optimize(map_soln, [mean_lc, sigma_lc, S_tot_lc, ell_lc])
+        map_soln = xo.optimize(map_soln, [t0, period])
+
+        # Then all the parameters together
+        map_soln = xo.optimize(map_soln)
+
+        model.gp_lc = gp_lc
+        model.model_lc = model_lc
 
 def DoEBfit(lc,tc,dur):
     # Performs EB fit to primary/secondary.
@@ -1390,7 +1439,14 @@ def VariabilityCheck(lc, params, ID, modeltype='both',plot=False,plot_loc=None,n
                     best_mod_res['sin']=mod_res_sin
 
             if modeltype=='step' or modeltype=='both':
+                points_either_side=False
+                #Making sure we start off with a position that has points both before and afer the step:
                 step_guess=np.random.normal(0.0,0.5*params['tdur'])
+                if np.sum(x<step_guess)==0:
+                    step_guess=x[4]
+                elif np.sum(x>step_guess)==0:
+                    step_guess=x[-5]
+                    
                 mod_args= np.hstack((step_guess,
                                      np.polyfit(x[(x<step_guess)&rand_choice],
                                                 y[(x<step_guess)&rand_choice],np.clip(polyorder+1,1,6)),
@@ -1491,7 +1547,7 @@ def CheckInstrumentalNoise(lc,monodic,jd_base=None, **kwargs):
     - lc
     - monotransit dic
     - jd_base (assumed to be that of TESS)'''
-    tces_per_cadence=np.loadtxt(MonoFit.MonoFit_path+'/data/tables/tces_per_cadence.txt')
+    tces_per_cadence=np.loadtxt(MonoData_tablepath+'/tces_per_cadence.txt')
     if 'jd_base' in lc and jd_base is None:
         jd_base=lc['jd_base']
     elif jd_base is None:
@@ -1711,6 +1767,97 @@ def CentroidCheck(lc,monoparams,interpmodel,ID,order=2,dur_region=3.5, plot=True
         return None
 
 
+def CheckPeriodConfusedPlanets(lc,all_dets,mono_mono=True,multi_multi=True,mono_multi=True):
+    #Merges dic of mono detections with a dic of periodic planet detections
+    #Performs 3 steps: 
+    # - Checks monos against themselves
+    # - Checks periodic planets (and duos detected in the periodic search) against themselves
+    # - Checks periodic planets (and duos detected in the periodic search) against monotransits
+    # In each case, the signal with the highest SNR is kept (and assumed to be the correct one)
+    # The other signal is removed from the list, but kept in the detn dictionary
+    #
+    #INPUTS:
+    # - lc dict
+    # - detection dict
+    #RETURNS:
+    # - detection dict
+    # - list of monos
+    # - list of multis/duos
+    
+    mono_detns=[pl for pl in all_dets if (all_dets[pl]['orbit_flag']=='mono')&(all_dets[pl]['flag'] not in ['asteroid','EB','instrumental','lowSNR','variability'])]
+    #print([all_dets[pl]['flag'] for pl in mono_detns])
+    if len(mono_detns)>1 and mono_mono:
+        #removing monos which are effectively the same. Does this through tcen/tdur matching.
+        for monopl in mono_detns:
+            if all_dets[monopl]['orbit_flag'][:2]!='FP':
+                other_dets = np.array([[other,all_dets[other]['tcen'],all_dets[other]['tdur']] for other in mono_detns if other !=monopl])
+                trans_prox = np.min(abs(all_dets[monopl]['tcen']-other_dets[:,1].astype(float))) #Proximity to a transit
+                prox_stats = abs(trans_prox/(0.5*(all_dets[monopl]['tdur']+other_dets[:,2].astype(float))))
+                print("Mono-mono compare", monopl, all_dets[monopl]['tcen'], other_dets[:,1], prox_stats)
+                if np.min(prox_stats)<0.5:
+                    other=other_dets[np.argmin(prox_stats),0]
+                    if all_dets[other]['snr']>all_dets[monopl]['snr']:
+                        all_dets[monopl]['orbit_flag']='FP - confusion with '+other
+                    else:
+                        all_dets[other]['orbit_flag']='FP - confusion with '+monopl
+    mono_detns=[pl for pl in all_dets if (all_dets[pl]['orbit_flag']=='mono')&(all_dets[pl]['flag'] not in ['asteroid','EB','instrumental','lowSNR','variability'])]
+                    
+    perdc_detns=[pl for pl in all_dets if (all_dets[pl]['orbit_flag'] in ['periodic','duo'])&(all_dets[pl]['orbit_flag']!='variability')]
+    if len(perdc_detns)>1 and multi_multi:
+        #removing periodics which are effectively the same. Does this through cadence correlation.
+        for perpl in perdc_detns:
+            new_trans_arr=((lc['time'][lc['mask']]-all_dets[perpl]['tcen']+0.5*all_dets[perpl]['tdur'])%all_dets[perpl]['period'])<all_dets[perpl]['tdur']
+
+            for perpl2 in perdc_detns:
+                if perpl!=perpl2 and all_dets[perpl]['orbit_flag'][:2]!='FP' and all_dets[perpl2]['orbit_flag'][:2]!='FP':
+                    new_trans_arr2=((lc['time'][lc['mask']]-all_dets[perpl2]['tcen']+0.5*all_dets[perpl2]['tdur'])%all_dets[perpl2]['period'])<all_dets[perpl2]['tdur']
+                    sum_overlap=np.sum(new_trans_arr&new_trans_arr2)
+                    prox_arr=np.hypot(sum_overlap/np.sum(new_trans_arr),sum_overlap/np.sum(new_trans_arr2))
+                    print("Multi-multi compare",perpl,all_dets[perpl]['period'],perpl2,all_dets[perpl2]['period'],prox_arr)
+                    if prox_arr>0.6:
+                        #These overlap - taking the highest SNR signal
+                        if all_dets[perpl]['snr']>all_dets[perpl2]['snr']:
+                            all_dets[perpl2]['orbit_flag']='FP - confusion with '+perpl2
+                        else:
+                            all_dets[perpl]['orbit_flag']='FP - confusion with '+perpl
+    perdc_detns=[pl for pl in all_dets if (all_dets[pl]['orbit_flag'] in ['periodic','duo'])&(all_dets[pl]['orbit_flag']!='variability')]
+    trans_arr=[]
+    #print(mono_detns,perdc_detns,len(mono_detns)>0 and len(perdc_detns)>0)
+    if len(mono_detns)>0 and len(perdc_detns)>0 and mono_multi:
+        confused_mono=[]
+        #Looping over periodic signals and checking if the array of transit times (and durations) matches
+        for perpl in perdc_detns:
+            new_trans_arr=((lc['time'][lc['mask']]-all_dets[perpl]['tcen']+0.5*all_dets[perpl]['tdur'])%all_dets[perpl]['period'])<all_dets[perpl]['tdur']
+            #trans_arr=np.hstack((np.arange(all_dets[perpl]['tcen'],np.nanmin(lc['time'])-all_dets[perpl]['tdur'],-1*all_dets[perpl]['period'])[::-1],np.arange(all_dets[perpl]['tcen']+all_dets[perpl]['period'],np.nanmax(lc['time'])+all_dets[perpl]['tdur'],all_dets[perpl]['period'])))
+            #print(perpl,trans_arr)
+            for monopl in mono_detns:
+                if all_dets[monopl]['orbit_flag'][:2]!='FP' and all_dets[perpl]['orbit_flag'][:2]!='FP':
+                    roundtr=abs(lc['time'][lc['mask']]-all_dets[monopl]['tcen'])<(2.5*all_dets[monopl]['tdur'])
+                    new_trans_arr2=abs(lc['time'][lc['mask']][roundtr]-all_dets[monopl]['tcen'])<(0.5*all_dets[monopl]['tdur'])
+                    sum_overlap=np.sum(new_trans_arr[roundtr]&new_trans_arr2)
+                    prox_stat=sum_overlap/np.hypot(np.sum(new_trans_arr[roundtr]),np.sum(new_trans_arr2))
+                    #adding depth comparison - if depths are a factor of >3different we start reducing prox_stat by the log ratio
+                    prox_stat/=np.clip(abs(np.log(all_dets[perpl]['depth']/all_dets[monopl]['depth'])),1.0,20)
+                    '''
+                    nearest_trans=trans_arr[np.argmin(abs(all_dets[monopl]['tcen']-trans_arr))] #Proximity to a transit
+                    trans_perdic=abs(lc['time'][lc['mask']]-nearest_trans)<(0.5*all_dets[perpl]['tdur'])
+                    trans_mono=abs(lc['time'][lc['mask']]-all_dets[monopl]['tcen'])<(0.5*all_dets[monopl]['tdur'])
+                    prox_stat=np.hypot(np.sum(trans_perdic&trans_mono)/np.sum(trans_perdic),
+                                       np.sum(trans_perdic&trans_mono)/np.sum(trans_mono))
+                    '''
+                    print("Multi-mono compare",perpl,all_dets[perpl]['tdur'],"|",monopl,all_dets[monopl]['tcen'],all_dets[monopl]['tdur'],prox_stat)
+                    if prox_stat>0.33:
+                        #These overlap - taking the highest SNR signal
+                        print("correlation - ",all_dets[perpl]['snr'],all_dets[monopl]['snr'])
+                        if all_dets[perpl]['snr']>=all_dets[monopl]['snr']:
+                            all_dets[monopl]['orbit_flag']= 'FP - confusion with '+perpl
+                        elif all_dets[perpl]['snr']<all_dets[monopl]['snr']:
+                            all_dets[perpl]['orbit_flag']= 'FP - confusion with '+monopl
+
+    mono_detns=[pl for pl in all_dets if (all_dets[pl]['orbit_flag']=='mono')&(all_dets[pl]['flag'] not in ['asteroid','EB','instrumental','lowSNR','variability','step'])]
+    perdc_detns=[pl for pl in all_dets if (all_dets[pl]['orbit_flag'] in ['periodic','duo'])&(all_dets[pl]['orbit_flag']!='variability')]
+
+    return all_dets, mono_detns, perdc_detns
     
 def CheckMonoPairs(lc_time, all_pls,prox_thresh=3.5, **kwargs):
     #Loop through each pair of monos without a good period, and check:
@@ -1742,6 +1889,7 @@ def CheckMonoPairs(lc_time, all_pls,prox_thresh=3.5, **kwargs):
                     proxs[-1]+=(20*(Npts_in_tr/Npts_from_known_transits-1))**2
                     proxs[-1]/=(all_pls[m2]['snr']/all_pls[m1]['snr'])**0.5 #Including SNR factor - higher SNR is favoured
                     #print(m1,m2,all_pls[m1]['depth'],all_pls[m2]['depth'],all_pls[m1]['tdur'],all_pls[m2]['tdur'],Npts_in_tr,Npts_from_known_transits,(all_pls[m2]['snr']/all_pls[m1]['snr'])**0.5,proxs[-1])
+            print("Mono pair searching",m1,proxs)
 
             #Taking the best-fitting lower-SNR detection which matches:
             proxs=np.array(proxs)
@@ -1755,8 +1903,8 @@ def CheckMonoPairs(lc_time, all_pls,prox_thresh=3.5, **kwargs):
                         if key=='period':
                             print("tcens = ",all_pls[m1]['tcen'],all_pls[m2]['tcen'])
                             newm1['period']=abs(all_pls[m1]['tcen']-all_pls[m2]['tcen'])
-                        elif key=='snr':
-                            newm1['snr']=np.hypot(all_pls[m1]['snr'],all_pls[m2]['snr'])
+                        elif key in ['snr','snr_r']:
+                            newm1[key]=np.hypot(all_pls[m1][key],all_pls[m2][key])
                         elif type(all_pls[m2][key])==float and key!='tcen':
                             #Average of two:
                             #print(key,all_pls[m1][key],all_pls[m2][key],0.5*(all_pls[m1][key]+all_pls[m2][key]))
@@ -2102,14 +2250,15 @@ def get_interpmodels(Rs,Ms,Teff,lc_time,lc_flux_unit,mission='tess',n_durs=3,tex
     tdurs=((2*1.1*Rs*np.sqrt(1-b_steps**2))/tt.sqrt(vx**2 + vy**2)).eval().ravel()
 
     # Compute the model light curve using starry
-    interpt=np.linspace(-0.6*np.max(tdurs),0.6*np.max(tdurs),600)
-
+    interpt=np.linspace(-0.6*np.max(tdurs),0.6*np.max(tdurs),600).astype(np.float32)
+    
     ys=xo.LimbDarkLightCurve(u_star).get_light_curve(orbit=orbits, r=np.tile(0.1*Rs,n_durs), 
-                                                     t=interpt.astype(np.float32), texp=texp
+                                                     t=interpt, texp=texp
                                                      ).eval()/lc_flux_unit
     interpmodels=[]
     for row in range(n_durs):
-        interpmodels+=[interpolate.interp1d(interpt,ys[:,row],bounds_error=False,fill_value=(0.0,0.0))]
+        interpmodels+=[interp.interp1d(interpt.astype(float).ravel(),ys[:,row].astype(float).ravel(),
+                                            bounds_error=False,fill_value=(0.0,0.0),kind = 'cubic')]
 
     return interpmodels,tdurs
 
@@ -2151,6 +2300,8 @@ def VetCand(pl_dic,pl,ID,lc,Rs=1.0,Ms=1.0,Teff=5800,
             cent_ax=vetfig.add_subplot(122)
     else:
         var_ax=None
+        ast_ax=None
+        cent_ax=None
     #update dic:
     if do_fit:
         pl_dic.update(monoparams)
@@ -2244,7 +2395,7 @@ def VetCand(pl_dic,pl,ID,lc,Rs=1.0,Ms=1.0,Teff=5800,
     else:
         return pl_dic, None
 
-def MonoVetting(ID, mission, tcen=None, tdur=None, overwrite=False, do_search=True,
+def MonoVetting(ID, mission, tcen=None, tdur=None, overwrite=None, do_search=True,
                 useL2=False,PL_ror_thresh=0.2,variable_llk_thresh=5,file_loc=None,
                 plot=False,do_fit=False,re_vet=False,re_fit=False,
                 **kwargs):
@@ -2277,12 +2428,29 @@ def MonoVetting(ID, mission, tcen=None, tdur=None, overwrite=False, do_search=Tr
      - plot_loc=file_loc+"/"
      - poly_order=4
      '''
+    if overwrite is None:
+        overwrites={'starpars':False,'lc':False,'monos':False,'multis':False,'vet':False,'fit':False}
+    elif overwrite=='all':
+        overwrites={'starpars':True,'lc':True,'monos':True,'multis':True,'vet':True,'fit':True}
+    else:
+        overwrites={}
+        for step in ['starpars','lc','monos','multis','vet','fit']:
+            overwrites[step]=step in overwrite
+            
+        if overwrites['lc']:
+            overwrites['monos']=True
+            overwrites['multis']=True
+        if overwrites['monos'] or overwrites['multis']:
+            overwrites['vet']=True
+            overwrites['fit']=True
+                
     if file_loc is None:
         #Creating a ID directory in the current directory for the planet fits/docs
-        file_loc=tools.id_dic[mission]+str(ID).zfill(11)
+        file_loc=MonoData_savepath+'/'+tools.id_dic[mission]+str(ID).zfill(11)
     elif file_loc[-1]=='/':
         #If we're given a directory, we'll create a ID directory in there for the planet fits/docs
         file_loc=file_loc+tools.id_dic[mission]+str(ID).zfill(11)
+    print(file_loc,kwargs)
     kwargs['file_loc']=file_loc
     
     mono_SNR_thresh=6.5 if 'mono_SNR_thresh' not in kwargs else kwargs['mono_SNR_thresh']
@@ -2309,10 +2477,10 @@ def MonoVetting(ID, mission, tcen=None, tdur=None, overwrite=False, do_search=Tr
 
     if 'StarPars' not in kwargs:
         #loading Rstar,Tess, logg and rho from csvs:
-        if not os.path.isfile(file_loc+"/"+file_loc.split('/')[-1]+'_starpars.csv') or overwrite:
+        if not os.path.isfile(file_loc+"/"+file_loc.split('/')[-1]+'_starpars.csv') or overwrites['starpars']:
             from .stellar import starpars
             #Gets stellar info
-            info,_=starpars.getStellarInfoFromCsv(ID,mission)
+            info,_,_=starpars.getStellarInfoFromCsv(ID,mission)
             info.to_csv(file_loc+"/"+file_loc.split('/')[-1]+'_starpars.csv')
         else:
             print("loading from ",file_loc+"/"+file_loc.split('/')[-1]+'_starpars.csv')
@@ -2334,7 +2502,7 @@ def MonoVetting(ID, mission, tcen=None, tdur=None, overwrite=False, do_search=Tr
         Rstar, rhostar, Teff, logg = StarPars
         
     #opening lightcurve:
-    if not os.path.isfile(file_loc+"/"+file_loc.split('/')[-1]+'_lc.pickle') or overwrite:
+    if not os.path.isfile(file_loc+"/"+file_loc.split('/')[-1]+'_lc.pickle') or overwrites['lc']:
         #Gets Lightcurve
         lc,hdr=tools.openLightCurve(ID,mission,use_ppt=False)
         pickle.dump(lc,open(file_loc+"/"+file_loc.split('/')[-1]+'_lc.pickle','wb'))
@@ -2345,13 +2513,19 @@ def MonoVetting(ID, mission, tcen=None, tdur=None, overwrite=False, do_search=Tr
     #####################################
     #  DOING MONOTRANSIT PLANET SEARCH:
     #####################################
-    if not os.path.isfile(file_loc+"/"+file_loc.split('/')[-1]+'_monos.pickle') or overwrite:
-        if do_search:
+    if not os.path.isfile(file_loc+"/"+file_loc.split('/')[-1]+'_monos.pickle') or overwrites['monos']:
+        if do_search and not re_vet:
             both_dic, monosearchparams, monofig = MonoTransitSearch(deepcopy(lc),ID,
                                                                     Rs=Rstar[0],Ms=Ms,Teff=Teff[0],
                                                                     plot_loc=file_loc+"/", plot=plot,**kwargs)
+            pickle.dump(monosearchparams,open(file_loc+"/"+file_loc.split('/')[-1]+'_mono_searchpars.pickle','wb'))
+            
             if plot:
                 figs['mono']=monofig
+        elif re_vet:
+            both_dic=pickle.load(open(file_loc+"/"+file_loc.split('/')[-1]+'_monos.pickle','rb'))
+            if plot and os.path.isfile(file_loc+"/"+str(ID).zfill(11)+'_Monotransit_Search.pdf'):
+                figs['mono']= file_loc+"/"+str(ID).zfill(11)+'_Monotransit_Search.pdf'
         else:
             intr=lc['mask']&(abs(lc['time']-tcen)<0.45*tdur)
             outtr=lc['mask']&(abs(lc['time']-tcen)<1.25*tdur)&(~intr)
@@ -2384,13 +2558,17 @@ def MonoVetting(ID, mission, tcen=None, tdur=None, overwrite=False, do_search=Tr
     ###################################
     #   DOING PERIODIC PLANET SEARCH:
     ###################################
-    if not os.path.isfile(file_loc+"/"+file_loc.split('/')[-1]+'_multis.pickle') or overwrite:
-        if do_search:
+    if not os.path.isfile(file_loc+"/"+file_loc.split('/')[-1]+'_multis.pickle') or overwrites['multis'] or re_vet:
+        if do_search and not re_vet:
             both_dic, perfig = PeriodicPlanetSearch(deepcopy(lc),ID,deepcopy(both_dic),plot_loc=file_loc+"/",plot=plot,
                                                     rhostar=rhostar[0], Mstar=Ms, Rstar=Rstar[0], Teff=Teff[0], **kwargs)
             if plot:
                 figs['multi']=perfig
-        
+        elif re_vet:
+            both_dic=pickle.load(open(file_loc+"/"+file_loc.split('/')[-1]+'_multis.pickle','rb'))
+            if plot and os.path.isfile(file_loc+"/"+str(ID).zfill(11)+'_multi_search.pdf'):
+                figs['multi']= file_loc+"/"+str(ID).zfill(11)+'_multi_search.pdf'
+
         ###################################
         #  VETTING PERIODIC CANDIDATES:
         ###################################
@@ -2399,7 +2577,7 @@ def MonoVetting(ID, mission, tcen=None, tdur=None, overwrite=False, do_search=Tr
                 pl_dic, pl_fig = VetCand(both_dic[pl],pl,ID,lc,Rs=Rstar[0],Ms=Ms,Teff=Teff[0],
                                          mono_SNR_thresh=mono_SNR_thresh,mono_SNR_r_thresh=mono_SNR_r_thresh,
                                          variable_llk_thresh=variable_llk_thresh,plot=plot,
-                                         do_fit=False,**kwargs)
+                                         do_fit=re_vet,**kwargs)
                 if plot:
                     figs[pl]=pl_fig
         pickle.dump(both_dic,open(file_loc+"/"+file_loc.split('/')[-1]+'_multis.pickle','wb'))
@@ -2412,14 +2590,18 @@ def MonoVetting(ID, mission, tcen=None, tdur=None, overwrite=False, do_search=Tr
     #  IDENTIFYING CONFUSED CANDIDATES:
     #######################################
     if len(both_dic)>0:
-        if not os.path.isfile(file_loc+"/"+file_loc.split('/')[-1]+'_allpls.pickle') or overwrite or re_vet:
+        if not os.path.isfile(file_loc+"/"+file_loc.split('/')[-1]+'_allpls.pickle') or overwrites['vet'] or re_vet:
             #Loading candidates from file:
             # Removing any monos or multis which are confused (e.g. a mono which is in fact in a multi)
-            both_dic,monos,multis = CheckPeriodConfusedPlanets(deepcopy(lc),deepcopy(both_dic))
+            both_dic,monos,multis = CheckPeriodConfusedPlanets(deepcopy(lc),deepcopy(both_dic),mono_multi=False)
             print({pl:{'tcen':both_dic[pl]['tcen'],'depth':both_dic[pl]['depth'],'period':both_dic[pl]['period'],'orbit_flag':both_dic[pl]['orbit_flag'],'flag':both_dic[pl]['flag']} for pl in both_dic})
 
             #Check pairs of monos for potential match and period:
             both_dic = CheckMonoPairs(lc['time'], deepcopy(both_dic),**kwargs)
+            #Doing the period confusion again but now including duos, and comparing multis with monos
+            both_dic,monos,multis = CheckPeriodConfusedPlanets(deepcopy(lc),deepcopy(both_dic),
+                                                               mono_mono=False,multi_multi=True,mono_multi=True)
+
             monos=[pl for pl in both_dic if both_dic[pl]['orbit_flag']=='mono']
             duos=[pl for pl in both_dic if both_dic[pl]['orbit_flag']=='duo']
             multis=[pl for pl in both_dic if both_dic[pl]['orbit_flag']=='periodic']
@@ -2517,7 +2699,7 @@ def MonoVetting(ID, mission, tcen=None, tdur=None, overwrite=False, do_search=Tr
                 figs['tab']=file_loc+"/"+str(ID).zfill(11)+'_table.pdf'
             else:
                 figs['tab']=file_loc+"/"+str(ID).zfill(11)+'_table.pdf'
-        if not os.path.isfile(file_loc+"/"+file_loc.split('/')[-1]+'_candidates.csv') or overwrite or re_vet:
+        if not os.path.isfile(file_loc+"/"+file_loc.split('/')[-1]+'_candidates.csv') or overwrites['vet'] or re_vet:
             df.to_csv(file_loc+"/"+file_loc.split('/')[-1]+'_candidates.csv')
         #all_cands_df.to_csv("all_cands.csv")
         
@@ -2561,9 +2743,9 @@ def MonoVetting(ID, mission, tcen=None, tdur=None, overwrite=False, do_search=Tr
             # PLANET MODELLING:
             print({pl:{'tcen':both_dic[pl]['tcen'],'depth':both_dic[pl]['depth'],'period':both_dic[pl]['period'],'orbit_flag':both_dic[pl]['orbit_flag'],'flag':both_dic[pl]['flag']} for pl in both_dic})
             print("Planets to model:",[obj for obj in both_dic if both_dic[obj]['flag']=='planet'])
-            if not os.path.isfile(file_loc+"/"+file_loc.split('/')[-1]+'_model.pickle') or overwrite or re_fit:
+            if not os.path.isfile(file_loc+"/"+file_loc.split('/')[-1]+'_model.pickle') or overwrites['fit'] or re_fit:
                 
-                mod=MonoFit.monoModel(ID, lc, {},savefileloc=file_loc+'/')
+                mod=MonoFit.monoModel(ID, lc, {}, savefileloc=file_loc+'/')
                 #If not, we have a planet.
                 #Checking if monoplanet is single, double-with-gap, or periodic.
                 multis=[]
@@ -2594,6 +2776,17 @@ def MonoVetting(ID, mission, tcen=None, tdur=None, overwrite=False, do_search=Tr
                 mod = pickle.load(open(file_loc+"/"+file_loc.split('/')[-1]+'_model.pickle','rb'))
             if do_fit:
                 mod.RunMcmc()
+                pickle.dump(mod,open(file_loc+"/"+file_loc.split('/')[-1]+'_model.pickle','wb'))
+                if plot:
+                    print("plotting")
+                    mod.Plot(n_samp=1)
+                    pickle.dump(mod,open(file_loc+"/"+file_loc.split('/')[-1]+'_model.pickle','wb'))
+                    mod.PlotPeriods()
+                    #pickle.dump(mod,open(file_loc+"/"+file_loc.split('/')[-1]+'_model.pickle','wb'))
+                    #mod.PlotCorner()
+                    #pickle.dump(mod,open(file_loc+"/"+file_loc.split('/')[-1]+'_model.pickle','wb'))
+                    #mod.Table()
+                    #pickle.dump(mod,open(file_loc+"/"+file_loc.split('/')[-1]+'_model.pickle','wb'))
             return mod, both_dic
         else:
             #NO EB OR PC candidates - likely low-SNR or FP.
@@ -2610,7 +2803,7 @@ if __name__=='__main__':
     mission=sys.argv[2]
     tcen=float(sys.argv[3]) if sys.argv[3]!=0.0 else None
     tdur=float(sys.argv[4]) if sys.argv[4]!=0.0 else None
-    overwrite=bool(sys.argv[5])
+    overwrite=sys.argv[5]
     do_search=bool(sys.argv[6])
     useL2=bool(sys.argv[7])
     PL_ror_thresh=float(sys.argv[8])
