@@ -105,6 +105,8 @@ def TICdata(tics,sect=None,getImageData=False):
     """
     if type(tics)==int or type(tics)==str:
         tics=np.array([tics])
+    elif type(tics)==float:
+        tics=np.array([int(tics)])
     ticStringList=tics.astype(str)
     allData=[]
 
@@ -1050,44 +1052,68 @@ def MainSequenceFit(dist,V):
     info['epos_teff']=0.2*info['teff']
     return info
 
-def getStellarInfoFromCsv(ID,mission,k2tab=None):
+def getStellarInfoFromCsv(ID,mission,k2tab=None,keptabs=None):
     # Kepler on Vizier J/ApJ/866/99/table1
     # New K2: "http://kevinkhu.com/table1.txt"
     # TESS on Vizier (TICv8)
     if mission.lower()=='tess':
-        info = TICdata(ID).iloc[0]
-        print("TESS object",info)
+        info = TICdata(int(ID)).iloc[0]
+        print("TESS object",ID,info.name)
         k2tab = None
+        keptabs = None
     else:
         if mission.lower()=='kepler':
-            info = Vizier(catalog='J/ApJ/866/99/table1').query_constraints(KIC=int(ID))[0].to_pandas().iloc[0]
-            info['mission']='Kepler'
+            from ..tools import MonoData_tablepath
+            if keptabs is None:
+                keptabs=[ascii.read(os.path.join(MonoData_tablepath,'GKSPCPapTable1_Final.txt'),delimiter='&').to_pandas(),
+                         ascii.read(os.path.join(MonoData_tablepath,'GKSPCPapTable2_Final.txt'),delimiter='&').to_pandas()]
+            if ID in keptabs[0]['KIC'].values:
+                info1=keptabs[0].loc[keptabs[0]['KIC']==ID]
+                info2=keptabs[1].loc[keptabs[1]['KIC']==ID]
+                info1=info1.iloc[0] if type(info1)==pd.DataFrame else info1
+                info2=info2.iloc[0] if type(info2)==pd.DataFrame else info2
+                info=pd.concat([info1,info2.drop('KIC')])
+                info=info.rename(index={'KIC':'ID','gmag':'GAIA',
+                                        'iso_rad':'rad',  'iso_rad_err1':'epos_rad',   'iso_rad_err2':'eneg_rad',
+                                        'iso_mass':'mass','iso_mass_err1':'epos_mass', 'iso_mass_err2':'eneg_mass',
+                                        'iso_teff':'teff','iso_teff_err1':'epos_teff', 'iso_teff_err2':'eneg_teff',
+                                        'iso_logg':'logg','iso_logg_err1':'epos_logg', 'iso_logg_err2':'eneg_logg',
+                                        'iso_dis':'dist', 'iso_dis_err1':'epos_dist',  'iso_dis_err2':'eneg_dist',
+                                        'iso_feh':'feh',  'iso_feh_err1':'epos_feh',   'iso_feh_err2':'eneg_feh',
+                                        'iso_age':'age',  'iso_age_err1':'epos_age',   'iso_age_err2':'eneg_age'})
+                info['rho']=np.power(10,info['iso_rho'])
+                info['epos_rho']=np.power(10,info['iso_rho_err1'])
+                info['eneg_rho']=np.power(10,info['iso_rho_err2'])
+                info=info.drop(['iso_rho','iso_rho_err1','iso_rho_err2'])
+            else:
+                print(ID,"not in Gaia-Kepler cat")
+                info = Vizier(catalog='J/ApJ/866/99/table1').query_constraints(KIC=int(ID))[0].to_pandas().iloc[0]
+                info['mission']='Kepler'
 
-            info=info.rename(index={'KIC':'ID','Gaia':'GAIA',
-                                     'Dist':'dist','E_Dist':'epos_dist','e_Dist':'eneg_dist',
-                                     'R_':'rad','E_R_':'epos_Rad', 'e_R_':'eneg_Rad',
-                                     '_RA':'ra','_DE':'dec'})
-            info['eneg_Teff']=info['e_Teff']
-            info['epos_Teff']=info['e_Teff']
-            info['e_d']=0.5*(abs(info['epos_dist'])+abs(info['eneg_dist']))
-            info['e_rad']=0.5*(abs(info['eneg_Rad'])+abs(info['epos_Rad']))
+                info=info.rename(index={'KIC':'ID','Gaia':'GAIA',
+                                         'Dist':'dist','E_Dist':'epos_dist','e_Dist':'eneg_dist',
+                                         'R_':'rad','E_R_':'epos_Rad', 'e_R_':'eneg_Rad',
+                                         '_RA':'ra','_DE':'dec'})
+                info['eneg_Teff']=info['e_Teff']
+                info['epos_Teff']=info['e_Teff']
+                info['e_d']=0.5*(abs(info['epos_dist'])+abs(info['eneg_dist']))
+                info['e_rad']=0.5*(abs(info['eneg_Rad'])+abs(info['epos_Rad']))
 
-            radec = SkyCoord(info['ra']*u.deg,info['dec']*u.deg)
-            print("https://exoplanetarchive.ipac.caltech.edu/cgi-bin/nstedAPI/nph-nstedAPI?table=q1_q17_dr25_supp_stellar&select=kepid,teff,teff_err1,teff_err2,teff_prov,logg,logg_err1,logg_err2,feh,radius,radius_err1,radius_err2,mass,mass_err1,mass_err2&order=kepid&format=csv&where=kepid=%27"+str(int(ID))+"%27")
-            xtra=pd.read_csv("https://exoplanetarchive.ipac.caltech.edu/cgi-bin/nstedAPI/nph-nstedAPI?table=q1_q17_dr25_supp_stellar&select=kepid,teff,teff_err1,teff_err2,teff_prov,logg,logg_err1,logg_err2,feh,radius,radius_err1,radius_err2,mass,mass_err1,mass_err2&format=csv&where=kepid=%27"+str(int(ID))+"%27").iloc[0]
-            print(xtra['radius'],info['rad'],xtra['radius_err1'])
-            if (xtra['radius']-info['rad'])<(0.5*xtra['radius_err1']):
-                info['mass']=xtra['mass']
-                info['eneg_Mass']=xtra['mass_err1']
-                info['epos_Mass']=xtra['mass_err2']
-                info['e_mass']=0.5*(abs(info['eneg_Mass'])+abs(info['epos_Mass']))
-                info['logg']=xtra['logg']
-                info['eneg_logg']=xtra['logg_err1']
-                info['epos_logg']=xtra['logg_err2']
-                info['e_logg']=0.5*(abs(info['eneg_logg'])+abs(info['epos_logg']))
+                radec = SkyCoord(info['ra']*u.deg,info['dec']*u.deg)
+                print("https://exoplanetarchive.ipac.caltech.edu/cgi-bin/nstedAPI/nph-nstedAPI?table=q1_q17_dr25_supp_stellar&select=kepid,teff,teff_err1,teff_err2,teff_prov,logg,logg_err1,logg_err2,feh,radius,radius_err1,radius_err2,mass,mass_err1,mass_err2&order=kepid&format=csv&where=kepid=%27"+str(int(ID))+"%27")
+                xtra=pd.read_csv("https://exoplanetarchive.ipac.caltech.edu/cgi-bin/nstedAPI/nph-nstedAPI?table=q1_q17_dr25_supp_stellar&select=kepid,teff,teff_err1,teff_err2,teff_prov,logg,logg_err1,logg_err2,feh,radius,radius_err1,radius_err2,mass,mass_err1,mass_err2&format=csv&where=kepid=%27"+str(int(ID))+"%27").iloc[0]
+                print(xtra['radius'],info['rad'],xtra['radius_err1'])
+                if (xtra['radius']-info['rad'])<(0.5*xtra['radius_err1']):
+                    info['mass']=xtra['mass']
+                    info['eneg_Mass']=xtra['mass_err1']
+                    info['epos_Mass']=xtra['mass_err2']
+                    info['e_mass']=0.5*(abs(info['eneg_Mass'])+abs(info['epos_Mass']))
+                    info['logg']=xtra['logg']
+                    info['eneg_logg']=xtra['logg_err1']
+                    info['epos_logg']=xtra['logg_err2']
+                    info['e_logg']=0.5*(abs(info['eneg_logg'])+abs(info['epos_logg']))
 
-                info['feh']=xtra['feh']
-                
+                    info['feh']=xtra['feh']
             k2tab=None
         elif mission.lower()=='k2':
             if k2tab is None:
@@ -1106,7 +1132,6 @@ def getStellarInfoFromCsv(ID,mission,k2tab=None):
             info['e_rad']=0.5*(abs(info['eneg_rad'])+abs(info['epos_rad']))
             info['e_mass']=0.5*(abs(info['eneg_mass'])+abs(info['epos_mass']))
             info['e_logg']=0.5*(abs(info['eneg_logg'])+abs(info['epos_logg']))
-            print(info['GAIA'])
             if not np.isnan(info['GAIA']):
                 gaiainfo=[]
                 #DR2:
@@ -1131,7 +1156,7 @@ def getStellarInfoFromCsv(ID,mission,k2tab=None):
                     radec=SkyCoord(kicdat['rastr'],kicdat['decstr'],unit=(u.hourangle,u.deg))
                     info['ra']=radec.ra.deg
                     info['dec']=radec.dec.deg
-
+            keptabs=None
         #Now getting TIC, which may be present for the above too
         try:
             tic_dat = Catalogs.query_criteria("TIC",coordinates=radec,radius=15/3600,objType="STAR")#This is not used, as TIC is on ExoFop
@@ -1150,6 +1175,7 @@ def getStellarInfoFromCsv(ID,mission,k2tab=None):
     #Switching out capitals:
     if 'd' in info.index:
         info=info.rename(index={'d':'dist'})
+        
     #Switching all e_ and E_ to eneg and epos:
     for col in ['teff','rad','mass','dist','logg','rho']:
         captd=col[0].upper()+col[1:]
@@ -1172,10 +1198,15 @@ def getStellarInfoFromCsv(ID,mission,k2tab=None):
         elif 'e_'+col in info.index and 'epos_'+col not in info.index:
             info['epos_'+col]=info['e_'+col]
         
-        if 'eneg_'+col not in info.index and col in info:
+        if 'eneg_'+col not in info.index and col in info and info[col] is not None:
             #NO ERRORS PRESENT???
             info['eneg_'+col]=info[col]*0.5
-        if 'epos_'+col not in info.index and col in info:
+        elif col not in info or info[col] is None:
+            info[col]=0.0
+            info['eneg_'+col]=0.0
+            info['epos_'+col]=0.0
+            
+        if 'epos_'+col not in info.index and col in info and info[col] is not None:
             info['epos_'+col]=info[col]*0.5
         
     if 'rad' not in info:
@@ -1191,9 +1222,9 @@ def getStellarInfoFromCsv(ID,mission,k2tab=None):
             info['logg']=logg[0]
             info['eneg_logg']=logg[1]
             info['epos_logg']=logg[2]
-            info['rhos']=rhos[0]
-            info['eneg_rhos']=rhos[1]
-            info['epos_rhos']=rhos[2]
+            info['rho']=rhos[0]
+            info['eneg_rho']=rhos[1]
+            info['epos_rho']=rhos[2]
         except:
             print("getStellarInfo fails")
             
@@ -1231,8 +1262,27 @@ def getStellarInfoFromCsv(ID,mission,k2tab=None):
             info['rho']=1.411*(info['mass']/info['rad']**3)
             info['eneg_rho']=info['rho']-1.411*((info['mass']-abs(info['eneg_mass']))/(info['rad']+info['epos_rad'])**3)
             info['epos_rho']=1.411*((info['mass']+info['epos_mass'])/(info['rad']-abs(info['eneg_rad']))**3)-info['rho']
-
-    return info, k2tab
+    elif 'mass' in info and 'rad' in info and 'logg' in info:
+        #We might be able to further constrain density here, if we have independent measures of logg/R/M:
+        allrhos=[]
+        MR={'rho':1.411*(info['mass']/info['rad']**3)}
+        MR['eneg_rho']=MR['rho']-1.411*((info['mass']-abs(info['eneg_mass']))/(info['rad']+info['epos_rad'])**3)
+        MR['epos_rho']=1.411*((info['mass']+info['epos_mass'])/(info['rad']-abs(info['eneg_rad']))**3)-MR['rho']
+        allrhos+=[MR]
+        if 'eneg_logg' in info and not np.isnan(info['eneg_logg']) and info['eneg_logg']!=0.0:
+            logg={'rho':np.power(10,info['logg']-4.43)/info['rad']}
+            logg['eneg_rho']=logg['rho']-np.power(10,(info['logg']-abs(info['eneg_logg']))-4.43) / (info['rad']+abs(info['epos_rad']))
+            logg['epos_rho']=np.power(10,(info['logg']+abs(info['epos_logg']))-4.43) / (info['rad']-abs(info['eneg_rad']))-logg['rho']
+            allrhos+=[logg]
+        rhos={'rho':info['rho'],'epos_rho':info['epos_rho'],'eneg_rho':info['eneg_rho']}
+        allrhos+=[rhos]
+        
+        best_rhos=np.argmin([0.5*(rho['epos_rho']+abs(rho['eneg_rho'])) for rho in allrhos])
+        info['rho']=allrhos[best_rhos]['rho']
+        info['epos_rho']=allrhos[best_rhos]['epos_rho']
+        info['eneg_rho']=allrhos[best_rhos]['eneg_rho']
+        
+    return info, k2tab, keptabs
         
 
 def getStellarInfo(ID,hdr,mission,overwrite=False,fileloc=None,savedf=True,use_surveys=True):

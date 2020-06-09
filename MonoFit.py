@@ -35,15 +35,19 @@ import glob
 import warnings
 warnings.filterwarnings("ignore")
 
+MonoData_tablepath = os.path.join(os.path.dirname(os.path.abspath( __file__ )),'data','tables')
+if os.environ.get('MONOTOOLSPATH') is None:
+    MonoData_savepath = os.path.join(os.path.dirname(os.path.abspath( __file__ )),'data')
+else:
+    MonoData_savepath = os.environ.get('MONOTOOLSPATH')
+
+from . import tools
 from .stellar import starpars
 from . import MonoSearch
 
-from . import tools
-
-MonoFit_path = os.path.dirname(os.path.abspath( __file__ ))
 
 #creating new hidden directory for theano compilations:
-theano_dir=MonoFit_path+'/.theano_dir_'+str(np.random.randint(8))
+theano_dir=MonoData_savepath+'/.theano_dir_'+str(np.random.randint(8))
 if not os.path.isdir(theano_dir):
     os.mkdir(theano_dir)
 os.environ["THEANO_FLAGS"] = "device=cpu,floatX=float32,cxx=/usr/local/Cellar/gcc/9.3.0_1/bin/g++-9,cxxflags = -fbracket-depth=1024,base_compiledir="+theano_dir
@@ -154,6 +158,8 @@ class monoModel():
         #Looping through potential periods and counting points in-transit
         #This
         trans=abs(self.lc['time'][self.lc['mask']]-tcen)<0.3*tdur
+        if np.sum(trans)==0:
+            trans=abs(self.lc['time'][self.lc['mask']]-tcen)<0.5*tdur
 
         days_in_known_transits = np.sum(trans)*float(self.lc['cadence'][self.lc['mask']][trans][0][1:])/1440
         if tcen_2 is not None:
@@ -210,7 +216,7 @@ class monoModel():
         self.logg=np.array(logg)
         self.FeH=FeH
     
-    def GetSavename(self, how='load', suffix='mcmc.pickle'):
+    def GetSavename(self, how='load', suffix='mcmc.pickle',overwrite=True):
         '''
         # Get unique savename (defaults to MCMC suffic) with format:
         # [savefileloc]/[T/K]IC[11-number ID]_[20YY-MM-DD]_[n]_mcmc.pickle
@@ -226,8 +232,8 @@ class monoModel():
         # OUTPUTS:
         # - filepath
         '''
-        if self.savefileloc is None:
-            self.savefileloc=os.path.join(MonoFit_path,'data',self.id_dic[self.mission]+str(self.ID).zfill(11))
+        if self.savefileloc is None or overwrite:
+            self.savefileloc=os.path.join(MonoData_savepath,self.id_dic[self.mission]+str(self.ID).zfill(11))
         if not os.path.isdir(self.savefileloc):
             os.system('mkdir '+self.savefileloc)
         pickles=glob.glob(os.path.join(self.savefileloc,self.id_dic[self.mission]+str(self.ID).zfill(11)+"*"+suffix))
@@ -284,7 +290,7 @@ class monoModel():
             trans_pred+=[outlc.eval()]
         else:
             trans_pred+=[np.zeros((len(itime),len(self.planets)))]
-
+        
         if 'u_star_kep' in self.init_soln:
             outlc = xo.LimbDarkLightCurve(u_star_kep).get_light_curve(
                                                      orbit=orbit, r=sample['r'],
@@ -294,7 +300,7 @@ class monoModel():
             trans_pred+=[outlc.eval()]
         else:
             trans_pred+=[np.zeros((len(itime),len(self.planets)))]
-
+        
         #Here we're making an index for which telescope (kepler vs tess) did the observations,
         # then we multiply the output n_time x n_pl lightcurves by the n_time x n_pl x 2 index and sum along the 3D axis
         
@@ -305,7 +311,7 @@ class monoModel():
                     self.lc['cad_index'][:,:,0]+=self.lc['flux_err_index'][:,ncad]
                 elif self.cads[ncad][0].lower()=='k':
                     self.lc['cad_index'][:,:,1]+=self.lc['flux_err_index'][:,ncad]
-
+        
         time_index = np.in1d(self.lc['time'],itime)
         if np.sum(time_index)!=len(itime):
             #We have time points that are not from the lightcurve - need to find nearest cadence type. One liner:
@@ -460,7 +466,7 @@ class monoModel():
                    use_GP=True,train_GP=True,constrain_LD=True,ld_mult=3,useL2=True,
                    FeH=0.0,LoadFromFile=False,cutDistance=4.5,
                    debug=True, pred_all_time=False,marginalise_all=False,
-                   use_multinest=False, use_pymc3=True, **kwargs):
+                   use_multinest=False, use_pymc3=True, bin_oot=True, **kwargs):
         # lc - dictionary with arrays:
         #   -  'time' - array of times, (x)
         #   -  'flux' - array of flux measurements (y)
@@ -473,6 +479,7 @@ class monoModel():
         # constrain_LD - Boolean. Whether to use 
         # ld_mult - Multiplication factor on STD of limb darkening]
         # cutDistance - cut out points further than this multiple of transit duration from transit. Default of zero does no cutting
+        # bin_oot - in this case, we bin points outside the cutDistance to 30mins
         
         #Adding settings to class - not updating if we already initialised the model with a non-default value:
         self.overwrite=overwrite
@@ -490,62 +497,108 @@ class monoModel():
         self.pred_all_time=pred_all_time if not hasattr(self,'pred_all_time') or overwrite else pred_all_time
         self.use_multinest=use_multinest if not hasattr(self,'use_multinest') or overwrite else use_multinest
         self.use_pymc3=use_pymc3 if not hasattr(self,'use_pymc3') or overwrite else use_pymc3
-                
-        assert len(self.planets)>0
-
-        print(len(self.planets),'planets |','monos:',self.monos,'multis:',self.multis,'duos:',self.duos, "use GP=",self.use_GP)
+        self.bin_oot=bin_oot if not hasattr(self,'bin_oot') or overwrite else bin_oot
         
         n_pl=len(self.planets)
-        self.cads=np.unique(self.lc['cadence'])
-        #In the case of different cadence/missions, we need to separate their respective errors to fit two logs2
-        self.lc['flux_err_index']=np.column_stack([np.where(self.lc['cadence']==cad,1.0,0.0) for cad in self.cads])
+        assert n_pl>0
 
-        ######################################
-        #   Creating telescope index func:
-        ######################################
-        if not hasattr(self,'tele_index'):
-            #Here we're making an index for which telescope (kepler vs tess) did the observations,
-            # then we multiply the output n_time array by the n_time x 2 index and sum along the 2nd axis
-
-            self.lc['tele_index']=np.zeros((len(self.lc['time']),2))
-            for ncad in range(len(self.cads)):
-                if self.cads[ncad][0].lower()=='t':
-                    self.lc['tele_index'][:,0]+=self.lc['flux_err_index'][:,ncad]
-                elif self.cads[ncad][0].lower()=='k':
-                    self.lc['tele_index'][:,1]+=self.lc['flux_err_index'][:,ncad]
+        print(len(self.planets),'planets |','monos:',self.monos,'multis:',self.multis,'duos:',self.duos, "use GP=",self.use_GP)
 
         ######################################
         #   Masking out-of-transit flux:
         ######################################
         # To speed up computation, here we loop through each planet and add the region around each transit to the data to keep
         if self.cutDistance>0 or not self.use_GP:
-            speedmask=np.tile(False, len(self.lc['time']))
-            in_trans_mask=np.tile(False, len(self.lc['time']))
+            self.lc['near_trans']=np.tile(False, len(self.lc['time']))
+            no_trans_mask=np.tile(False, len(self.lc['time']))
             for ipl in self.multis:
                 phase=(self.lc['time']-self.planets[ipl]['tcen']-0.5*self.planets[ipl]['period'])%self.planets[ipl]['period']-0.5*self.planets[ipl]['period']
-                speedmask+=abs(phase)<self.cutDistance*self.planets[ipl]['tdur']
-                in_trans_mask+=abs(phase)<0.5*self.planets[ipl]['tdur']
+                self.lc['near_trans']+=abs(phase)<self.cutDistance*self.planets[ipl]['tdur']
+                no_trans_mask+=abs(phase)<0.5*self.planets[ipl]['tdur']
             for ipl in self.monos:
-                speedmask+=abs(self.lc['time']-self.planets[ipl]['tcen'])<self.cutDistance*self.planets[ipl]['tdur']
-                in_trans_mask+=abs(self.lc['time']-self.planets[ipl]['tcen'])<0.5*self.planets[ipl]['tdur']
+                self.lc['near_trans']+=abs(self.lc['time']-self.planets[ipl]['tcen'])<self.cutDistance*self.planets[ipl]['tdur']
+                no_trans_mask+=abs(self.lc['time']-self.planets[ipl]['tcen'])<0.5*self.planets[ipl]['tdur']
             for ipl in self.duos:
                 #speedmask[abs(self.lc['time'][self.lc['mask']]-self.planets[ipl]['tcen'])<cutDistance]=True
                 #speedmask[abs(self.lc['time'][self.lc['mask']]-self.planets[ipl]['tcen_2'])<cutDistance]=True
                 for per in self.planets[ipl]['period_aliases']:
                     phase=(self.lc['time']-self.planets[ipl]['tcen']-0.5*per)%per-0.5*per
-                    speedmask+=abs(phase)<self.cutDistance*self.planets[ipl]['tdur']
-                    in_trans_mask+=abs(phase)<0.5*self.planets[ipl]['tdur']
-            self.lc['oot_mask']=self.lc['mask']&speedmask
-            self.lc['in_trans_mask']=~in_trans_mask
-            print(np.sum(speedmask),"points in new lightcurve, compared to ",np.sum(self.lc['mask'])," in original mask, leaving ",np.sum(self.lc['oot_mask']),"points in the lc")
+                    self.lc['near_trans']+=abs(phase)<self.cutDistance*self.planets[ipl]['tdur']
+                    no_trans_mask+=abs(phase)<0.5*self.planets[ipl]['tdur']
+            
+            self.lc['no_trans_mask']=~no_trans_mask
             
             if not self.use_GP:
-                self.lc=tools.lcFlatten(self.lc,transit_mask=self.lc['in_trans_mask'],
+                self.lc=tools.lcFlatten(self.lc,transit_mask=self.lc['no_trans_mask'],
                                              stepsize=0.25*np.min([self.planets[pl]['tdur'] for pl in self.planets]),
                                              winsize=5*np.max([self.planets[pl]['tdur'] for pl in self.planets]))
+            if self.bin_oot:
+                #Creating a pseudo-binned dataset where out-of-transit LC is binned to 30mins but near-transit is not.
+                oot_binsize=1/8 if self.mission.lower()=='kepler' else 1/48
+                oot_binlc=tools.lcBin(self.lc,use_flat=~self.use_GP,extramask=~self.lc['near_trans'],
+                                      modify_lc=False,binsize=oot_binsize)
+                oot_binlc['mask']=np.tile(True,len(oot_binlc['time']))
+                oot_binlc['no_trans_mask']=np.tile(True,len(oot_binlc['time']))
+                oot_binlc['near_trans']=np.tile(False,len(oot_binlc['time']))
+                self.pseudo_binlc={}
+                for key in oot_binlc:
+                    lckey = key.replace("bin_","") if 'bin_' in key else key
+                    lckey = 'flux_err' if lckey=='flux_flat_err' else lckey
+                    print(key,lckey,oot_binlc[key],self.lc[lckey])
+                    self.pseudo_binlc[lckey]=np.hstack((oot_binlc[key],self.lc[lckey][self.lc['near_trans']]))
+                for key in [key for key in self.pseudo_binlc.keys() if key!='time']:
+                    if 'bin_' in key:
+                        _=self.pseudo_binlc.pop(key)
+                    else:
+                        print(key,len(self.pseudo_binlc[key]),len(np.argsort(self.pseudo_binlc['time'])))
+                        self.pseudo_binlc[key]=self.pseudo_binlc[key][np.argsort(self.pseudo_binlc['time'])]
+                self.pseudo_binlc['time']=np.sort(self.pseudo_binlc['time'])
+                self.pseudo_binlc['flux_unit']=self.lc['flux_unit']
+            elif not self.bin_oot:
+                self.lc_near_trans={}
+                lc_len=len(self.lc['time'])
+                for key in self.lc:
+                    if len(self.lc[key])==lc_len:
+                        self.lc_near_trans[key]=self.lc[key][self.lc['near_trans']]
+                    else:
+                        self.lc_near_trans[key]=self.lc[key]
+                
+            
+            print(np.sum(self.lc['near_trans']&self.lc['mask']),"points in new lightcurve, compared to ",np.sum(self.lc['mask'])," in original mask, leaving ",np.sum(self.lc['near_trans']),"points in the lc")
+
         else:
             #Using all points in the 
-            self.lc['oot_mask']=self.lc['mask']
+            self.lc['near_trans']=np.tile(True,len(self.lc['time']))
+        
+
+        ######################################
+        #   Creating flux & telescope index func:
+        ######################################
+        self.cads=np.unique(self.lc['cadence'])
+        #In the case of different cadence/missions, we need to separate their respective errors to fit two logs2
+        self.lc['flux_err_index']=np.column_stack([np.where(self.lc['cadence']==cad,1.0,0.0) for cad in self.cads])
+        if self.bin_oot:
+            self.pseudo_binlc['flux_err_index']=np.column_stack([np.where(self.pseudo_binlc['cadence']==cad,1.0,0.0) for cad in self.cads])
+
+        
+        if not hasattr(self,'tele_index') or ((bin_oot)&~hasattr(self.pseudo_binlc,'tele_index')):
+            #Here we're making an index for which telescope (kepler vs tess) did the observations,
+            # then we multiply the output n_time array by the n_time x 2 index and sum along the 2nd axis
+            
+            self.lc['tele_index']=np.zeros((len(self.lc['time']),2))
+            if self.bin_oot:
+                self.pseudo_binlc['tele_index']=np.zeros((len(self.pseudo_binlc['time']),2))
+            for ncad in range(len(self.cads)):
+                if self.cads[ncad][0].lower()=='t':
+                    self.lc['tele_index'][:,0]+=self.lc['flux_err_index'][:,ncad]
+                    print(self.bin_oot,'making tele_index')
+                    if self.bin_oot:
+                        self.pseudo_binlc['tele_index'][:,0]+=self.pseudo_binlc['flux_err_index'][:,ncad]
+                elif self.cads[ncad][0].lower()=='k':
+                    self.lc['tele_index'][:,1]+=self.lc['flux_err_index'][:,ncad]
+                    if self.bin_oot:
+                        self.pseudo_binlc['tele_index'][:,1]+=self.pseudo_binlc['flux_err_index'][:,ncad]
+
         
         if self.use_GP:
             self.gp={}
@@ -566,34 +619,55 @@ class monoModel():
             mean=pm.Normal("mean",mu=np.median(self.lc['flux'][self.lc['mask']]),
                                   sd=np.std(self.lc['flux'][self.lc['mask']]))
 
-            log_flux_std=np.array([np.log(np.nanstd(self.lc['flux'][~self.lc['in_trans_mask']][self.lc['cadence'][~self.lc['in_trans_mask']]==c])) for c in self.cads]).ravel().astype(np.float32)
+            log_flux_std=np.array([np.log(np.nanstd(self.lc['flux'][~self.lc['no_trans_mask']][self.lc['cadence'][~self.lc['no_trans_mask']]==c])) for c in self.cads]).ravel().astype(np.float32)
             print(log_flux_std)
-            logs2 = pm.Normal("logs2", mu = log_flux_std+1, sd = np.tile(2.0,len(log_flux_std)), shape=len(log_flux_std))
+            logs2 = pm.Normal("logs2", mu = log_flux_std+1, sd = np.tile(1.0,len(log_flux_std)), shape=len(log_flux_std))
 
             # Transit jitter & GP parameters
             #logs2 = pm.Normal("logs2", mu=np.log(np.var(y[m])), sd=10)
-            lcrange=self.lc['time'][self.lc['oot_mask']][-1]-self.lc['time'][self.lc['oot_mask']][0]
-            min_cad = np.nanmin([np.nanmedian(np.diff(self.lc['time'][self.lc['oot_mask']&(self.lc['cadence']==c)])) for c in self.cads])
+            lcrange=self.lc['time'][-1]-self.lc['time'][0]
+            #max_cad = np.nanmax([np.nanmedian(np.diff(self.lc['time'][self.lc['near_trans']&(self.lc['cadence']==c)])) for c in self.cads])
+            av_dur = np.nanmean([self.planets[pl]['tdur'] for pl in self.planets])
             #freqs bounded from 2pi/minimum_cadence to to 2pi/(4x lc length)
-            w0 = pm.InverseGamma("w0",testval=(2*np.pi)/10,
-                                 **xo.estimate_inverse_gamma_parameters(lower=(2*np.pi)/(4*lcrange),
-                                                                        upper=(2*np.pi)/(3*min_cad)))
-            maxpower=25*np.nanstd(self.lc['flux'][self.lc['oot_mask']])
-            minpower=0.01*np.nanmedian(abs(np.diff(self.lc['flux'][self.lc['oot_mask']])))
-            power = pm.InverseGamma("power",testval=maxpower/25,
-                                    **xo.estimate_inverse_gamma_parameters(lower=maxpower, upper=minpower))
-
+            success=False;target=0.05
+            while not success and target<0.21:
+                try:
+                    low=(2*np.pi)/(lcrange/(target/0.01))
+                    up=(2*np.pi)/(0.33*av_dur*(2*target/0.01))
+                    w0 = pm.InverseGamma("w0",testval=(2*np.pi)/10,**xo.estimate_inverse_gamma_parameters(lower=low,upper=up))
+                    success=True
+                except:
+                    low=(2*np.pi)/(10)
+                    up=(2*np.pi)/(6*max_cad)
+                    target*=1.15
+                    success=False
+            print(success, target,lcrange,low,up)
+            maxpower=2.5*np.nanstd(self.lc['flux'][(~self.lc['no_trans_mask'])&self.lc['mask']])
+            minpower=0.1*np.nanmedian(abs(np.diff(self.lc['flux'][(~self.lc['no_trans_mask'])&self.lc['mask']])))
+            print(np.nanmedian(abs(np.diff(self.lc['flux'][self.lc['near_trans']]))),np.nanstd(self.lc['flux'][self.lc['near_trans']]),minpower,maxpower)
+            success=False;target=0.01
+            while not success and target<0.2:
+                try:
+                    power = pm.InverseGamma("power",testval=minpower*5,
+                                            **xo.estimate_inverse_gamma_parameters(lower=minpower,
+                                                                                   upper=maxpower/(target/0.01),
+                                                                                   target=0.1))
+                    success=True
+                except:
+                    target*=1.15
+                    success=False
+            print(success, target)
             S0 = pm.Deterministic("S0", power/(w0**4))
 
             # GP model for the light curve
             kernel = xo.gp.terms.SHOTerm(S0=S0, w0=w0, Q=1/np.sqrt(2))
 
-            self.gp['train'] = xo.gp.GP(kernel, self.lc['time'][~self.lc['in_trans_mask']].astype(np.float32),
-                                   self.lc['flux_err'][~self.lc['in_trans_mask']].astype(np.float32)**2 + \
-                                   tt.dot(self.lc['flux_err_index'][~self.lc['in_trans_mask']],tt.exp(logs2)),
+            self.gp['train'] = xo.gp.GP(kernel, self.lc['time'][~self.lc['no_trans_mask']].astype(np.float32),
+                                   self.lc['flux_err'][~self.lc['no_trans_mask']].astype(np.float32)**2 + \
+                                   tt.dot(self.lc['flux_err_index'][~self.lc['no_trans_mask']],tt.exp(logs2)),
                                    J=2)
             
-            self.gp['train'].log_likelihood(self.lc['flux'][~self.lc['in_trans_mask']]-mean)
+            self.gp['train'].log_likelihood(self.lc['flux'][~self.lc['no_trans_mask']]-mean)
 
             self.gp_init_soln = xo.optimize(start=None, vars=[logs2, power, w0, mean],verbose=True)
             
@@ -602,6 +676,13 @@ class monoModel():
         
 
     def init_pymc3(self,ld_mult=1.5):
+        
+        if self.bin_oot:
+            lc=self.pseudo_binlc
+        elif self.cut_distance>0:
+            lc=self.lc_near_trans
+        else:
+            lc=self.lc
         
         start=None
         with pm.Model() as model:            
@@ -616,11 +697,6 @@ class monoModel():
             rho_S = pm.Deterministic("rho_S",tt.exp(logrho_S))
             Rs = pm.Normal("Rs", mu=self.Rstar[0], sd=np.average(abs(self.Rstar[1:])),testval=self.Rstar[0],shape=1)
             Ms = pm.Deterministic("Ms",(rho_S/1.408)*Rs**3)
-
-            # The baseline flux
-            if not self.use_GP:
-                mean=pm.Normal("mean",mu=np.median(self.lc['flux_flat'][self.lc['mask']]),
-                                      sd=np.std(self.lc['flux_flat'][self.lc['mask']]))
 
             # The 2nd light (not third light as companion light is not modelled) 
             # This quantity is in delta-mag
@@ -682,9 +758,9 @@ class monoModel():
                     mono_bs[pl] = xo.distributions.ImpactParameter("mono_bs_"+pl,ror=tt.exp(mono_logrors[pl]),
                                                                    testval=self.planets[pl]['b'])
                     if not self.assume_circ:
-                        if len(self.planets)==0:
+                        if len(self.planets)==1:
                             mono_eccs[pl] = BoundedBeta("mono_eccs_"+pl, alpha=0.867,beta=3.03,
-                                                         testval=0.05,shape=len(self.monos))
+                                                         testval=0.05)
                         elif len(self.planets)>1:
                             # The eccentricity prior distribution from Van Eylen for multiplanets (lower-e than single planets)
                             mono_eccs[pl] = pm.Bound(pm.Weibull, lower=1e-5, upper=1-1e-5)("mono_eccs_"+pl,alpha= 0.049,beta=2,
@@ -781,35 +857,38 @@ class monoModel():
             #     Initialising Limb Darkening
             ######################################
             # Here we either constrain the LD params given the stellar info, OR we let exoplanet fit them
-            if self.constrain_LD:
-                n_samples=1200
+            
                 # Bounded normal distributions (bounded between 0.0 and 1.0) to constrict shape given star.
 
                 #Single mission
-                ld_dists=self.getLDs(n_samples=3000,mission='tess')
+            if np.any([c[0].lower()=='t' for c in self.cads]) and self.constrain_LD:
+                ld_dists=self.getLDs(n_samples=1200,mission='tess')
                 u_star_tess = pm.Bound(pm.Normal, lower=0.0, upper=1.0)("u_star_tess", 
                                                 mu=np.clip(np.nanmedian(ld_dists,axis=0),0,1),
                                                 sd=np.clip(ld_mult*np.nanstd(ld_dists,axis=0),0.05,1.0), shape=2, testval=np.clip(np.nanmedian(ld_dists,axis=0),0,1))
+            elif np.any([c[0].lower()=='t' for c in self.cads]) and not self.constrain_LD:
+                u_star_tess = xo.distributions.QuadLimbDark("u_star_tess", testval=np.array([0.3, 0.2]))
+            if np.any([c[0].lower()=='k' for c in self.cads]) and self.constrain_LD:
                 ld_dists=self.getLDs(n_samples=3000,mission='kepler')
+                print("LDs",ld_dists)
                 u_star_kep = pm.Bound(pm.Normal, lower=0.0, upper=1.0)("u_star_kep", 
                                             mu=np.clip(np.nanmedian(ld_dists,axis=0),0,1),
                                             sd=np.clip(ld_mult*np.nanstd(ld_dists,axis=0),0.05,1.0), shape=2, testval=np.clip(np.nanmedian(ld_dists,axis=0),0,1))
-
-            else:
-                if self.cads[0][0].lower()=='t':
-                    u_star_tess = xo.distributions.QuadLimbDark("u_star_tess", testval=np.array([0.3, 0.2]))
-                elif self.cads[0][0].lower()=='k':
-                    u_star_kep = xo.distributions.QuadLimbDark("u_star_kep", testval=np.array([0.3, 0.2]))
+            elif np.any([c[0].lower()=='k' for c in self.cads]) and self.constrain_LD:
+                u_star_kep = xo.distributions.QuadLimbDark("u_star_kep", testval=np.array([0.3, 0.2]))
             
+            mean=pm.Normal("mean",mu=np.median(lc['flux'][lc['mask']]),
+                                  sd=np.std(lc['flux'][lc['mask']]))
+
+            log_flux_std=np.array([np.log(np.nanstd(lc['flux'][lc['no_trans_mask']][lc['cadence'][lc['no_trans_mask']]==c])) for c in self.cads]).ravel().astype(np.float32)
+            print(self.cads,np.unique(lc['cadence']),lc['time'][lc['cadence']=='t'],log_flux_std,np.sum(lc['no_trans_mask']))
+            logs2 = pm.Normal("logs2", mu = log_flux_std+1, sd = np.tile(2.0,len(log_flux_std)), shape=len(log_flux_std))
+
             if self.use_GP:
                 ######################################
                 #     Initialising GP kernel
                 ######################################
-                mean=pm.Normal("mean",mu=np.median(self.lc['flux'][self.lc['mask']]),
-                                      sd=np.std(self.lc['flux'][self.lc['mask']]))
-
-                log_flux_std=np.array([np.log(np.nanstd(self.lc['flux'][self.lc['cadence']==c])) for c in self.cads]).ravel().astype(np.float32)
-                logs2 = pm.Normal("logs2", mu = log_flux_std+1, sd = np.tile(2.0,len(log_flux_std)), shape=len(log_flux_std))
+                print(np.isnan(lc['time']),np.isnan(lc['flux']),np.isnan(lc['flux_err']))
                 if self.train_GP:
                     #Taking trained values from out-of-transit to use as inputs to GP:
                     minmax=np.percentile(self.gp_init_trace["w0"],[0.5,99.5])
@@ -825,63 +904,88 @@ class monoModel():
                 else:
                     # Transit jitter & GP parameters
                     #logs2 = pm.Normal("logs2", mu=np.log(np.var(y[m])), sd=10)
-                    lcrange=self.lc['time'][self.lc['oot_mask']][-1]-self.lc['time'][self.lc['oot_mask']][0]
-                    min_cad = np.nanmin([np.nanmedian(np.diff(self.lc['time'][self.lc['oot_mask']&(self.lc['cadence']==c)])) for c in self.cads])
+                    lcrange=lc['time'][slc['near_trans']][-1]-lc['time'][lc['near_trans']][0]
+                    max_cad = np.nanmax([np.nanmedian(np.diff(lc['time'][lc['near_trans']&(lc['cadence']==c)])) for c in self.cads])
                     #freqs bounded from 2pi/minimum_cadence to to 2pi/(4x lc length)
-                    w0 = pm.InverseGamma("w0",testval=(2*np.pi)/10,
-                                         **xo.estimate_inverse_gamma_parameters(lower=(2*np.pi)/(4*lcrange),
-                                                                                upper=(2*np.pi)/(3*min_cad)))
-                    maxpower=25*np.nanstd(self.lc['flux'][self.lc['oot_mask']])
-                    minpower=0.01*np.nanmedian(abs(np.diff(self.lc['flux'][self.lc['oot_mask']])))
-                    power = pm.InverseGamma("power",testval=maxpower/25,
-                                            **xo.estimate_inverse_gamma_parameters(lower=maxpower, upper=minpower))
+                    success=False;target=0.05
+                    while not success and target<0.4:
+                        try:
+
+                            w0 = pm.InverseGamma("w0",testval=(2*np.pi)/10,
+                                         **xo.estimate_inverse_gamma_parameters(lower=(2*np.pi)/(lcrange),
+                                                                                upper=(2*np.pi)/(6*max_cad)))
+                            success=True
+                        except:
+                            target+=0.05
+                            success=False
+
+                    maxpower=12.5*np.nanstd(lc['flux'][lc['near_trans']])
+                    minpower=0.2*np.nanmedian(abs(np.diff(lc['flux'][lc['near_trans']])))
+                    print(np.nanmedian(abs(np.diff(lc['flux'][lc['near_trans']]))),np.nanstd(lc['flux'][lc['near_trans']]),minpower,maxpower)
+                    success=False;target=0.05
+                    while not success and target<0.4:
+                        try:
+                            power = pm.InverseGamma("power",testval=minpower*5,
+                                                    **xo.estimate_inverse_gamma_parameters(lower=minpower, upper=maxpower,target=0.1))
+                            success=True
+                        except:
+                            target+=0.05
+                            success=False
+                    print(target," after ",int(target/0.05),"attempts")
 
                     print("input to GP power:",maxpower-1)
                 S0 = pm.Deterministic("S0", power/(w0**4))
 
                 # GP model for the light curve
                 kernel = xo.gp.terms.SHOTerm(S0=S0, w0=w0, Q=1/np.sqrt(2))
+                
+                if hasattr(self.lc,'near_trans') and np.sum(lc['near_trans'])!=len(lc['time']):
+                    self.gp['use'] = xo.gp.GP(kernel, lc['time'][lc['near_trans']].astype(np.float32),
+                                       lc['flux_err'][lc['near_trans']].astype(np.float32)**2 + \
+                                       tt.dot(lc['flux_err_index'][lc['near_trans']],tt.exp(logs2)),
+                                       J=2)
 
-                self.gp['oot'] = xo.gp.GP(kernel, self.lc['time'][self.lc['oot_mask']].astype(np.float32),
-                                   self.lc['flux_err'][self.lc['oot_mask']].astype(np.float32)**2 + \
-                                   tt.dot(self.lc['flux_err_index'][self.lc['oot_mask']],tt.exp(logs2)),
-                                   J=2)
-                self.gp['all'] = xo.gp.GP(kernel, self.lc['time'].astype(np.float32),
-                                   self.lc['flux_err'].astype(np.float32)**2 + \
-                                   tt.dot(self.lc['flux_err_index'],tt.exp(logs2)),
-                                   J=2)
+                    self.gp['all'] = xo.gp.GP(kernel, lc['time'].astype(np.float32),
+                                           lc['flux_err'].astype(np.float32)**2 + \
+                                           tt.dot(lc['flux_err_index'],tt.exp(logs2)),
+                                           J=2)
+                else:
+                    self.gp['use'] = xo.gp.GP(kernel, lc['time'][lc['mask']].astype(np.float32),
+                                           lc['flux_err'][lc['mask']].astype(np.float32)**2 + \
+                                           tt.dot(lc['flux_err_index'][lc['mask']],tt.exp(logs2)),
+                                           J=2)
 
             ################################################
             #     Creating function to generate transits
             ################################################
-            def gen_lc(i_orbit,i_r,n_pl,mask=None,prefix='',make_deterministic=False):
+            def gen_lc(i_orbit, i_r, n_pl, mask=None,prefix='',make_deterministic=False):
                 # Short method to create stacked lightcurves, given some input time array and some input cadences:
                 # This function is needed because we may have 
                 #   -  1) multiple cadences and 
                 #   -  2) multiple telescopes (and therefore limb darkening coefficients)
                 trans_pred=[]
-                mask = ~np.isnan(self.lc['time']) if mask is None else mask
+                mask = ~np.isnan(lc['time']) if mask is None else mask
                 cad_index=[]
                 for cad in self.cads:
-                    cadmask=mask&(self.lc['cadence']==cad)
+                    cadmask=mask&(lc['cadence']==cad)
                     
                     #print(self.lc['tele_index'][mask,0].astype(bool),len(self.lc['tele_index'][mask,0]),cadmask[mask],len(cadmask[mask]))
                     
                     if cad[0]=='t':
                         #Taking the "telescope" index, and adding those points with the matching cadences to the cadmask
-                        cad_index+=[(self.lc['tele_index'][mask,0].astype(bool))&cadmask[mask]]
+                        cad_index+=[(lc['tele_index'][mask,0].astype(bool))&cadmask[mask]]
                         trans_pred+=[xo.LimbDarkLightCurve(u_star_tess).get_light_curve(
                                                                  orbit=i_orbit, r=i_r,
-                                                                 t=self.lc['time'][mask].astype(np.float32),
-                                                                 texp=np.nanmedian(np.diff(self.lc['time'][cadmask]))
-                                                                 )/(self.lc['flux_unit']*mult)]
+                                                                 t=lc['time'][mask].astype(np.float32),
+                                                                 texp=np.nanmedian(np.diff(lc['time'][cadmask]))
+                                                                 )/(lc['flux_unit']*mult)]
                     elif cad[0]=='k':
-                        cad_index+=[(self.lc['tele_index'][mask,1]).astype(bool)&cadmask[mask]]
+                        cad_index+=[(lc['tele_index'][mask,1]).astype(bool)&cadmask[mask]]
                         trans_pred+=[xo.LimbDarkLightCurve(u_star_kep).get_light_curve(
                                                                  orbit=i_orbit, r=i_r,
-                                                                 t=self.lc['time'][mask].astype(np.float32),
-                                                                 texp=np.nanmedian(np.diff(self.lc['time'][cadmask]))
-                                                                 )/(self.lc['flux_unit']*mult)]
+                                                                 t=lc['time'][mask].astype(np.float32),
+                                                                 texp=np.nanmedian(np.diff(lc['time'][cadmask]))
+                                                                 )/(lc['flux_unit']*mult)]
                 # transit arrays (ntime x n_pls x 2) * telescope index (ntime x n_pls x 2), summed over dimension 2
                 if n_pl>1 and make_deterministic:
                     
@@ -910,10 +1014,15 @@ class monoModel():
                         r_star=Rs, rho_star=rho_S,ecc=multi_eccs, omega=multi_omegas,
                         period=multi_periods, t0=multi_t0s, b=multi_bs)
                 print("generating multi lcs:")
-
+                
                 multi_mask_light_curves = gen_lc(multi_orbit,tt.exp(multi_logrors),
-                                                 len(self.multis),mask=self.lc['oot_mask'],
+                                                 len(self.multis),mask=None,
                                                  prefix='multi_mask_',make_deterministic=True)
+                
+                multi_vx, multi_vy, multi_vz = multi_orbit.get_relative_velocity(multi_t0s)
+                multi_tdur=pm.Deterministic("tdur",
+                                            (2*Rs*tt.sqrt((1+tt.exp(multi_logrors))**2-multi_bs**2))/tt.sqrt(multi_vx**2 + multi_vy**2))
+
                 print("summing multi lcs:")
                 if len(self.multis)>1:
                     multi_mask_light_curve = pm.math.sum(multi_mask_light_curves, axis=1) #Summing lightcurve over n planets
@@ -922,24 +1031,26 @@ class monoModel():
                 #Multitransiting planet potentials:
                 '''if self.use_GP:
                     pm.Potential("multi_obs",
-                                 self.gp['oot'].log_likelihood(self.lc['flux'][self.lc['oot_mask']]-(multi_mask_light_curve+ mean)))
+                                 self.gp['oot'].log_likelihood(self.lc['flux'][self.lc['near_trans']]-(multi_mask_light_curve+ mean)))
                 else:
-                    new_yerr = self.lc['flux_err'][self.lc['oot_mask']].astype(np.float32)**2 + \
-                               tt.dot(self.lc['flux_err_index'][self.lc['oot_mask']],tt.exp(logs2))
+                    new_yerr = self.lc['flux_err'][self.lc['near_trans']].astype(np.float32)**2 + \
+                               tt.dot(self.lc['flux_err_index'][self.lc['near_trans']],tt.exp(logs2))
                     pm.Normal("multiplanet_obs",mu=(multi_mask_light_curve + mean),sd=new_yerr,
-                              observed=self.lc['flux_flat'][self.lc['oot_mask']].astype(np.float32))
+                              observed=self.lc['flux_flat'][self.lc['near_trans']].astype(np.float32))
                 '''
                 
             else:
-                multi_mask_light_curve = tt.as_tensor_variable(np.zeros(np.sum(self.lc['oot_mask'])))
+                multi_mask_light_curve = tt.as_tensor_variable(np.zeros(len(lc['time'])))
                 #print(multi_mask_light_curve.shape.eval())
-                #np.zeros_like(self.lc['flux'][self.lc['oot_mask']])
+                #np.zeros_like(self.lc['flux'][self.lc['near_trans']])
                 
             ################################################
             #     Marginalising over Duo periods
             ################################################
             if len(self.duos)>0:
                 duo_per_info={}
+                duo_vels={}
+                duo_tdurs={}
                 for nduo,duo in enumerate(self.duos):
                     print("#Marginalising over ",len(self.planets[duo]['period_int_aliases'])," period aliases for ",duo)
 
@@ -956,17 +1067,22 @@ class monoModel():
                             r_star=Rs, rho_star=rho_S,
                             ecc=tt.tile(duo_eccs[duo],npers), omega=tt.tile(duo_omegas[duo],npers),
                             period=duo_periods[duo], t0=tt.tile(duo_t0s[duo],npers), b=tt.tile(duo_bs[duo],npers))
-                    
+                    duo_vels[duo] = duoorbit.get_relative_velocity(duo_t0s[duo])
+                    duo_tdurs[duo]=pm.Deterministic("duo_tdurs_"+duo,(2*Rs*tt.sqrt((1+tt.exp(duo_logrors[duo]))**2-duo_bs[duo]**2))/tt.sqrt(duo_vels[duo][0]**2 + duo_vels[duo][1]**2))
+
                     duo_per_info[duo]['logpriors'] = tt.log(duoorbit.dcosidb) - 2 * tt.log(duo_periods[duo])
                     duo_per_info[duo]['lcs'] = gen_lc(duoorbit,tt.tile(tt.exp(duo_logrors[duo]),npers),npers,
-                                                     mask=self.lc['oot_mask'],prefix='duo_mask_'+duo+'_')
+                                                     mask=None,prefix='duo_mask_'+duo+'_')
                     pm.Deterministic('duo_priors_'+duo,duo_per_info[duo]['logpriors'])
 
             ################################################
             #     Marginalising over Mono gaps
             ################################################
             if len(self.monos)>0:
+                mono_per_info={}
+                mono_vels={}
                 mono_gap_info={}
+                mono_tdurs={}
                 for nmono,mono in enumerate(self.monos):
                     print("#Marginalising over ",len(self.planets[mono]['per_gaps'])," period gaps for ",mono)
                     
@@ -989,17 +1105,20 @@ class monoModel():
                             period=mono_periods[mono],
                             t0=tt.tile(mono_t0s[mono],n_gaps),
                             b=tt.tile(mono_bs[mono],n_gaps))
+                    
+                    mono_vels[mono] = monoorbit.get_relative_velocity(mono_t0s[mono])
+                    mono_tdurs[mono]=pm.Deterministic("mono_tdurs_"+mono,(2*Rs*tt.sqrt((1+tt.exp(mono_logrors[mono]))**2-mono_bs[mono]**2))/tt.sqrt(mono_vels[mono][0]**2 + mono_vels[mono][1]**2))
+
                     mono_gap_info[mono]['logpriors'] = tt.log(monoorbit.dcosidb) - 2*tt.log(per_meds[mono])
                     mono_gap_info[mono]['lcs'] = gen_lc(monoorbit, tt.tile(tt.exp(mono_logrors[mono]),n_gaps),
-                                                        n_gaps,mask=self.lc['oot_mask'],
-                                                        prefix='mono_mask_'+mono+'_')
+                                                        n_gaps,mask=None,prefix='mono_mask_'+mono+'_')
                     pm.Deterministic('mono_priors_'+mono,mono_gap_info[mono]['logpriors'])
-                    #Priors - we have an occurrence rate prior (~1/P), a geometric prior (1/distance in-transit = dcosidb)
-                    # a window function log(1/P) -> -1*logP and  a factor for the width of the period bin - i.e. log(binsize)
-                    #mono_gap_info[mono]['logpriors'] = 0.0
-                    #This is also complicated by the fact that each gap has its own internal gradient
-                    # but between regions these are not normalised, so we include a factor w.r.t. the median period in the bin
-                    #I have no idea if we also need to incorporate the *width* of the bin here - I need to test this.
+            #Priors - we have an occurrence rate prior (~1/P), a geometric prior (1/distance in-transit = dcosidb)
+            # a window function log(1/P) -> -1*logP and  a factor for the width of the period bin - i.e. log(binsize)
+            #mono_gap_info[mono]['logpriors'] = 0.0
+            #This is also complicated by the fact that each gap has its own internal gradient
+            # but between regions these are not normalised, so we include a factor w.r.t. the median period in the bin
+            #I have no idea if we also need to incorporate the *width* of the bin here - I need to test this.
                     
             ################################################
             #            Compute predicted LCs:
@@ -1012,7 +1131,7 @@ class monoModel():
                 n_mod=0
                 for duo in self.duos:
                     iter_models[n_mod]={'name':duo,
-                                        'n_points':np.sum((abs(self.lc['time']-self.planets[duo]['tcen'])<0.5*self.planets[duo]['tdur'])|(abs(self.lc['time']-self.planets[duo]['tcen_2'])<0.5*self.planets[duo]['tdur'])),
+                                        'n_points':np.sum((abs(lc['time']-self.planets[duo]['tcen'])<0.5*self.planets[duo]['tdur'])|(abs(lc['time']-self.planets[duo]['tcen_2'])<0.5*self.planets[duo]['tdur'])),
                                        'len':len(self.planets[duo]['period_int_aliases']),
                                        'range':np.arange(len(self.planets[duo]['period_int_aliases'])),
                                        'lcs':duo_per_info[duo]['lcs'],
@@ -1021,7 +1140,7 @@ class monoModel():
                     n_mod+=1
                 for mono in self.monos:
                     iter_models[n_mod]={'name':mono,
-                                        'n_points':np.sum(abs(self.lc['time']-self.planets[mono]['tcen'])<0.5*self.planets[mono]['tdur']),
+                                        'n_points':np.sum(abs(lc['time']-self.planets[mono]['tcen'])<0.5*self.planets[mono]['tdur']),
                                         'len':len(self.planets[mono]['per_gaps']),
                                         'range':np.arange(len(self.planets[mono]['per_gaps'])),
                                         'lcs':mono_gap_info[mono]['lcs'],
@@ -1031,169 +1150,42 @@ class monoModel():
 
 
                 #For each combination we will create a combined model and compute the loglik
-                new_yerr = self.lc['flux_err'][self.lc['oot_mask']].astype(np.float32)**2 + \
-                               tt.sum(self.lc['flux_err_index'][self.lc['oot_mask']]*tt.exp(logs2).dimshuffle('x',0),axis=1)
+                new_yerr = lc['flux_err'][lc['mask']].astype(np.float32)**2 + \
+                               tt.sum(lc['flux_err_index'][lc['mask']]*tt.exp(logs2).dimshuffle('x',0),axis=1)
 
                 if not self.use_GP:
                     #Calculating some extra info to speed up the loglik calculation
                     new_yerr_sq = new_yerr**2
-                    sum_log_new_yerr = tt.sum(-np.sum(self.lc['oot_mask'])/2 * tt.log(2*np.pi*(new_yerr_sq)))
-                    lccheckstack=tt.stack([self.lc['flux'][self.lc['oot_mask']],new_yerr_sq],axis=1)
+                    sum_log_new_yerr = tt.sum(-np.sum(lc['mask'])/2 * tt.log(2*np.pi*(new_yerr_sq)))
+                    lccheckstack=tt.stack([lc['flux'][lc['mask']],new_yerr_sq],axis=1)
 
-                if self.marginalise_all:
-                    import itertools
-                    if len(iter_models)==1:
-                        priors = iter_models[0]['logpriors']
-                        if self.use_GP:
-                            resids = self.lc['flux'][self.lc['oot_mask']].astype(np.float32) - \
-                                     (iter_models[0]['lcs'] + multi_mask_light_curve + mean)
-                            lccheckstack=tt.stack([self.lc['flux'][self.lc['oot_mask']],resids],axis=1)
+                #NOT marginalising over all models simultaneously, but doing them individually:
+                resids={}
+                for pl in iter_models:
+                    resids[pl]={}
+                    iter_models[pl]['logprob']={}
+                    iter_models[pl]['logliks']={}
+                    if iter_models[pl]['len']>1:
+                        print(iter_models[pl])
+                        for n in range(iter_models[pl]['len']):
+                            # For each model we compute residuals (subtract mean and multiplanets)
 
-                            def lik_func(ci, resid):
-                                    return self.gp['oot'].log_likelihood(resid[:,ci])
-                            liks = theano.scan(lik_func, sequences=tt.arange(int(iter_models[0]['len'])), non_sequences=resids)
-                        else:
-                            resids = self.lc['flux_flat'][self.lc['oot_mask']].astype(np.float32) - \
-                                     (iter_models[0]['lcs'] + multi_mask_light_curve + mean)
+                            resids[pl][n] = lc['flux'][lc['mask']].astype(np.float32) - \
+                                     (iter_models[pl]['lcs'][lc['mask'],n] + multi_mask_light_curve[lc['mask']] + mean.dimshuffle('x'))
+                            if self.use_GP:
+                                iter_models[pl]['logliks'][n]=self.gp['use'].log_likelihood(y=resids[pl][n])
+                            else:
+                                iter_models[pl]['logliks'][n] = sum_log_new_yerr - tt.sum(-0.5*(resids[pl][n])**2/(2*new_yerr_sq.dimshuffle(0,'x')),axis=0)
 
-                            liks = sum_log_new_yerr.dimshuffle('x') - tt.sum(-0.5*(resids)**2/(2*new_yerr_sq.dimshuffle(0, 'x')),axis=0)
-
-                    elif len(iter_models)==2:
-                        priors = iter_models[0]['logpriors'].dimshuffle(0,'x') + \
-                                 iter_models[1]['logpriors'].dimshuffle('x',0)
-                        if self.use_GP:
-                            resids = self.lc['flux'][self.lc['oot_mask']].astype(np.float32) - \
-                                     (iter_models[0]['lcs'].dimshuffle(0, 1,'x') + \
-                                      iter_models[1]['lcs'].dimshuffle(0,'x', 1) + \
-                                     multi_mask_light_curve + mean)
-                            lccheckstack=tt.stack([self.lc['flux'][self.lc['oot_mask']],iter_models[0]['lcs'],
-                                                   iter_models[1]['lcs']],axis=1)
-
-                            def lik_func(ci,cj, resid):
-                                return self.gp['oot'].log_likelihood(resid[:,ci,cj])
-                            liks = theano.scan(lik_func, 
-                                           sequences=[tt.arange(int(iter_models[0]['len'])),tt.arange(int(iter_models[1]['len']))],
-                                           non_sequences=resids)
-                        else:
-                            resids = self.lc['flux_flat'][self.lc['oot_mask']].astype(np.float32) - \
-                                     (iter_models[0]['lcs'].dimshuffle(0, 1,'x') + \
-                                      iter_models[1]['lcs'].dimshuffle(0,'x', 1) + \
-                                     multi_mask_light_curve + mean)
-                            liks = sum_log_new_yerr.dimshuffle('x','x') - tt.sum(-0.5*(resids)**2/(2*new_yerr_sq.dimshuffle(0,'x', 'x')),axis=0)
-
-
-                    elif len(iter_models)==3:
-                        priors = iter_models[0]['logpriors'].dimshuffle(0 ,'x','x') + \
-                                 iter_models[1]['logpriors'].dimshuffle('x', 0,'x') + \
-                                 iter_models[2]['logpriors'].dimshuffle('x','x', 0)
-                        if self.use_GP:
-                            resids = tt.as_tensor_variable(self.lc['flux'][self.lc['oot_mask']].astype(np.float32)).dimshuffle(0, 'x','x','x') - \
-                                 (iter_models[0]['lcs'].dimshuffle(0, 1,'x','x') + \
-                                  iter_models[1]['lcs'].dimshuffle(0,'x', 1,'x') + \
-                                  iter_models[2]['lcs'].dimshuffle(0,'x','x', 1) + \
-                                  multi_mask_light_curve.dimshuffle(0,'x','x', 'x') + mean)
-                            def lik_func(ci, cj, ck, resid):
-                                return self.gp['oot'].log_likelihood(resid[:,ci,cj,ck].squeeze())
-                            liks = theano.scan(lik_func, 
-                                               sequences=[tt.arange(int(iter_models[0]['len'])),
-                                                          tt.arange(int(iter_models[1]['len'])),
-                                                          tt.arange(int(iter_models[2]['len']))],
-                                               non_sequences=resids)
-
-                        else:
-                            resids = tt.as_tensor_variable(self.lc['flux_flat'][self.lc['oot_mask']].astype(np.float32)).dimshuffle(0, 'x','x','x') - \
-                                     (iter_models[0]['lcs'].dimshuffle(0, 1,'x','x') + \
-                                      iter_models[1]['lcs'].dimshuffle(0,'x', 1,'x') + \
-                                      iter_models[2]['lcs'].dimshuffle(0,'x','x', 1) + \
-                                      multi_mask_light_curve.dimshuffle(0,'x','x', 'x') + mean)
-                            liks = sum_log_new_yerr.dimshuffle('x','x','x') - tt.sum(-0.5*(resids)**2/(2*new_yerr_sq.dimshuffle(0,'x','x', 'x')),axis=0)
-
-
-                    elif len(iter_models)==4:
-                        priors = iter_models[0]['logpriors'].dimshuffle(0, 1,'x','x','x') + \
-                                 iter_models[1]['logpriors'].dimshuffle(0,'x', 1,'x','x') + \
-                                 iter_models[2]['logpriors'].dimshuffle(0,'x','x',1 ,'x') + \
-                                 iter_models[3]['logpriors'].dimshuffle(0,'x','x','x',1 )
-                        if self.use_GP:
-                            resids = self.lc['flux'][self.lc['oot_mask']].astype(np.float32) - \
-                                     (iter_models[0]['lcs'].dimshuffle(0, 1,'x','x','x') + \
-                                      iter_models[1]['lcs'].dimshuffle(0,'x', 1,'x','x') + \
-                                      iter_models[2]['lcs'].dimshuffle(0,'x','x', 1,'x') + \
-                                      iter_models[3]['lcs'].dimshuffle(0,'x','x','x', 1) + \
-                                     multi_mask_light_curve + mean)
-                            def lik_func(ci, cj, ck, cl, resid):
-                                return self.gp['oot'].log_likelihood(resid[:,ci,cj,ck,cl])
-
-                            liks = theano.scan(lik_func, 
-                                               sequences=[np.arange(int(iter_models[0]['len'])),
-                                                          np.arange(int(iter_models[1]['len'])),
-                                                          np.arange(int(iter_models[2]['len'])),
-                                                          np.arange(int(iter_models[3]['len']))],
-                                               non_sequences=resids)   
-                        else:
-                            resids = self.lc['flux_flat'][self.lc['oot_mask']].astype(np.float32) - \
-                                     (iter_models[0]['lcs'].dimshuffle(0, 1,'x','x','x') + \
-                                      iter_models[1]['lcs'].dimshuffle(0,'x', 1,'x','x') + \
-                                      iter_models[2]['lcs'].dimshuffle(0,'x','x', 1,'x') + \
-                                      iter_models[3]['lcs'].dimshuffle(0,'x','x','x', 1) + \
-                                     multi_mask_light_curve + mean)
-                            liks = sum_log_new_yerr.dimshuffle('x','x','x','x') - tt.sum(-0.5*(resids)**2/(2*new_yerr_sq.dimshuffle(0,'x','x','x', 'x')),axis=0)
-
-                    print(priors,type(priors),type(priors[0]),priors.shape)
-                    print(liks,type(liks))#,len(liks),type(liks[0]),len(liks[0]),type(liks[1]),liks[1].shape)
-                    log_priors = pm.Deterministic('log_priors',priors)
-                    log_liks = pm.Deterministic('log_liks',liks[0])
-                    
-                    #Now we have a data cube of log_liks, we can marginalise against each other variable to produce 
-
-                    logprobs = pm.Deterministic('logprobs', (log_priors+log_liks) - pm.math.logsumexp(log_priors+log_liks))
-                    if len(iter_models)==1:
-                        marg_all_light_curve = pm.Deterministic("marg_all_light_curve",
-                                                                tt.sum(resids*tt.exp(logprobs).dimshuffle('x',0),axis=1))
-                    elif len(iter_models)==2:
-                        marg_all_light_curve = pm.Deterministic("marg_all_light_curve",
-                                                                tt.sum(resids*tt.exp(logprobs).dimshuffle('x',0,1),axis=(1,2)))
-                    elif len(iter_models)==3:
-                        marg_all_light_curve = pm.Deterministic("marg_all_light_curve",
-                                                                tt.sum(resids*tt.exp(logprobs).dimshuffle('x',0,1,2),axis=(1,2,3)))
-                    elif len(iter_models)==4:
-                        marg_all_light_curve = pm.Deterministic("marg_all_light_curve",
-                                                                tt.sum(resids*tt.exp(logprobs).dimshuffle('x',0,1,2,3),
-                                                                                     axis=(1,2,3,4)))
-                    if self.use_GP:
-                            pm.Normal("all_obs",mu=(marg_all_light_curve),sd=new_yerr,
-                                      observed=self.lc['flux'][self.lc['oot_mask']].astype(np.float32))
+                        # We then compute a marginalised lightcurve from the weighted sum of each model lightcurve:
+                        logliks = pm.Deterministic(iter_models[pl]['type']+'_liks_'+str(iter_models[pl]['name']),tt.stack([iter_models[pl]['logliks'][n] for n in range(iter_models[pl]['len'])]))
+                        iter_models[pl]['logprob'] = logliks + iter_models[pl]['logpriors']
+                        iter_models[pl]['logprob_marg'] = pm.math.logsumexp(iter_models[pl]['logprob'])
+                        pm.Deterministic('logprob_marg_'+str(iter_models[pl]['name']), iter_models[pl]['logprob'] - iter_models[pl]['logprob_marg'])
+                        iter_models[pl]['marg_lc'] = pm.Deterministic('marg_light_curve_'+str(iter_models[pl]['name']),
+                                                                      tt.sum(iter_models[pl]['lcs']*tt.exp(iter_models[pl]['logprob']-iter_models[pl]['logprob_marg']).dimshuffle('x',0),axis=1))
                     else:
-                            pm.Normal("all_obs",mu=(marg_all_light_curve),sd=new_yerr,
-                                      observed=self.lc['flux_flat'][self.lc['oot_mask']].astype(np.float32))
-                else:
-                    #NOT marginalising over all models simultaneously, but doing them individually:
-                    resids={}
-                    for pl in iter_models:
-                        resids[pl]={}
-                        iter_models[pl]['logprob']={}
-                        iter_models[pl]['logliks']={}
-                        if iter_models[pl]['len']>1:
-                            print(iter_models[pl])
-                            for n in range(iter_models[pl]['len']):
-                                # For each model we compute residuals (subtract mean and multiplanets)
-
-                                resids[pl][n] = self.lc['flux'][self.lc['oot_mask']].astype(np.float32) - \
-                                         (iter_models[pl]['lcs'][:,n] + multi_mask_light_curve + mean.dimshuffle('x'))
-                                if self.use_GP:
-                                    iter_models[pl]['logliks'][n]=self.gp['oot'].log_likelihood(y=resids[pl][n])
-                                else:
-                                    iter_models[pl]['logliks'][n] = sum_log_new_yerr.dimshuffle('x','x') - tt.sum(-0.5*(resids)**2/(2*new_yerr_sq.dimshuffle(0,'x')),axis=0)
-                            
-                            # We then compute a marginalised lightcurve from the weighted sum of each model lightcurve:
-                            logliks = pm.Deterministic(iter_models[pl]['type']+'_liks_'+str(iter_models[pl]['name']),tt.stack([iter_models[pl]['logliks'][n] for n in range(iter_models[pl]['len'])]))
-                            iter_models[pl]['logprob'] = logliks + iter_models[pl]['logpriors']
-                            iter_models[pl]['logprob_marg'] = pm.math.logsumexp(iter_models[pl]['logprob'])
-                            pm.Deterministic('logprob_marg_'+str(iter_models[pl]['name']), iter_models[pl]['logprob'] - iter_models[pl]['logprob_marg'])
-                            iter_models[pl]['marg_lc'] = pm.Deterministic('marg_light_curve_'+str(iter_models[pl]['name']),
-                                                                          tt.sum(iter_models[pl]['lcs']*tt.exp(iter_models[pl]['logprob']-iter_models[pl]['logprob_marg']).dimshuffle('x',0),axis=1))
-                        else:
-                            iter_models[pl]['marg_lc'] = pm.Deterministic('marg_light_curve_'+str(iter_models[pl]['name']),iter_models[pl]['lcs'])
+                        iter_models[pl]['marg_lc'] = pm.Deterministic('marg_light_curve_'+str(iter_models[pl]['name']),iter_models[pl]['lcs'])
                             
                     #Now summing over all lcs:
                     marg_all_light_curves = tt.stack([iter_models[pl]['marg_lc'] for pl in iter_models], axis=1)
@@ -1201,16 +1193,16 @@ class monoModel():
                                                             tt.sum(marg_all_light_curves,axis=1) + multi_mask_light_curve)
                 
                 if self.use_GP:
-                    total_llk = pm.Deterministic("total_llk",self.gp['oot'].log_likelihood(self.lc['flux'][self.lc['oot_mask']] - \
-                                                                                    (marg_all_light_curve + mean)))
-                    gp_pred = pm.Deterministic("gp_pred", self.gp['oot'].predict(self.lc['time'][self.lc['oot_mask']].astype(np.float32),
-                                                                          return_var=False))
+                    total_llk = pm.Deterministic("total_llk",self.gp['use'].log_likelihood(lc['flux'][lc['mask']] - \
+                                                                                    (marg_all_light_curve[lc['mask']] + mean)))
+                    gp_pred = pm.Deterministic("gp_pred", self.gp['use'].predict(lc['time'].astype(np.float32),
+                                                                                 return_var=False))
                     pm.Potential("llk_gp", total_llk)
                     #pm.Normal("all_obs",mu=(marg_all_light_curve + gp_pred + mean),sd=new_yerr,
-                    #          observed=self.lc['flux'][self.lc['oot_mask']].astype(np.float32))
+                    #          observed=self.lc['flux'][self.lc['near_trans']].astype(np.float32))
                 else:
-                    pm.Normal("all_obs",mu=(marg_all_light_curve + mean),sd=new_yerr,
-                              observed=self.lc['flux'][self.lc['oot_mask']].astype(np.float32))
+                    pm.Normal("all_obs",mu=(marg_all_light_curve[lc['mask']] + mean),sd=new_yerr,
+                              observed=lc['flux'][lc['mask']].astype(np.float32))
 
 
             # Fit for the maximum a posteriori parameters, I've found that I can get
@@ -1301,11 +1293,7 @@ class monoModel():
 
             self.SavePickle()
         
-        if plot:
-            print("plotting")
-            self.Plot()
-            self.PlotCorner()
-        
+    def Table(self):
         if LoadFromFile and not self.overwrite and os.path.exists(self.savenames[0].replace('mcmc.pickle','results.txt')):
             with open(self.savenames[0].replace('mcmc.pickle','results.txt'), 'r', encoding='UTF-8') as file:
                 restable = file.read()
@@ -1356,7 +1344,7 @@ class monoModel():
                 #Sinusoidal region using a shifted cosine:
                 return (cosine.ppf(omega)+np.pi*0.5)%(np.pi*2)
         
-        log_flux_std={c:np.log(np.std(self.lc['flux'][self.lc['oot_mask']&(self.lc['cadence']==c)])) for c in self.cads}
+        log_flux_std={c:np.log(np.std(self.lc['flux'][self.lc['near_trans']&(self.lc['cadence']==c)])) for c in self.cads}
 
         if self.use_GP:
             import celerite
@@ -1367,7 +1355,7 @@ class monoModel():
             for ncad,cad in enumerate(self.cads):
                 cadmask=self.lc['cadence']==cad
                 self.mnest_gps[cad]=celerite.GP(kernel + terms(JitterTerm,log_sigma=log_flux_std[cad]),mean=0.0, fit_mean=False)
-                self.mnest_gps[cad].compute(self.lc['time'][cadmask&self.lc['oot_mask']], self.lc['flux_err'][cadmask&self.lc['oot_mask']])
+                self.mnest_gps[cad].compute(self.lc['time'][cadmask&self.lc['near_trans']], self.lc['flux_err'][cadmask&self.lc['near_trans']])
             #Initial compue here ^
             
         per_index=-8/3
@@ -1584,8 +1572,8 @@ class monoModel():
             if self.use_GP:
                 # Transit jitter & GP parameters
                 #logs2 = pm.Normal("logs2", mu=np.log(np.var(y[m])), sd=10)
-                lcrange=self.lc['time'][self.lc['oot_mask']][-1]-self.lc['time'][self.lc['oot_mask']][0]
-                min_cad = np.min([np.nanmedian(np.diff(self.lc['time'][self.lc['oot_mask']&(self.lc['cadence']==c)])) for c in self.cads])
+                lcrange=self.lc['time'][self.lc['near_trans']][-1]-self.lc['time'][self.lc['near_trans']][0]
+                min_cad = np.min([np.nanmedian(np.diff(self.lc['time'][self.lc['near_trans']&(self.lc['cadence']==c)])) for c in self.cads])
                 #freqs bounded from 2pi/minimum_cadence to to 2pi/(4x lc length)
                 if verbose: print('logw0',cube[self.cube_indeces['logw0']])
                 cube[self.cube_indeces['logw0']] = transform_uniform(cube[self.cube_indeces['logw0']],
@@ -1594,7 +1582,7 @@ class monoModel():
 
                 # S_0 directly because this removes some of the degeneracies between
                 # S_0 and omega_0 prior=(-0.25*lclen)*exp(logS0)
-                maxpower=np.log(np.nanmedian(abs(np.diff(self.lc['flux'][self.lc['oot_mask']]))))+1
+                maxpower=np.log(np.nanmedian(abs(np.diff(self.lc['flux'][self.lc['near_trans']]))))+1
                 if verbose: print('->',cube[self.cube_indeces['logw0']],'logpower',cube[self.cube_indeces['logpower']])
                 cube[self.cube_indeces['logpower']] = transform_uniform(cube[self.cube_indeces['logpower']],-20,maxpower)
                 if verbose: print('->',cube[self.cube_indeces['logpower']])
@@ -1639,7 +1627,7 @@ class monoModel():
                 gp_pred=[]
             for cad in self.cads:
                 #Looping over each region - Kepler or TESS - and generating lightcurve
-                cadmask=self.lc['oot_mask']&(self.lc['cadence']==cad)
+                cadmask=self.lc['near_trans']&(self.lc['cadence']==cad)
 
                 #print(self.lc['tele_index'][mask,0].astype(bool),len(self.lc['tele_index'][mask,0]),cadmask[mask],len(cadmask[mask]))
 
@@ -1653,10 +1641,10 @@ class monoModel():
                                      np.sqrt(cube[self.cube_indeces['u_star_tess_0']])*(1.-2.*cube[self.cube_indeces['u_star_tess_1']])])
 
                     #Taking the "telescope" index, and adding those points with the matching cadences to the cadmask
-                    cad_index+=[(self.lc['tele_index'][self.lc['oot_mask'],0].astype(bool))&cadmask[self.lc['oot_mask']]]
+                    cad_index+=[(self.lc['tele_index'][self.lc['near_trans'],0].astype(bool))&cadmask[self.lc['near_trans']]]
                     trans_pred+=[xo.LimbDarkLightCurve(u_tess).get_light_curve(
                                                              orbit=orbit, r=i_r,
-                                                             t=self.lc['time'][self.lc['oot_mask']],
+                                                             t=self.lc['time'][self.lc['near_trans']],
                                                              texp=np.nanmedian(np.diff(self.lc['time'][cadmask]))
                                                              ).eval()/(self.lc['flux_unit']*mult)]
                 elif cad[0]=='k':
@@ -1667,10 +1655,10 @@ class monoModel():
                         u_kep=np.array([2.*np.sqrt(cube[self.cube_indeces['u_star_kep_0']])*cube[self.cube_indeces['u_star_kep_1']],
                                         np.sqrt(cube[self.cube_indeces['u_star_kep_0']])*(1.-2.*cube[self.cube_indeces['u_star_kep_1']])])
 
-                    cad_index+=[(self.lc['tele_index'][self.lc['oot_mask'],1].astype(bool))&cadmask[self.lc['oot_mask']]]
+                    cad_index+=[(self.lc['tele_index'][self.lc['near_trans'],1].astype(bool))&cadmask[self.lc['near_trans']]]
                     trans_pred+=[xo.LimbDarkLightCurve(u_kep).get_light_curve(
                                                              orbit=orbit, r=i_r,
-                                                             t=self.lc['time'][self.lc['oot_mask']],
+                                                             t=self.lc['time'][self.lc['near_trans']],
                                                              texp=np.nanmedian(np.diff(self.lc['time'][cadmask]))
                                                              ).eval()/(self.lc['flux_unit']*mult)]
                 if self.use_GP:
@@ -1678,21 +1666,21 @@ class monoModel():
                     self.mnest_gps[cad].set_parameter('kernel[0]:log_S0', cube[self.cube_indeces['logpower']] - 4 * cube[self.cube_indeces['logw0']])
                     self.mnest_gps[cad].set_parameter('kernel[0]:log_omega0', cube[self.cube_indeces['logw0']])
                     self.mnest_gps[cad].set_parameter('kernel[1]:log_sigma', cube[self.cube_indeces['logs2_'+cad]])
-                    gp_pred+=[np.zeros(np.sum(self.lc['oot_mask']))]
+                    gp_pred+=[np.zeros(np.sum(self.lc['near_trans']))]
                     gp_pred[-1][cadmask]=self.mnest_gps[cad].predict(self.lc['flux'][cadmask] - np.sum(trans_pred[-1][cadmask,:],axis = 1) - cube[self.cube_indeces['mean']],return_cov=False, return_var=False)
             
             #Multiplying lightcurves by "telescope index" 
             model=np.sum(np.stack(trans_pred,axis=2)*np.column_stack(cad_index)[:,np.newaxis,:],axis=(1,2))
-            new_yerr_sq = self.lc['flux_err'][self.lc['oot_mask']]**2 + \
-                          np.dot(self.lc['flux_err_index'][self.lc['oot_mask']],
+            new_yerr_sq = self.lc['flux_err'][self.lc['near_trans']]**2 + \
+                          np.dot(self.lc['flux_err_index'][self.lc['near_trans']],
                                  np.exp(np.array([cube[self.cube_indeces['logs2_'+cad]] for cad in self.cads])))
-            sum_log_new_yerr = np.sum(-np.sum(self.lc['oot_mask'])/2 * np.log(2*np.pi*(new_yerr_sq)))
+            sum_log_new_yerr = np.sum(-np.sum(self.lc['near_trans'])/2 * np.log(2*np.pi*(new_yerr_sq)))
 
             if self.use_GP:
                 gp_pred=np.sum(np.stack(gp_pred,axis=2)*np.column_stack(cad_index)[:,np.newaxis,:],axis=(1,2))
             else:
                 gp_pred=0
-            resids = self.lc['flux'][self.lc['oot_mask']] - model - gp_pred - cube[self.cube_indeces['mean']]
+            resids = self.lc['flux'][self.lc['near_trans']] - model - gp_pred - cube[self.cube_indeces['mean']]
             loglik = sum_log_new_yerr - np.sum(-0.5*(resids)**2/(2*new_yerr_sq),axis=0)
             print(loglik)
             return loglik
@@ -1702,16 +1690,34 @@ class monoModel():
                         **kwargs)
     
     
-    def Plot(self, interactive=False, n_samp=9):
+    def Plot(self, interactive=False, n_samp=35, overwrite=False,return_fig=False,max_gp_len=20000, bin_gp=True):
         ################################################################
         #       Varied plotting function for MonoTransit model
         ################################################################
+        
+        if not hasattr(self,'trace'):
+            n_samp==1
+        
+        #Assigning which lc was connected to the transit/gp modelling:
+        if self.bin_oot:
+            lc=self.pseudo_binlc
+        elif self.cut_distance>0:
+            lc=self.lc_near_trans
+        else:
+            lc=self.lc
+        
 
         if interactive:
             #Plots bokeh figure
-            from bokeh.plotting import figure, output_file, save
-            from bokeh.models import Band
+            
+            from bokeh.plotting import figure, output_file, save, curdoc, show
+            from bokeh.models import Band, Whisker, ColumnDataSource, Range1d
+            from bokeh.models.arrow_heads import TeeHead
             from bokeh.layouts import gridplot, row, column, layout
+
+            import seaborn as sns
+            pal = sns.color_palette('viridis', len(self.planets)+2)
+            pal = pal.as_hex()
 
             if not hasattr(self,'savenames'):
                 self.GetSavename(how='save')
@@ -1727,20 +1733,39 @@ class monoModel():
 
             fig=plt.figure(figsize=(14,6))
             gs = fig.add_gridspec(len(self.planets)*4,32,wspace=0.3,hspace=0.001)
-
+        
+        self.lc=tools.lcBin(self.lc,binsize=1/48.0)
+        
         #Finding if there's a single enormous gap in the lightcurve, and creating time splits for each region
         x_gaps=np.hstack((0, np.where(np.diff(self.lc['time'])>10)[0]+1, len(self.lc['time'])))
-
+        
         limits=[]
+        binlimits=[]
+        if len(lc['time'])!=len(self.lc['time']):
+            modlclims=[]
         gap_lens=[]
         for ng in range(len(x_gaps)-1):
             limits+=[[x_gaps[ng],x_gaps[ng+1]]]
             gap_lens+=[self.lc['time'][limits[-1][1]-1]-self.lc['time'][limits[-1][0]]]
+            binlimits+=[[np.argmin(abs(self.lc['bin_time']-self.lc['time'][x_gaps[ng]])),
+                         np.argmin(abs(self.lc['bin_time']-self.lc['time'][x_gaps[ng+1]-1]))+1]]
+            if len(lc['time'])!=len(self.lc['time']):
+                modlclims+=[[np.argmin(abs(lc['time']-self.lc['time'][x_gaps[ng]])),
+                             np.argmin(abs(lc['time']-self.lc['time'][x_gaps[ng+1]-1]))+1]]
+        if not len(lc['time'])!=len(self.lc['time']):
+            modlclims=limits
+
         gap_lens=np.array(gap_lens)
         all_lens=np.sum(gap_lens)
-        print(limits,gap_lens,all_lens)
+        limit_mask={}
+        modlclim_mask={}
+        for n in range(len(gap_lens)):
+            modlclim_mask[n]=np.tile(False,len(lc['time']))
+            modlclim_mask[n][modlclims[n][0]:modlclims[n][1]][lc['mask'][modlclims[n][0]:modlclims[n][1]]]=True
+            limit_mask[n]=np.tile(False,len(self.lc['time']))
+            limit_mask[n][limits[n][0]:limits[n][1]][self.lc['mask'][limits[n][0]:limits[n][1]]]=True
         masks=[]
-
+        
         #####################################
         #       Initialising figures
         #####################################
@@ -1753,34 +1778,50 @@ class monoModel():
             print(gap_lens/all_lens,n_pl_widths,32)
             for ng in range(len(n_pl_widths)-1):
                 if ng==0:
-                    f_alls+=[fig.add_subplot(gs[:len(self.planets)*3,n_pl_widths[ng]:n_pl_widths[ng+1]])]
-                    f_all_resids+=[fig.add_subplot(gs[len(self.planets)*3:, n_pl_widths[ng]:n_pl_widths[ng+1]],sharex=f_alls[0])]
+                    f_all_resids+=[fig.add_subplot(gs[len(self.planets)*3:,n_pl_widths[ng]:n_pl_widths[ng+1]])]
+                    f_alls+=[fig.add_subplot(gs[:len(self.planets)*3,n_pl_widths[ng]:n_pl_widths[ng+1]],
+                                                   sharex=f_all_resids[0])]
                 else:
-                    f_alls+=[fig.add_subplot(gs[:len(self.planets)*3,n_pl_widths[ng]:n_pl_widths[ng+1]],sharey=f_alls[0])]
-                    f_all_resids+=[fig.add_subplot(gs[len(self.planets)*3:, n_pl_widths[ng]:n_pl_widths[ng+1]]
-                                                   ,sharex=f_alls[-1],sharey=f_all_resids[0])]
-            for npl in range(len(self.planets)):
-                f_trans+=[fig.add_subplot(gs[(npl*4):(npl*4+3),-7:])]
-                f_trans_resids+=[fig.add_subplot(gs[(npl*4+3),-7:])]
+                    f_all_resids+=[fig.add_subplot(gs[len(self.planets)*3:, n_pl_widths[ng]:n_pl_widths[ng+1]],
+                                                   sharey=f_all_resids[0])]
+                    f_alls+=[fig.add_subplot(gs[:len(self.planets)*3,n_pl_widths[ng]:n_pl_widths[ng+1]],
+                                             sharey=f_alls[0],sharex=f_all_resids[ng])]
+            for npl in np.arange(len(self.planets))[::-1]:
+                if npl==len(self.planets)-1:
+                    f_trans_resids+=[fig.add_subplot(gs[(npl*4+3),-7:])]
+                    f_trans+=[fig.add_subplot(gs[(npl*4):(npl*4+3),-7:],sharex=f_trans_resids[0])]
+                else:
+                    f_trans+=[fig.add_subplot(gs[(npl*4):(npl*4+3),-7:],sharex=f_trans_resids[0])]
+                    f_trans_resids+=[fig.add_subplot(gs[(npl*4+3),-7:],sharex=f_trans_resids[0])]
+
         else:
             #For Bokeh plots, we can just use the size in pixels
             for ng,gaplen in enumerate(gap_lens):
                 fwidth=int(np.round(750*gaplen/all_lens)-10)
-                f_alls+=[figure(width=fwidth, plot_height=400, title=None)]
-                f_all_resids+=[figure(width=fwidth, plot_height=150, title=None)]
-            for npl in range(len(self.planets)):
-                fheight=[int(np.round(0.75*650/len(self.planets)))-3,int(np.round(0.25*650/len(self.planets)))-3]
-                f_trans+=[figure(width=240, plot_height=fheight[0], title=None)]
-                f_trans_resids+=[figure(width=240, plot_height=fheight[1], title=None)]
+                if ng==0:
+                    f_all_resids+=[figure(width=fwidth, plot_height=150, title=None)]
+                    f_alls+=[figure(width=fwidth, plot_height=400, title=None,x_range=f_all_resids[0].x_range)]
+                else:
+                    f_all_resids+=[figure(width=fwidth, plot_height=150, title=None,
+                                          y_range=f_all_resids[0].y_range)]
+                    f_alls+=[figure(width=fwidth, plot_height=400, title=None,
+                                    x_range=f_all_resids[ng].x_range, y_range=f_alls[0].y_range)]
+            for npl in np.arange(len(self.planets))[::-1]:
+                fheight=int(np.round(0.84*650/len(self.planets)))-3
+                if len(f_trans)==0:
+                    #Including 30px as space for label in lowermost plot:
+                    f_trans=[figure(width=240, plot_height=fheight+30, title=None, y_axis_location="right")]
+                else:
+                    f_trans=[figure(width=240, plot_height=fheight, title=None, 
+                                     y_axis_location="right",x_range=f_trans[-1].x_range)]+f_trans
 
 
         #####################################
         #    Initialising Transit model
-        #####################################
-
-        
-        if not hasattr(self, 'trans_to_plot') or self.trans_to_plot['n_samp']!=n_samp or 'all' not in self.trans_to_plot:
+        #####################################        
+        if not hasattr(self, 'trans_to_plot') or self.trans_to_plot['n_samp']!=n_samp or 'all' not in self.trans_to_plot or overwrite:
             self.init_trans_to_plot={}
+            self.init_trans_to_plot['all']={}
             if hasattr(self,'trace') and 'marg_all_light_curve' in self.trace.varnames:
                 prcnt=np.percentile(self.trace['marg_all_light_curve'],(5,1,50,84,95),axis=0)
                 nms=['-2sig','-1sig','med','+1sig','+2sig']
@@ -1790,14 +1831,22 @@ class monoModel():
             else:
                 print("marg_all_light_curve not in any optimised models")
             for pl in self.planets:
+                self.init_trans_to_plot[pl]={}
                 if pl in self.multis:
                     if hasattr(self,'trace') and 'multi_mask_light_curves' in self.trace.varnames:
-                        prcnt = np.percentile(self.trace['multi_mask_light_curves'][:,:,self.multis.index(pl)],
+                        if len(self.trace['multi_mask_light_curves'].shape)>2:
+                            prcnt = np.percentile(self.trace['multi_mask_light_curves'][:,:,self.multis.index(pl)],
                                                       (5,16,50,84,95),axis=0)
+                        else:
+                            prcnt = np.percentile(self.trace['multi_mask_light_curves'], (5,16,50,84,95), axis=0)
+
                         nms=['-2sig','-1sig','med','+1sig','+2sig']
                         self.init_trans_to_plot[pl] = {nms[n]:prcnt[n] for n in range(5)}
                     elif 'multi_mask_light_curves' in self.init_soln:
-                        self.init_trans_to_plot[pl]['med'] = self.init_soln['multi_mask_light_curves'][:,self.multis.index(pl)]
+                        if len(self.init_soln['multi_mask_light_curves'].shape)==1:
+                            self.init_trans_to_plot[pl]['med'] = self.init_soln['multi_mask_light_curves']
+                        else:    
+                            self.init_trans_to_plot[pl]['med'] = self.init_soln['multi_mask_light_curves'][:,self.multis.index(pl)]
                     else:
                         print('multi_mask_light_curves not in any optimised models')
                 elif pl in self.duos or self.monos:
@@ -1816,796 +1865,686 @@ class monoModel():
                 self.trans_to_plot[key1]={}
                 for key2 in self.init_trans_to_plot[key1]:
                     self.trans_to_plot[key1][key2]=np.zeros(len(self.lc['time']))
-                    self.trans_to_plot[key1][key2][self.lc['oot_mask']]=self.init_trans_to_plot[key1][key2]
+                    self.trans_to_plot[key1][key2][self.lc['near_trans']]=self.init_trans_to_plot[key1][key2][lc['near_trans']]
 
         #####################################
         #       Initialising GP model
         #####################################
+        import celerite
+        from celerite import terms
         gp_pred=[]
         gp_sd=[]
-        if self.use_GP and not hasattr(self, 'gp_to_plot') or self.gp_to_plot['n_samp']!=n_samp or 'gp_pred' not in self.gp_to_plot:
+        if self.use_GP and not hasattr(self, 'gp_to_plot') or self.gp_to_plot['n_samp']!=n_samp or 'gp_pred' not in self.gp_to_plot or overwrite:
             self.gp_to_plot={'n_samp':n_samp}
             if hasattr(self,'trace'):
                 #Using the output of the model trace
                 medvars=[var for var in self.trace.varnames if 'gp_' not in var and '_gp' not in var and 'light_curve' not in var]
-                meds={}
+                self.meds={}
                 for mv in medvars:
                     if len(self.trace[mv].shape)>1:
-                        meds[mv]=np.median(self.trace[mv],axis=0)
+                        self.meds[mv]=np.median(self.trace[mv],axis=0)
                     elif len(self.trace[mv].shape)==1:
-                        meds[mv]=np.median(self.trace[mv])  
+                        self.meds[mv]=np.median(self.trace[mv])  
+            else:
+                self.meds=self.init_soln
+            
+            limit_mask_bool={}
+            
+            # TBD HERE
+            
+            if n_samp==1:
+                #Creating the median model:
+                '''
+                for n in range(len(limits)):
+                    #Only creating out-of-transit GP for the binned (e.g. 30min) data
+                    cutBools = tools.cutLc(self.lc['bin_time'][limits[n][0]:limits[n][1]],max_gp_len,
+                                           transit_mask=self.lc['no_trans_mask'][limits[n][0]:limits[n][1]])
+                    limit_mask_bool[n]={}
+                    for nc,c in enumerate(cutBools):
+                        limit_mask_bool[n][nc]=np.tile(False,len(self.lc['time']))
+                        limit_mask_bool[n][nc][limits[n][0]:limits[n][1]][c]=limit_mask[n][limits[n][0]:limits[n][1]][c]
+                        i_kernel = terms.SHOTerm(log_S0=np.log(self.meds['S0']), log_omega0=np.log(self.meds['w0']), log_Q=np.log(1/np.sqrt(2)))
+                        i_gp = celerite.GP(i_kernel,mean=self.meds['mean'],fit_mean=False)
+                        i_gp.compute(self.lc['time'][limit_mask_bool[n][nc]].astype(np.float32),
+                                     np.sqrt(self.lc['flux_err'][limit_mask_bool[n][nc]]**2 + \
+                                     np.dot(self.lc['flux_err_index'][limit_mask_bool[n][nc]],np.exp(self.meds['logs2']))))
+                        #llk=i_gp.log_likelihood(mod.lc['flux'][mod.lc['mask']][limits[n][0]:limits[n][1]][c]-mod.trans_to_plot['all']['med'][mod.lc['mask']][limits[n][0]:limits[n][1]][c]-mod.meds['mean'])
+                        #print(llk.eval())
+                        i_gp_pred, i_gp_var= i_gp.predict(self.lc['flux'][limit_mask_bool[n][nc]] - \
+                                            self.trans_to_plot['all']['med'][limit_mask_bool[n][nc]],
+                                            t=self.lc['time'][limits[n][0]:limits[n][1]][c].astype(np.float32),
+                                            return_var=True,return_cov=False)
+                        gp_pred+=[i_gp_pred]
+                        gp_sd+=[np.sqrt(i_gp_var)]
+                    '''
+                gp_pred=[];gp_sd=[]
+                for n in np.arange(len(gap_lens)):
+                    with self.model:
+                        pred,var=xo.eval_in_model(self.gp['use'].predict(self.lc['time'][limits[n][0]:limits[n][1]],
+                                                                return_var=True,return_cov=False),self.meds)                    
+                        gp_pred+=[pred]
+                        gp_sd+=[np.sqrt(var)]
+                    print(n,len(self.lc['time'][limits[n][0]:limits[n][1]]),'->',len(gp_sd[-1]),len(gp_pred[-1]))
                 
-                #Making sure our gp['all'] is initialised:
-                with self.model:
-                    llk=xo.eval_in_model(self.gp['all'].log_likelihood(self.lc['flux']-self.trans_to_plot['all']['med']), meds)
-                    print(llk)
-
-                if n_samp==1:
-                    #Creating the median model:
-                    for n in range(len(limits)):
-                        #Need to break up the lightcurve even further to avoid GP burning memory:
-                        cutBools = tools.cutLc(self.lc['time'][limits[n][0]:limits[n][1]],10000)
-                        for c in cutBools:
-                            with self.model:
-                                i_gp_pred, i_gp_var = xo.eval_in_model(
-                                    self.gp['all'].predict(self.lc['time'][limits[n][0]:limits[n][1]][c], return_var=True), meds,
-                                    )
-                                gp_pred+=[i_gp_pred]
-                                gp_sd+=[np.sqrt(i_gp_var)]
-                    self.gp_to_plot['gp_pred']=np.hstack(gp_pred)
-                    self.gp_to_plot['gp_sd']=np.hstack(gp_sd)
-                elif n_samp>1:
-                    #Doing multiple samples and making percentiles:
-                    for n in range(len(limits)):
-                        #Need to break up the lightcurve even further to avoid GP burning memory:
-                        cutBools = tools.cutLc(self.lc['time'][limits[n][0]:limits[n][1]],8000)
-                        for c in cutBools:
-                            i_gp_pred=[]
-                            i_gp_var=[]
-                            print(limits[n],np.sum(c),len(c),len(self.lc['time'][limits[n][0]:limits[n][1]][c]))
-                            with self.model:
-                                for i, sample in enumerate(xo.get_samples_from_trace(self.trace, size=n_samp)):
-                                    ii_gp_pred, ii_gp_var = xo.eval_in_model(
-                                        self.gp['all'].predict(self.lc['time'][limits[n][0]:limits[n][1]][c], return_var=True),
-                                        sample)
-                                    i_gp_pred+=[ii_gp_pred]
-                                    i_gp_var+=[ii_gp_var]
-                            av, std = tools.weighted_avg_and_std(np.vstack(i_gp_pred),np.sqrt(np.vstack(i_gp_var)),axis=0)
-                            gp_pred+=[av]
-                            gp_sd+=[std]
                 self.gp_to_plot['gp_pred']=np.hstack(gp_pred)
                 self.gp_to_plot['gp_sd']=np.hstack(gp_sd)
-            else:
-                #Making sure our gp['all'] is initialised:
-                with self.model:
-                    llk=xo.eval_in_model(self.gp['all'].log_likelihood(np.nan_to_num(self.lc['flux'],0.0)-self.trans_to_plot['all']['med']), self.init_soln)
-                #Using the initialised/minized model
+            elif n_samp>1:
+                
+                self.gp['use'].predict(self.lc['time'])
+                '''
+                assert hasattr(self,'trace')
+                #Doing multiple samples and making percentiles:
                 for n in range(len(limits)):
                     #Need to break up the lightcurve even further to avoid GP burning memory:
-                    cutBools = tools.cutLc(self.lc['time'][limits[n][0]:limits[n][1]],10000)
-                    for c in cutBools:
-                        with self.model:
-                            i_gp_pred, i_gp_var = xo.eval_in_model(
-                                self.gp['all'].predict(self.lc['time'][limits[n][0]:limits[n][1]][c], return_var=True), self.init_soln)
-                            gp_pred+=[i_gp_pred]
-                            gp_sd+=[np.sqrt(i_gp_var)]
+                    cutBools = tools.cutLc(self.lc['time'][limits[n][0]:limits[n][1]],max_gp_len,
+                                           transit_mask=self.lc['no_trans_mask'][limits[n][0]:limits[n][1]])
+                    i_kernel = terms.SHOTerm(log_S0=np.log(self.meds['S0']), log_omega0=np.log(self.meds['w0']), log_Q=np.log(1/np.sqrt(2)))
+                    i_gp = celerite.GP(i_kernel,mean=self.meds['mean'],fit_mean=False)
+                    limit_mask_bool[n]={}
+                    for nc,c in enumerate(cutBools):
+                        limit_mask_bool[n][nc]=np.tile(False,len(self.lc['time']))
+                        limit_mask_bool[n][nc][limits[n][0]:limits[n][1]][c]=limit_mask[n][limits[n][0]:limits[n][1]][c]
+                        i_gp_pred=[]
+                        i_gp_var=[]
+                        for i, sample in enumerate(xo.get_samples_from_trace(self.trace, size=n_samp)):
+                            print(np.exp(sample['logs2']))
+                            i_gp.set_parameter('kernel:log_S0',np.log(sample['S0']))
+                            i_gp.set_parameter('kernel:log_omega0',np.log(sample['w0']))
+                            i_gp.set_parameter('mean:value',sample['mean'])
+                            i_gp.compute(self.lc['time'][limit_mask_bool[n][nc]],
+                                         np.sqrt(self.lc['flux_err'][limit_mask_bool[n][nc]]**2 + \
+                                          np.dot(self.lc['flux_err_index'][limit_mask_bool[n][nc]], np.exp(sample['logs2']))))
+                            marg_lc=np.tile(0.0,len(self.lc['time']))
+                            marg_lc[self.lc['near_trans']]=sample['marg_all_light_curve']
+                            ii_gp_pred, ii_gp_var= i_gp.predict(self.lc['flux'][limit_mask_bool[n][nc]] - marg_lc[limit_mask_bool[n][nc]],
+                                            t=self.lc['time'][limits[n][0]:limits[n][1]][c].astype(np.float32),
+                                            return_var=True,return_cov=False)
+
+                            i_gp_pred+=[ii_gp_pred]
+                            i_gp_var+=[ii_gp_var]
+                        av, std = tools.weighted_avg_and_std(np.vstack(i_gp_pred),np.sqrt(np.vstack(i_gp_var)),axis=0)
+                        gp_pred+=[av]
+                        gp_sd+=[std]
                 self.gp_to_plot['gp_pred']=np.hstack(gp_pred)
                 self.gp_to_plot['gp_sd']=np.hstack(gp_sd)
-
-        min_trans=np.nanmin(self.trans_to_plot['all']['med'])
+                '''
+            i_gp_pred=[]
+            i_gp_var=[]
+            print(limits,gap_lens,range(len(gap_lens)),np.arange(len(gap_lens)))
+            for n in np.arange(len(gap_lens)):
+                for i, sample in enumerate(xo.get_samples_from_trace(self.trace, size=n_samp)):
+                    with self.model:
+                        ii_gp_pred, ii_gp_var = xo.eval_in_model(self.gp['use'].predict(self.lc['time'][limits[n][0]:limits[n][1]],
+                                                                                    return_var=True,return_cov=False),sample)
+                    i_gp_pred+=[ii_gp_pred]
+                    i_gp_var+=[ii_gp_var]
+                print(np.shape(np.vstack(i_gp_pred)),np.shape(np.vstack(i_gp_var)))
+                av, std = tools.weighted_avg_and_std(np.vstack(i_gp_pred),np.sqrt(np.vstack(i_gp_var)),axis=0)
+                gp_pred+=[av]
+                gp_sd+=[std]
+            self.gp_to_plot['gp_pred']=np.hstack(gp_pred)
+            self.gp_to_plot['gp_sd']=np.hstack(gp_sd)
+        min_trans=abs(np.nanmin(self.trans_to_plot['all']['med']))
         resid_sd=np.nanstd(self.lc['flux']-self.gp_to_plot['gp_pred']-self.trans_to_plot['all']['med'])
 
         #####################################
         #  Plotting full lightcurve regions
         #####################################
-        
-        for n in range(len(limits)):
+        raw_plot_offset = 2.5*min_trans if not self.use_GP else abs(min_trans)+abs(np.min(self.gp_to_plot['gp_pred'][self.lc['mask']]))
+        if self.use_GP:
+            resid_sd=np.nanstd(self.lc['flux'] - self.gp_to_plot['gp_pred'] - self.trans_to_plot['all']['med'])
+        else:
+            resid_sd=np.nanstd(self.lc['flux_flat'] - self.trans_to_plot['all']['med'])
+
+        for n in np.arange(len(gap_lens)):
+            low_lim = self.lc['time'][limits[n][0]]
+            upp_lim = self.lc['time'][limits[n][1]-1]
+            unmasked_lim_bool = (self.lc['time']>=(low_lim-0.5))&(self.lc['time']<(upp_lim+0.5))
+            
+            if self.use_GP:
+                if np.nanmedian(np.diff(self.lc['time'][limit_mask[n]]))<1/72:
+                    bin_detrend=tools.bin_lc_segment(np.column_stack((self.lc['time'][limit_mask[n]],
+                                   self.lc['flux'][limit_mask[n]] - \
+                                   self.gp_to_plot['gp_pred'][limit_mask[n]],
+                                   self.lc['flux_err'][limit_mask[n]])),
+                                   binsize=29/1440)
+                    bin_resids=tools.bin_lc_segment(np.column_stack((self.lc['time'][limit_mask[n]],
+                                   self.lc['flux'][limit_mask[n]] - \
+                                   self.gp_to_plot['gp_pred'][limit_mask[n]] - \
+                                   self.trans_to_plot['all']['med'][limit_mask[n]],
+                                   self.lc['flux_err'][limit_mask[n]])),
+                                   binsize=29/1440)
+            else:
+                if np.nanmedian(np.diff(self.lc['time'][limit_mask[n]]))<1/72:
+                    bin_resids=tools.bin_lc_segment(np.column_stack((self.lc['time'][limit_mask[n]],
+                                   self.lc['flux_flat'][limit_mask[n]] - \
+                                   self.trans_to_plot['all']['med'][limit_mask[n]],
+                                   self.lc['flux_err'][limit_mask[n]])),
+                                   binsize=29/1440)
+                mean=np.nanmedian(self.trace['mean']) if hasattr(self,'trace') else self.init_soln['mean']
+
+            
             #Plotting each part of the lightcurve:
             if interactive:
-                
-                #Plotting raw flux
-                f_alls[n].circle(self.lc['time'][limits[n][0]:limits[n][1]],
-                                 self.lc['flux'][limits[n][0]:limits[n][1]]+2.5*min_trans, ".k",
-                                 label="raw data",alpha=0.5,markersize=0.75)
                 if self.use_GP:
                     #Plotting GP region and subtracted flux
-                    f_alls[n].line(self.lc['time'][limits[n][0]:limits[n][1]], self.gp_to_plot['gp_pred']+2.5*min_trans, color="C3", label="GP fit")
-                    b=Band(base=self.lc['time'][limits[n][0]:limits[n][1]],
-                           lower=self.gp_to_plot['gp_pred']-self.gp_to_plot['gp_sd'], 
-                           upper=self.gp_to_plot['gp_pred'][limits[n][0]:limits[n][1]]+self.gp_to_plot['gp_sd'][limits[n][0]:limits[n][1]], 
-                           level='underlay',fill_alpha=0.4, line_width=0.0, color="C3", label="GP fit")
-                    f_alls[n].add_layout(b)
-                    f_alls[n].circle(self.lc['time'][limits[n][0]:limits[n][1]],
-                                     self.lc['flux'][limits[n][0]:limits[n][1]] - self.gp_to_plot['gp_pred'][limits[n][0]:limits[n][1]], ".k",
-                                     label="data",alpha=0.5,markersize=0.75)
+                    if np.nanmedian(np.diff(self.lc['time']))<1/72:
+                        #PLOTTING DETRENDED FLUX, HERE WE BIN
+                        f_alls[n].circle(self.lc['time'][limit_mask[n]],
+                                         self.lc['flux'][limit_mask[n]]+raw_plot_offset,
+                                         alpha=0.5,size=0.75,color='black')
+                        f_alls[n].circle(self.lc['bin_time'][binlimits[n][0]:binlimits[n][1]],
+                                         self.lc['bin_flux'][binlimits[n][0]:binlimits[n][1]] + raw_plot_offset,
+                                         alpha=0.65,size=3.5,legend="raw")
+                        errors = ColumnDataSource(data=dict(base=self.lc['bin_time'][binlimits[n][0]:binlimits[n][1]],
+                                                     lower=self.lc['bin_flux'][binlimits[n][0]:binlimits[n][1]] + \
+                                                     raw_plot_offset - self.lc['bin_flux_err'][binlimits[n][0]:binlimits[n][1]],
+                                                     upper=self.lc['bin_flux'][binlimits[n][0]:binlimits[n][1]] + \
+                                                     raw_plot_offset + self.lc['bin_flux_err'][binlimits[n][0]:binlimits[n][1]]))
+
+                        f_alls[n].add_layout(Whisker(source=errors, base='base', upper='upper',lower='lower',
+                                                     line_color='#dddddd', line_alpha=0.5,
+                                                     upper_head=TeeHead(line_color='#dddddd',line_alpha=0.5),
+                                                     lower_head=TeeHead(line_color='#dddddd',line_alpha=0.5)))
+                    else:
+                        #PLOTTING DETRENDED FLUX, NO BINNING
+                        f_alls[n].circle(self.lc['time'][limit_mask[n]],
+                                         self.lc['flux'][limit_mask[n]]+raw_plot_offset,
+                                         legend="raw",alpha=0.65,size=3.5)
+
+                    
+                    gpband = ColumnDataSource(data=dict(base=self.lc['time'][limit_mask[n]],
+                              lower=raw_plot_offset+self.gp_to_plot['gp_pred'][limit_mask[n]]-self.gp_to_plot['gp_sd'][limit_mask[n]], 
+                              upper=raw_plot_offset+self.gp_to_plot['gp_pred'][limit_mask[n]]+self.gp_to_plot['gp_sd'][limit_mask[n]]))
+                    print(type(gpband),pal[3])
+                    f_alls[n].add_layout(Band(source=gpband,base='base',lower='lower',upper='upper',
+                                              fill_alpha=0.4, line_width=0.0, fill_color=pal[3]))
+                    f_alls[n].line(self.lc['time'][limit_mask[n]], self.gp_to_plot['gp_pred'][limit_mask[n]]+raw_plot_offset, 
+                                   line_alpha=0.6, line_width=1.0, color=pal[3], legend="GP fit")
+
+                    if np.nanmedian(np.diff(self.lc['time'][limit_mask[n]] ))<1/72:
+                        #Here we plot the detrended flux:
+                        f_alls[n].circle(self.lc['time'][limit_mask[n]],
+                                         self.lc['flux'][limit_mask[n]]-self.gp_to_plot['gp_pred'][limit_mask[n]], color='black',
+                                         alpha=0.5,size=0.75)
+                        f_alls[n].circle(bin_detrend[:,0],bin_detrend[:,1],alpha=0.65,size=3.5,legend='detrended')
+                        
+                        errors = ColumnDataSource(data=dict(base=bin_detrend[:,0],
+                                                     lower=bin_detrend[:,1]+bin_detrend[:,2],
+                                                     upper=bin_detrend[:,1]-bin_detrend[:,2]))
+                        f_alls[n].add_layout(Whisker(source=errors, base='base', upper='upper',lower='lower',
+                                                     line_color='#dddddd', line_alpha=0.5,
+                                                     upper_head=TeeHead(line_color='#dddddd',line_alpha=0.5),
+                                                     lower_head=TeeHead(line_color='#dddddd',line_alpha=0.5)))
+                    else:
+                        f_alls[n].circle(self.lc['time'][limit_mask[n]],
+                                         self.lc['flux'][limit_mask[n]]-self.gp_to_plot['gp_pred'][limit_mask[n]],
+                                         legend="detrended",alpha=0.65,
+                                         size=3.5)
+
                 else:
-                    #Plotting flat flux only
-                    f_alls[n].circle(self.lc['time'][limits[n][0]:limits[n][1]],
-                                     self.lc['flux_flat'][limits[n][0]:limits[n][1]],
-                                     ".k", label="flat data", zorder=-1000,alpha=0.5,markersize=0.75)
+                    if np.nanmedian(np.diff(self.lc['time']))<1/72:
+                        #PLOTTING DETRENDED FLUX, HERE WE BIN
+                        f_alls[n].circle(self.lc['time'][limit_mask[n]],
+                                         self.lc['flux_flat'][limit_mask[n]]+raw_plot_offset, ".k",
+                                         alpha=0.5,size=0.75)
+                        f_alls[n].circle(self.lc['bin_time'][binlimits[n][0]:binlimits[n][1]],
+                                         self.lc['bin_flux'][binlimits[n][0]:binlimits[n][1]],
+                                         legend="detrended",alpha=0.65,size=3.5)
+                        
+                        errors = ColumnDataSource(data=dict(base=self.lc['bin_time'][binlimits[n][0]:binlimits[n][1]],
+                                                     lower=self.lc['bin_flux'][binlimits[n][0]:binlimits[n][1]] - \
+                                                     self.lc['bin_flux_err'][binlimits[n][0]:binlimits[n][1]],
+                                                     upper=self.lc['bin_flux'][binlimits[n][0]:binlimits[n][1]] + \
+                                                     self.lc['bin_flux_err'][binlimits[n][0]:binlimits[n][1]]))
+                        f_alls[n].add_layout(Whisker(source=errors, base='base', upper='upper',lower='lower',
+                                                     line_color='#dddddd', line_alpha=0.5,
+                                                     upper_head=TeeHead(line_color='#dddddd',line_alpha=0.5),
+                                                     lower_head=TeeHead(line_color='#dddddd',line_alpha=0.5)))
+                        
+                        #Here we plot the detrended flux:
+                        f_alls[n].circle(self.lc['time'][limit_mask[n]],
+                                         self.lc['flux_flat'][limit_mask[n]]+raw_plot_offset, ".k",
+                                         alpha=0.5,size=0.75)
+                        f_alls[n].circle(self.lc['bin_time'][binlimits[n][0]:binlimits[n][1]],
+                                         self.lc['bin_flux_flat'][binlimits[n][0]:binlimits[n][1]],
+                                         legend="detrended",alpha=0.65,size=3.5)
+                        errors = ColumnDataSource(data=dict(base=self.lc['bin_time'][binlimits[n][0]:binlimits[n][1]],
+                                                     lower=self.lc['bin_flux_flat'][binlimits[n][0]:binlimits[n][1]] - \
+                                                     self.lc['bin_flux_err'][binlimits[n][0]:binlimits[n][1]],
+                                                     upper=self.lc['bin_flux_flat'][binlimits[n][0]:binlimits[n][1]] + \
+                                                     self.lc['bin_flux_err'][binlimits[n][0]:binlimits[n][1]]))
+                        f_alls[n].add_layout(Whisker(source=errors, base='base', upper='upper',lower='lower',
+                                                     line_color='#dddddd', line_alpha=0.5,
+                                                     upper_head=TeeHead(line_color='#dddddd',line_alpha=0.5),
+                                                     lower_head=TeeHead(line_color='#dddddd',line_alpha=0.5)))
+                    else:
+                        #PLOTTING DETRENDED FLUX, NO BINNING
+                        f_alls[n].circle(self.lc['time'][limit_mask[n]],
+                                         self.lc['flux'][limit_mask[n]]+raw_plot_offset,
+                                         legend="raw",alpha=0.65,size=3.5)
+                        f_alls[n].circle(self.lc['time'][limit_mask[n]],
+                                         self.lc['flux_flat'][limit_mask[n]],
+                                         legend="detrended",alpha=0.65,size=3.5)
                 #Plotting transit
                 if len(self.trans_to_plot['all'])>1:
-                    b1=Band(base=self.lc['time'][limits[n][0]:limits[n][1]],
-                           lower=self.trans_to_plot['all']['-2sig'],upper=self.trans_to_plot['all']['+2sig'],
-                           level='underlay',fill_alpha=0.25, line_width=0.0, color="C4")
-                    b2=Band(base=self.lc['time'][limits[n][0]:limits[n][1]],
-                           lower=self.trans_to_plot['all']['-1sig'],upper=self.trans_to_plot['all']['+1sig'],
-                           level='underlay',fill_alpha=0.25, line_width=0.0, color="C4")
-                    f_alls[n].add_layout(b1)
-                    f_alls[n].add_layout(b2)
-                f_alls[n].line(self.lc['time'][limits[n][0]:limits[n][1]], self.trans_to_plot["all"]["med"][limits[n][0]:limits[n][1]],
-                                   color="C4", label="transit fit")
+                    trband = ColumnDataSource(data=dict(base=self.lc['time'][unmasked_lim_bool],
+                                    lower=self.trans_to_plot['all']['-2sig'][unmasked_lim_bool],
+                                    upper=self.trans_to_plot['all']['+2sig'][unmasked_lim_bool]))
+                    f_alls[n].add_layout(Band(source=trband,base='base',lower='lower',upper='upper',
+                           level='underlay',fill_alpha=0.25, line_width=0.0, fill_color=pal[4]))
+                    trband = ColumnDataSource(data=dict(base=self.lc['time'][unmasked_lim_bool],
+                                    lower=self.trans_to_plot['all']['-1sig'][unmasked_lim_bool],
+                                    upper=self.trans_to_plot['all']['+1sig'][unmasked_lim_bool]))
+                    f_alls[n].add_layout(Band(source=trband,base='base',lower='lower',upper='upper',
+                           level='underlay',fill_alpha=0.25, line_width=0.0, fill_color=pal[4]))
+                f_alls[n].line(self.lc['time'][unmasked_lim_bool],
+                               self.trans_to_plot["all"]["med"][unmasked_lim_bool],
+                               color=pal[4], legend="transit fit")
+                
+                if n>0:
+                    f_alls[n].yaxis.major_tick_line_color = None  # turn off x-axis major ticks
+                    f_alls[n].yaxis.minor_tick_line_color = None  # turn off x-axis minor ticks
+                    f_alls[n].yaxis.major_label_text_font_size = '0pt'  # preferred method for removing tick labels
+                    f_all_resids[n].yaxis.major_tick_line_color = None  # turn off x-axis major ticks
+                    f_all_resids[n].yaxis.minor_tick_line_color = None  # turn off x-axis minor ticks
+                    f_all_resids[n].yaxis.major_label_text_font_size = '0pt'  # preferred method for removing tick labels
                 
                 if self.use_GP:
                     #Plotting residuals:
-                    f_all_resids[n].circle(self.lc['time'][limits[n][0]:limits[n][1]],
-                                     self.lc['flux'][limits[n][0]:limits[n][1]]-self.gp_to_plot['gp_pred']-self.trans_to_plot['all']['med'], ".k",
-                                     label="raw data", zorder=-1000,alpha=0.5,markersize=0.75)
+                    if np.nanmedian(np.diff(self.lc['time'][limit_mask[n]]))<1/72:
+                        #HERE WE BIN
+                        f_all_resids[n].circle(self.lc['time'][limit_mask[n]],
+                                               self.lc['flux'][limit_mask[n]] - self.gp_to_plot['gp_pred'][limit_mask[n]] - \
+                                               self.trans_to_plot['all']['med'][limit_mask[n]], color='black',
+                                               alpha=0.5,size=0.75)
+                        
+                        errors = ColumnDataSource(data=dict(base=bin_resids[:,0],
+                                                     lower=bin_resids[:,1] - bin_resids[:,2],
+                                                     upper=bin_resids[:,1] + bin_resids[:,2]))
+                        f_alls[n].add_layout(Whisker(source=errors, base='base', upper='upper',lower='lower',
+                                                     line_color='#dddddd', line_alpha=0.5,
+                                                     upper_head=TeeHead(line_color='#dddddd',line_alpha=0.5),
+                                                     lower_head=TeeHead(line_color='#dddddd',line_alpha=0.5)))
+                        f_all_resids[n].circle(bin_resids[:,0],bin_resids[:,1],
+                                               legend="residuals",alpha=0.65,size=3.5)
+                    else:
+                        errors = ColumnDataSource(data=dict(base=self.lc['time'][limit_mask[n]],
+                                          lower=self.lc['flux'][limit_mask[n]] - self.gp_to_plot['gp_pred'][limit_mask[n]] - \
+                                           self.trans_to_plot['all']['med'][limit_mask[n]] - self.lc['flux_err'][limit_mask[n]],
+                                          upper=self.lc['flux'][limit_mask[n]] - self.gp_to_plot['gp_pred'][limit_mask[n]] - \
+                                           self.trans_to_plot['all']['med'][limit_mask[n]] + self.lc['flux_err'][limit_mask[n]]))
+                        f_alls[n].add_layout(Whisker(source=errors, base='base', upper='upper',lower='lower',
+                                                     line_color='#dddddd', line_alpha=0.5,
+                                                     upper_head=TeeHead(line_color='#dddddd',line_alpha=0.5),
+                                                     lower_head=TeeHead(line_color='#dddddd',line_alpha=0.5)))
+                        f_all_resids[n].circle(self.lc['time'][limit_mask[n]],
+                                               self.lc['flux'][limit_mask[n]] - self.gp_to_plot['gp_pred'][limit_mask[n]] - \
+                                               self.trans_to_plot['all']['med'][limit_mask[n]],
+                                               alpha=0.65,
+                                               size=3.5)
+
                 else:
-                    #Plotting residuals:
+                    #Plotting detrended:
                     mean=np.nanmedian(self.trace['mean']) if hasattr(self,'trace') else self.init_soln['mean']
-                    f_all_resids[n].circle(self.lc['time'][limits[n][0]:limits[n][1]],
-                                     self.lc['flux_flat'][limits[n][0]:limits[n][1]]-mean-self.trans_to_plot["all"]["med"], ".k",
-                                     label="residuals", zorder=-1000,alpha=0.5,markersize=0.75)
-                #Labelling axes:
-                if n==0:
-                    extra = '[ppt]' if self.lc.flux_unit==0.001 else ''
-                    f_all_resids[n] = 'flux '+extra#<- y-axis label
-                    f_all[n].yaxis.axis_label = 'residuals '+extra#<- y-axis label
+                    if np.nanmedian(np.diff(self.lc['time'][limit_mask[n]]))<1/72:
+                        f_all_resids[n].circle(self.lc['time'][limit_mask[n]],
+                                               self.lc['flux_flat'][limit_mask[n]] - mean - \
+                                               self.trans_to_plot["all"]["med"][limit_mask[n]], color='black',
+                                               zorder=-1000,alpha=0.5,
+                                               size=0.75)
+                        errors = ColumnDataSource(data=dict(base=bin_resids[:,0],
+                                                lower=bin_resids[:,1] - bin_resids[:,2],
+                                                upper=bin_resids[:,1] + bin_resids[:,2]))
+                        f_alls[n].add_layout(Whisker(source=errors, base='base', upper='upper',lower='lower',
+                                                     line_color='#dddddd', line_alpha=0.5,
+                                                     upper_head=TeeHead(line_color='#dddddd',line_alpha=0.5),
+                                                     lower_head=TeeHead(line_color='#dddddd',line_alpha=0.5)))
+                        f_all_resids[n].circle(bin_resids[:,0],bin_resids[:,1],
+                                               alpha=0.65,size=3.5)
+                        
+                    else:
+                        f_alls[n].circle(self.lc['time'][limit_mask[n]], 
+                                         self.lc['flux_flat'][limit_mask[n]] - mean - \
+                                         self.trans_to_plot["all"]["med"][limit_mask[n]],
+                                         legend="raw data",alpha=0.65,size=3.5)
+
                 f_all_resids[n].xaxis.axis_label = 'Time [BJD-'+str(int(self.lc['jd_base']))+']' #<- x-axis label
+                f_alls[n].legend.location = 'bottom_right'
+                f_alls[n].legend.background_fill_alpha = 0.1
+                f_alls[n].xaxis.major_tick_line_color = None  # turn off x-axis major ticks
+                f_alls[n].xaxis.minor_tick_line_color = None  # turn off x-axis minor ticks
+                f_alls[n].xaxis.major_label_text_font_size = '0pt'  # preferred method for removing tick labels
+                
             else:
-                #Plotting raw flux
-                f_alls[n].plot(self.lc['time'][limits[n][0]:limits[n][1]],
-                               self.lc['flux'][limits[n][0]:limits[n][1]] + \
-                               abs(min_trans+np.min(self.gp_to_plot['gp_pred'])), ".k", label="raw data", 
-                               zorder=-1000,alpha=0.5,markersize=0.75)
-                if 'bin_time' not in self.lc:
-                    self.lc=tools.lcBin(self.lc,binsize=29/86400)
-                f_alls[n].errorbar(self.lc['bin_time'][limits[n][0]:limits[n][1]],
-                                   self.lc['bin_flux'][limits[n][0]:limits[n][1]] + \
-                                   abs(min_trans+np.min(self.gp_to_plot['gp_pred'])), 
-                                   yerr=self.lc['bin_flux_err'][limits[n][0]:limits[n][1]],
-                                   fmt=".", label="raw data", ecolor='#dddddd', 
-                                   alpha=0.5,markersize=3.5)
+                #Matplotlib plot:
+                if np.nanmedian(np.diff(self.lc['time'][limit_mask[n]]))<1/72:
+                    f_alls[n].plot(self.lc['time'][limit_mask[n]], self.lc['flux'][limit_mask[n]] + raw_plot_offset,
+                                   ".k", zorder=-1000,alpha=0.5,markersize=0.75)
+                    f_alls[n].errorbar(self.lc['bin_time'][binlimits[n][0]:binlimits[n][1]],
+                                       self.lc['bin_flux'][binlimits[n][0]:binlimits[n][1]] + raw_plot_offset, 
+                                       yerr=self.lc['bin_flux_err'][binlimits[n][0]:binlimits[n][1]],color='C1',
+                                       fmt=".", label="raw", ecolor='#dddddd', alpha=0.5,markersize=3.5)
+                else:
+                    f_alls[n].errorbar(self.lc['time'][limit_mask[n]], self.lc['flux'][limit_mask[n]] + raw_plot_offset, 
+                                       yerr=self.lc['flux_err'][binlimits[n][0]:binlimits[n][1]],color='C1',
+                                       fmt=".", label="raw", ecolor='#dddddd', 
+                                       alpha=0.5,markersize=3.5)
+
                 if self.use_GP:
                     #Plotting GP region and subtracted flux
                     f_alls[n].fill_between(self.lc['time'][limits[n][0]:limits[n][1]],
-                                           self.gp_to_plot['gp_pred'][limits[n][0]:limits[n][1]] + \
-                                           abs(min_trans+np.min(self.gp_to_plot['gp_pred'])) - \
+                                           self.gp_to_plot['gp_pred'][limits[n][0]:limits[n][1]] + raw_plot_offset - \
                                            self.gp_to_plot['gp_sd'][limits[n][0]:limits[n][1]],
-                                           self.gp_to_plot['gp_pred'][limits[n][0]:limits[n][1]] + \
-                                           abs(min_trans+np.min(self.gp_to_plot['gp_pred'])) + \
+                                           self.gp_to_plot['gp_pred'][limits[n][0]:limits[n][1]] + raw_plot_offset + \
                                            self.gp_to_plot['gp_sd'][limits[n][0]:limits[n][1]],
                                            color="C3", label="GP fit",alpha=0.3,zorder=4)
-                    f_alls[n].plot(self.lc['time'][limits[n][0]:limits[n][1]],
-                                   self.lc['flux'][limits[n][0]:limits[n][1]] - \
-                                   self.gp_to_plot['gp_pred'][limits[n][0]:limits[n][1]],".",
-                                   alpha=0.5,markersize=0.75,zorder=8)
+                    if np.nanmedian(np.diff(self.lc['time'][limit_mask[n]]))<1/72:
+                        f_alls[n].plot(self.lc['time'][limit_mask[n]], self.lc['flux'][limit_mask[n]] - \
+                                       self.gp_to_plot['gp_pred'][limit_mask[n]],
+                                       ".k", zorder=-1000,alpha=0.5,markersize=0.75)
+                        f_alls[n].errorbar(bin_detrend[:,0], bin_detrend[:,1], yerr=bin_detrend[:,2],color='C2',
+                                           fmt=".", label="detrended", ecolor='#dddddd', alpha=0.5,markersize=3.5)
+                        
+                        #Plotting residuals:
+                        f_all_resids[n].plot(self.lc['time'][limit_mask[n]],
+                                             self.lc['flux'][limit_mask[n]] - self.gp_to_plot['gp_pred'][limit_mask[n]] - \
+                                             self.trans_to_plot['all']['med'][limit_mask[n]],
+                                             ".k", zorder=-1000,alpha=0.5,markersize=0.75)
+
+                        f_all_resids[n].errorbar(bin_resids[:,0],bin_resids[:,1], yerr=bin_resids[:,2], fmt=".", 
+                                                 ecolor='#dddddd',alpha=0.5,markersize=0.75)
+                        
+                    else:
+                        f_alls[n].errorbar(self.lc['time'][limit_mask[n]], 
+                                           self.lc['flux'][limit_mask[n]] - self.gp_to_plot['gp_pred'][limit_mask[n]], 
+                                           yerr=self.lc['flux_err'][limit_mask[n]],color='C2',
+                                           fmt=".", label="detrended", ecolor='#dddddd', alpha=0.5,markersize=3.5)
+                        
+                        f_all_resids[n].errorbar(self.lc['time'][limit_mask[n]], 
+                                                 self.lc['flux'][limit_mask[n]] - self.gp_to_plot['gp_pred'][limit_mask[n]] - \
+                                                 self.trans_to_plot['all']['med'][limit_mask[n]],
+                                                 yerr=self.lc['flux_err'][limit_mask[n]], fmt=".",
+                                                 ecolor='#dddddd',label="residuals", alpha=0.5,markersize=0.75)
 
                 else:
-                    #Plotting flat flux only
-                    f_alls[n].plot(self.lc['time'][limits[n][0]:limits[n][1]], self.lc['flux_flat'][limits[n][0]:limits[n][1]],
-                                   ".k", label="data",alpha=0.5,markersize=0.75)
+                    #GP not used.
+                    if np.nanmedian(np.diff(self.lc['time'][limit_mask[n]]))<1/72:
+                        #Plotting flat flux only
+                        f_alls[n].plot(self.lc['time'][limit_mask[n]], self.lc['flux_flat'][limit_mask[n]],
+                                       ".k",alpha=0.5,markersize=0.75)
+                        f_alls[n].errorbar(self.lc['bin_time'][binlimits[n][0]:binlimits[n][1]],
+                                           self.lc['bin_flux_flat'][binlimits[n][0]:binlimits[n][1]],
+                                           yerr= self.lc['bin_flux_err'][binlimits[n][0]:binlimits[n][1]], color='C2',
+                                           fmt=".", label="detrended", ecolor='#dddddd', alpha=0.5,markersize=3.5)
+                        #Plotting residuals:
+                        f_all_resids[n].plot(self.lc['time'][limit_mask[n]],
+                                             self.lc['flux'][limit_mask[n]] - self.gp_to_plot['gp_pred'][limit_mask[n]] - \
+                                             self.trans_to_plot['all']['med'][limit_mask[n]],
+                                             ".k",label="raw data", zorder=-1000,alpha=0.5,markersize=0.75)
+
+                        f_all_resids[n].errorbar(bin_resids[:,0],bin_resids[:,1], yerr=bin_resids[:,2], fmt=".",
+                                                 ecolor='#dddddd',label="residuals", alpha=0.5,markersize=0.75)
+                        
+                    else:
+                        f_alls[n].errorbar(self.lc['time'][limit_mask[n]], self.lc['flux_flat'][limit_mask[n]],
+                                           yerr=bin_detrend[:,2],fmt=".", label="detrended", 
+                                           ecolor='#dddddd', alpha=0.5,markersize=3.5)
+                        
+                        f_all_resids[n].errorbar(self.lc['time'][limit_mask[n]], 
+                                                 self.lc['flux_flat'][limit_mask[n]] - \
+                                                 self.trans_to_plot['all']['med'][limit_mask[n]],
+                                                 yerr=self.lc['flux_err'], fmt=".",
+                                                 ecolor='#dddddd', alpha=0.5,markersize=0.75)
+
                 #Plotting transit
                 if '-2sig' in self.trans_to_plot['all']:
-                    f_alls[n].fill_between(self.lc['time'][limits[n][0]:limits[n][1]],
-                                           self.trans_to_plot['all']['-2sig'][limits[n][0]:limits[n][1]],
-                                           self.trans_to_plot['all']['+2sig'][limits[n][0]:limits[n][1]],
+                    f_alls[n].fill_between(self.lc['time'][unmasked_lim_bool],
+                                           self.trans_to_plot['all']['-2sig'][unmasked_lim_bool],
+                                           self.trans_to_plot['all']['+2sig'][unmasked_lim_bool],
                                            zorder=-5,alpha=0.25, color="C4")
-                    f_alls[n].fill_between(self.lc['time'][limits[n][0]:limits[n][1]],
-                                           self.trans_to_plot['all']['-1sig'][limits[n][0]:limits[n][1]],
-                                           self.trans_to_plot['all']['+1sig'][limits[n][0]:limits[n][1]],
+                    f_alls[n].fill_between(self.lc['time'][unmasked_lim_bool],
+                                           self.trans_to_plot['all']['-1sig'][unmasked_lim_bool],
+                                           self.trans_to_plot['all']['+1sig'][unmasked_lim_bool],
                                            zorder=-4,alpha=0.25, color="C4")
-                f_alls[n].plot(self.lc['time'][limits[n][0]:limits[n][1]],
-                               self.trans_to_plot['all']['med'][limits[n][0]:limits[n][1]],
+                f_alls[n].plot(self.lc['time'][unmasked_lim_bool],
+                               self.trans_to_plot['all']['med'][unmasked_lim_bool],
                                color="C4", label="transit fit", linewidth=3.0)
                 
-                if self.use_GP:
-                    #Plotting residuals:
-                    f_all_resids[n].plot(self.lc['time'][limits[n][0]:limits[n][1]],
-                                         self.lc['flux'][limits[n][0]:limits[n][1]] - \
-                                         self.gp_to_plot['gp_pred'][limits[n][0]:limits[n][1]] - \
-                                         self.trans_to_plot['all']['med'][limits[n][0]:limits[n][1]],
-                                         ".k",label="raw data", zorder=-1000,alpha=0.5,markersize=0.75)
-                    bin_resid=tools.bin_lc_segment(np.column_stack((self.lc['time'][limits[n][0]:limits[n][1]],
-                                                                 self.lc['flux'][limits[n][0]:limits[n][1]] - \
-                                                                 self.gp_to_plot['gp_pred'][limits[n][0]:limits[n][1]] - \
-                                                                 self.trans_to_plot['all']['med'][limits[n][0]:limits[n][1]],
-                                                                    self.lc['flux_err'][limits[n][0]:limits[n][1]])),
-                                                   binsize=29/1440)
-
-                    f_all_resids[n].errorbar(bin_resid[:,0],bin_resid[:,1], yerr=bin_resid[:,2], fmt=".", ecolor='#dddddd',
-                                       label="raw data", alpha=0.5,markersize=0.75)
-
-                else:
-                    #Plotting residuals:
-                    mean=np.nanmedian(self.trace['mean']) if hasattr(self,'trace') else self.init_soln['mean']
-                    f_all_resids[n].circle(self.lc['time'][limits[n][0]:limits[n][1]],
-                                           self.lc['flux_flat'][limits[n][0]:limits[n][1]] - mean - \
-                                           self.trans_to_plot['all']['med'][limits[n][0]:limits[n][1]],
-                                           ".k",zorder=-1000,alpha=0.5,markersize=3.5)
-                    bin_resid=tools.bin_lc_segment(np.column_stack((self.lc['time'][limits[n][0]:limits[n][1]],
-                                                                    self.lc['flux_flat'][limits[n][0]:limits[n][1]] - \
-                                                                    self.trans_to_plot['all']['med'][limits[n][0]:limits[n][1]],
-                                                                    self.lc['flux_err'][limits[n][0]:limits[n][1]])),
-                                                   binsize=29/1440)
-                    f_all_resids[n].errorbar(bin_resid[:,0],bin_resid[:,1], yerr=bin_resid[:,2], fmt=".", ecolor='#dddddd',
-                                       label="raw data", alpha=0.5,markersize=0.75)
-
-                #Labelling axes:
-                if n==0:
-                    extra = '[ppt]' if self.lc['flux_unit']==0.001 else ''
-                    f_all_resids[n].set_ylabel('flux '+extra)#<- y-axis label
-                    f_alls[n].set_ylabel('residuals '+extra)#<- y-axis label
-                else:
-                    f_all_resids[n].set_yticks([])
-                    f_all_resids[n].set_yticklabels([])
-                    f_alls[n].set_yticks([])
-                    f_alls[n].set_yticklabels([])
-                f_alls[n].set_xticks([])
-                f_alls[n].set_xticklabels([])
-
+                plt.setp(f_alls[n].get_xticklabels(), visible=False) 
+                if n>0:
+                    plt.setp(f_alls[n].get_yticklabels(), visible=False) 
+                    plt.setp(f_all_resids[n].get_yticklabels(), visible=False) 
+                
                 f_all_resids[n].set_xlabel = 'Time [BJD-'+str(int(self.lc['jd_base']))+']' #<- x-axis label
-                f_alls[n].set_xlim(self.lc['time'][limits[n][0]],self.lc['time'][limits[n][1]-1])
-                f_all_resids[n].set_xlim(self.lc['time'][limits[n][0]],self.lc['time'][limits[n][1]-1])
-                f_alls[n].set_ylim(min_trans-1.5*resid_sd,abs(min_trans+np.min(self.gp_to_plot['gp_pred']))+2.5*resid_sd)
-                f_all_resids[n].set_ylim(-2.5*resid_sd,2,5*resid_sd)
+                f_all_resids[n].set_xlim(self.lc['time'][limits[n][0]]-0.5,self.lc['time'][limits[n][1]-1]+0.5)
+                if gap_lens[n]==np.max(gap_lens):
+                    f_alls[n].legend()
+                    
+        extra = '[ppt]' if self.lc['flux_unit']==0.001 else ''
+        
+        if interactive:
+            
+            f_all_resids[0].yaxis.axis_label = 'residuals '+extra#<- y-axis label
+            f_alls[0].yaxis.axis_label = 'flux '+extra#<- y-axis label
+            '''
+            sdbuffer=3
+            if self.use_GP:
+                f_alls[0].y_range=Range1d(-1*min_trans - sdbuffer*resid_sd, 
+                                          raw_plot_offset + np.max(self.gp_to_plot['gp_pred']) + sdbuffer*resid_sd)
+            else:
+                f_alls[0].y_range=Range1d(-1*min_trans - sdbuffer*resid_sd,
+                                          raw_plot_offset + np.max(self.lc['bin_flux']) + sdbuffer*resid_sd)
+
+            f_all_resids[0].y_range=Range1d(-1*sdbuffer*resid_sd, sdbuffer*resid_sd)
+            '''
+            
+        else:
+            f_alls[0].set_ylabel('flux '+extra)#<- y-axis label
+            f_all_resids[0].set_ylabel('residuals '+extra)#<- y-axis label
+
+            f_alls[0].set_ylim(-1*abs(min_trans)-1.5*resid_sd,raw_plot_offset+2.5*resid_sd)
+            f_all_resids[0].set_ylim(-2.5*resid_sd,2.5*resid_sd)
 
         #####################################
         #  Plotting individual transits
         #####################################
-
+        maxdur=1.25*np.max([self.planets[ipl]['tdur'] for ipl in self.planets])
+        self.lc['phase']={}
         for n,pl in enumerate(self.planets):
             if pl in self.multis:
                 if hasattr(self,'trace'):
                     t0=np.nanmedian(self.trace['multi_t0s'][:,self.multis.index(pl)])
                     per=np.nanmedian(self.trace['multi_periods'][:,self.multis.index(pl)])
-                elif hastattr(self,'init_soln'):
+                elif hasattr(self,'init_soln'):
                     t0=self.init_soln['multi_t0s'][self.multis.index(pl)]
-                    per=self.init_soln['multi_periods'][:,self.multis.index(pl)]
+                    per=self.init_soln['multi_periods'][self.multis.index(pl)]
                 #phase-folding onto t0
-                phase=(self.lc['time']-t0-0.5*per)%per-0.5*per
+                self.lc['phase'][pl]=phase=(self.lc['time']-t0-0.5*per)%per-0.5*per
+                for ns in range(len(limits)):
+                    n_p_sta=np.ceil((t0-self.lc['time'][limits[ns][0]])/per)
+                    n_p_end=(t0-self.lc['time'][limits[ns][1]-1])/per
+                    
+                    if (t0>limits[ns][0])&(t0<limits[ns][0]):
+                        f_alls[ns].scatter(t0+np.arange(n_p_sta,n_p_end,1.0)*per,
+                                           np.tile(-1*min_trans-2*resid_sd-(resid_sd*n/len(self.planets)),
+                                                   int(np.ceil(n_p_end-n_p_sta))),
+                                           marker="triangle", size=12.5, line_color=pal[2+n], fill_color=col, alpha=0.85)
 
             elif pl in self.monos:
                 #Plotting mono
                 if hasattr(self,'trace'):
                     t0=np.nanmedian(self.trace['mono_t0s_'+pl])
                     per=2e3#per=np.nanmedian(self.trace['mono_period_'+pl][-1])
-                elif hastattr(self,'init_soln'):
+                elif hasattr(self,'init_soln'):
                     t0=self.init_soln['mono_t0s_'+pl]
                     per=2e3#per=self.init_soln['mono_period_'+pl][-1]
                 #phase-folding onto t0
-                phase=(self.lc['time']-t0-0.5*per)%per-0.5*per
+                self.lc['phase'][pl]=phase=(self.lc['time']-t0-0.5*per)%per-0.5*per
+                for ns in range(len(limits)):
+                    if (t0>limits[ns][0])&(t0<limits[ns][0]):
+                        f_alls[ns].scatter([t0],[-1*min_trans-2*resid_sd-(resid_sd*n/len(self.planets))],
+                                          marker="triangle", size=12.5, line_color=pal[2+n], fill_color=col, alpha=0.85)
             elif pl in self.duos:
                 #Overplotting both transits
                 if hasattr(self,'trace'):
                     t0=np.nanmedian(self.trace['duo_t0s_'+pl])
-                    per=np.nanmedian(self.trace['duo_t0_2s_'+pl])-t0
-                elif hastattr(self,'init_soln'):
+                    t0_2=np.nanmedian(self.trace['duo_t0_2s_'+pl])
+                    per=abs(t0_2-t0)
+                elif hasattr(self,'init_soln'):
                     t0=self.init_soln['duo_t0s_'+pl]
-                    per=self.init_soln['duo_t0_2s_'+pl]-t0
+                    t0_2=self.init_soln['duo_t0_2s_'+pl]
+                    per=abs(t0_2-t0)
                 #phase-folding onto t0
-                phase=(self.lc['time']-t0-0.5*per)%per-0.5*per
-
+                self.lc['phase'][pl]=(self.lc['time']-t0-0.5*per)%per-0.5*per
+                for ns in range(len(limits)):
+                    if (t0>limits[ns][0])&(t0<limits[ns][0]):
+                        f_alls[ns].scatter([t0],[-1*min_trans-2*resid_sd-(resid_sd*n/len(self.planets))],
+                                          marker="triangle", size=12.5, line_color=pal[2+n], fill_color=col, alpha=0.85)
+                    if (t0_2>limits[ns][0])&(t0_2<limits[ns][0]):
+                        f_alls[ns].scatter([t0_2],[-1*min_trans-2*resid_sd-(resid_sd*n/len(self.planets))],
+                                          marker="triangle", size=12.5, line_color=pal[2+n], fill_color=col, alpha=0.85)
+                
+            #Computing
+            if len(self.planets)>1:
+                other_pls=np.sum([self.trans_to_plot[opl]['med'] for opl in self.planets if opl!=pl],axis=0)
+            else:
+                other_pls=np.zeros(len(self.lc['time']))
+            
+            phasebool=abs(self.lc['phase'][pl])<maxdur
+            if self.use_GP:
+                phaselc=np.column_stack((self.lc['phase'][pl][self.lc['mask']&phasebool],
+                                         self.lc['flux'][self.lc['mask']&phasebool] - \
+                                         self.gp_to_plot['gp_pred'][self.lc['mask']&phasebool] - \
+                                         other_pls[self.lc['mask']&phasebool],
+                                         self.lc['flux_err'][self.lc['mask']&phasebool]))
+            else:
+                phaselc=np.column_stack((self.lc['phase'][pl][self.lc['mask']&phasebool],
+                                         self.lc['flux_flat'][self.lc['mask']&phasebool] - \
+                                         other_pls[self.lc['mask']&phasebool],
+                                         self.lc['flux_err'][self.lc['mask']&phasebool]))
+            bin_phase=tools.bin_lc_segment(phaselc[np.argsort(phaselc[:,0])],binsize=maxdur/15.0)
+            
             if interactive:
-                if self.use_GP:
-                    f_trans[n].circle(phase,self.lc['flux']-self.gp_to_plot['gp_pred'], ".k",
-                             label="raw data",alpha=0.5,markersize=0.75)
-                    f_trans_resids[n].circle(phase,self.lc['flux']-self.gp_to_plot['gp_pred']-self.trans_to_plot['all']['med'], ".k",
-                             label="raw data",alpha=0.5,markersize=0.75)
-                else:
-                    f_trans[n].circle(phase,self.lc['flux_flat'], ".k",
-                             label="raw data",alpha=0.5,markersize=0.75)
-                    f_trans_resids[n].circle(phase,self.lc['flux_flat']-self.trans_to_plot['all']['med'], ".k",
-                             label="raw data",alpha=0.5,markersize=0.75)
+                sdbuffer=4
+                
+                min_trans=abs(np.min(self.trans_to_plot[pl]['med'])) + sdbuffer*resid_sd
+                f_trans[n].circle(phaselc[:,0],phaselc[:,1], 
+                                  color='black', alpha=0.4, size=0.75)
+
+                f_trans[n].circle(phaselc[:,0],
+                                  phaselc[:,1] - self.trans_to_plot[pl]['med'][self.lc['mask']&phasebool] - min_trans, 
+                                  color='black', alpha=0.2, size=0.75)
+                errors = ColumnDataSource(data=dict(base=bin_phase[:,0],
+                                        lower=bin_phase[:,1] - bin_phase[:,2],
+                                        upper=bin_phase[:,1] + bin_phase[:,2]))
+                f_trans[n].add_layout(Whisker(source=errors, base='base', upper='upper',lower='lower',
+                                             line_color='#dddddd', line_alpha=0.5,
+                                             upper_head=TeeHead(line_color='#dddddd',line_alpha=0.5),
+                                             lower_head=TeeHead(line_color='#dddddd',line_alpha=0.5)))
+                f_trans[n].circle(bin_phase[:,0], bin_phase[:,1], alpha=0.65, size=3.5)
                 if '-2sig' in self.trans_to_plot[pl]:
-                    btr1=Band(base=np.sort(phase),
-                       lower=self.trans_to_plot[pl]['-2sig'][np.argsort(phase)],upper=self.trans_to_plot[pl]['+2sig'][np.argsort(phase)],
-                       level='underlay',fill_alpha=0.25, line_width=0.0, color="C4")
-                    btr2=Band(base=np.sort(phase),
-                       lower=self.trans_to_plot[pl]['-1sig'][np.argsort(phase)],upper=self.trans_to_plot[pl]['+1sig'][np.argsort(phase)],
-                       level='underlay',fill_alpha=0.25, line_width=0.0, color="C4")
+                    trband = ColumnDataSource(data=dict(base=np.sort(phaselc[:,0]),
+                              lower=self.trans_to_plot[pl]['-2sig'][self.lc['mask']&phasebool][np.argsort(phaselc[:,0])],
+                              upper=self.trans_to_plot[pl]['+2sig'][self.lc['mask']&phasebool][np.argsort(phaselc[:,0])]))
+                    f_trans[n].add_layout(Band(source=trband,base='base',lower='lower',upper='upper',
+                           level='underlay',fill_alpha=0.25, line_width=0.0, color=pal[2+n]))
+                    trband = ColumnDataSource(data=dict(base=np.sort(phaselc[:,0]),
+                              lower=self.trans_to_plot[pl]['-1sig'][self.lc['mask']&phasebool][np.argsort(phaselc[:,0])],
+                              upper=self.trans_to_plot[pl]['+1sig'][self.lc['mask']&phasebool][np.argsort(phaselc[:,0])]))
+                    f_trans[n].add_layout(Band(source=trband,base='base',lower='lower',upper='upper',
+                                              level='underlay',fill_alpha=0.25, line_width=0.0, color=pal[2+n]))
                     f_trans[n].add_layout(btr1)
                     f_trans[n].add_layout(btr2)
-                f_trans[n].line(np.sort(phase), self.trans_to_plot["all"]["med"][np.argsort(phase)],
-                               color="C4", label="transit fit")
-            else:
-                if self.use_GP:
-                    f_trans[n].plot(phase,self.lc['flux']-self.gp_to_plot['gp_pred'], ".k",
-                             label="raw data",alpha=0.5,markersize=0.75)
-                    f_trans_resids[n].plot(phase,self.lc['flux']-self.gp_to_plot['gp_pred']-self.trans_to_plot['all']['med'], ".k",
-                             label="raw data",alpha=0.5,markersize=0.75)
-                else:
-                    f_trans[n].plot(phase,self.lc['flux_flat'], ".k",
-                             label="raw data",alpha=0.5,markersize=0.75)
-                    f_trans_resids[n].plot(phase,self.lc['flux_flat']-trans_mod["all"]["med"], ".k",
-                             label="raw data",alpha=0.5,markersize=0.75)
-                if '+2sig' in self.trans_to_plot[pl]:
-                    f_trans[n].fill_between(np.sort(phase),
-                           self.trans_to_plot[pl]['-2sig'][np.argsort(phase)],self.trans_to_plot[pl]['+2sig'][np.argsort(phase)],
-                           alpha=0.25, color="C4")
-                    f_trans[n].fill_between(np.sort(phase),
-                           self.trans_to_plot[pl]['-1sig'][np.argsort(phase)],self.trans_to_plot[pl]['+1sig'][np.argsort(phase)],
-                           alpha=0.25, color="C4")
-                f_trans[n].plot(np.sort(phase), self.trans_to_plot["all"]["med"][np.argsort(phase)],
-                               color="C4", label="transit fit")
-                f_trans[n].set_xlim(-0.5,0.5)
-                f_trans_resids[n].set_xlim(-0.5,0.5)
-                f_trans[n].set_ylim(np.min(self.trans_to_plot[pl]["med"])-3*resid_sd,3*resid_sd)
-                f_trans_resids[n].set_ylim(-3*resid_sd,3*resid_sd)
+                f_trans[n].line(np.sort(phaselc[:,0]),
+                                self.trans_to_plot[pl]["med"][self.lc['mask']&phasebool][np.argsort(phaselc[:,0])],
+                                color=pal[2+n])
+                f_trans[n].y_range=Range1d(-1*min_trans-sdbuffer*resid_sd,sdbuffer*resid_sd)
+                
+                if n<len(self.planets)-1:
+                    f_trans[n].xaxis.major_tick_line_color = None  # turn off x-axis major ticks
+                    f_trans[n].xaxis.minor_tick_line_color = None  # turn off x-axis minor ticks
+                    f_trans[n].xaxis.major_label_text_font_size = '0pt'  # preferred method for removing tick labels
 
-        if n==len(self.planets):
-            if interactive:
-                #extra = '[ppt]' if self.lc.flux_unit==0.001 else ''
-                #f_all_resids[n] = 'flux '+extra#<- y-axis label
-                #f_all[n].yaxis.axis_label = 'residuals '+extra#<- y-axis label
-                f_trans_resids[n].xaxis.axis_label = 'Time [d] from transit' #<- x-axis label
             else:
-                f_trans_resids[n].set_xlabel("Time [d] from transit")
+                f_trans[n].plot(phaselc[:,0],phaselc[:,1], ".k",label="raw data",alpha=0.5,markersize=0.75)
+                f_trans[n].errorbar(bin_phase[:,0],bin_phase[:,1], yerr=bin_phase[:,2], fmt='.', alpha=0.75, markersize=5)
+                f_trans_resids[n].plot(phaselc[:,0],
+                                       phaselc[:,1]-self.trans_to_plot[pl]['med'][self.lc['mask']&phasebool], ".k",
+                                         alpha=0.5,markersize=0.75)
+                if '+2sig' in self.trans_to_plot[pl]:
+                    f_trans[n].fill_between(np.sort(phaselc[:,0]),
+                           self.trans_to_plot[pl]['-2sig'][self.lc['mask']&phasebool][np.argsort(phaselc[:,0])],
+                           self.trans_to_plot[pl]['+2sig'][self.lc['mask']&phasebool][np.argsort(phaselc[:,0])],
+                           alpha=0.25, color="C3")
+                    f_trans[n].fill_between(np.sort(phaselc[:,0]),
+                           self.trans_to_plot[pl]['-1sig'][self.lc['mask']&phasebool][np.argsort(phaselc[:,0])],
+                           self.trans_to_plot[pl]['+1sig'][self.lc['mask']&phasebool][np.argsort(phaselc[:,0])],
+                           alpha=0.25, color="C3")
+                f_trans[n].plot(np.sort(phaselc[:,0]),
+                                self.trans_to_plot[pl]["med"][self.lc['mask']&phasebool][np.argsort(phaselc[:,0])],
+                               color="C3", label="transit fit")
+                f_trans[n].set_ylim(np.min(self.trans_to_plot[pl]["med"])-2*resid_sd,2*resid_sd)
+                f_trans_resids[n].set_ylim(-2*resid_sd,2*resid_sd)
+                f_trans[n].yaxis.tick_right()
+                f_trans_resids[n].yaxis.tick_right()
+                
+                plt.setp(f_trans[n].get_xticklabels(), visible=False) 
+                if n>0:
+                    plt.setp(f_trans_resids[n].get_xticklabels(), visible=False) 
+
+            if n==len(self.planets)-1:
+                if interactive:
+                    #extra = '[ppt]' if self.lc.flux_unit==0.001 else ''
+                    #f_all_resids[n] = 'flux '+extra#<- y-axis label
+                    #f_all[n].yaxis.axis_label = 'residuals '+extra#<- y-axis label
+                    f_trans[n].xaxis.axis_label = 'Time [d] from transit' #<- x-axis label
+                    
+        if not interactive:
+            f_trans_resids[0].set_xlim(-0.8*maxdur,0.8*maxdur)
+            f_trans_resids[0].set_xlabel("Time [d] from transit")
+            
         if interactive:
             #Saving
-            p = gridplot([column(f_all[ni],f_all_resids[ni]) for ni in len(f_all)] + \
-                         [column([[f_trans[i],f_trans_resids[i]] for i in len(f_trans)])])
-                          
+            cols=[]
+            for r in range(len(f_alls)):
+                cols+=[column(f_alls[r],f_all_resids[r])]
+            lastcol=[]
+            for r in range(len(f_trans)):
+                lastcol+=[f_trans[r]]
+            p = gridplot([cols+[column(lastcol)]])
             save(p)
-            if returnfig:
+            if return_fig:
                 return p
             
         else:
             plt.savefig(self.savenames[0].replace('_mcmc.pickle','_transit_fit.pdf'))
 
+    def PlotPeriods(self):
+        assert hasattr(self,'trace')
+        plot_pers=self.duos+self.monos
+        if len(plot_pers)>0:
+            plt.figure(figsize=(8.5,4.2))
+            for npl, pl in enumerate(plot_pers):
+                plt.subplot(1,len(plot_pers),npl+1)
+                if pl in self.duos:
+                    #Plotting lines
+                    for n in range(len(self.trace['duo_periods_01'][0,:])):
+                        plt.plot([np.nanmedian(self.trace['duo_periods_'+pl][:,n]),np.nanmedian(self.trace['duo_periods_'+pl][:,n])],
+                                 [-20.0,np.nanmedian(self.trace['logprob_marg_'+pl][:,n])/np.log(10)],linewidth=5.0)
+                    print(np.min(np.nanmedian(self.trace['logprob_marg_'+pl],axis=0)))
+                    plt.title("Duo - ",pl)
+                    plt.ylim(np.min(np.nanmedian(self.trace['logprob_marg_'+pl],axis=0))/np.log(10)-2.0,0.1)
+                    plt.ylabel("$\log_{10}{p}$")
+                    plt.xlabel("Period [d]")
+                elif pl in self.monos:
+                    plt.title("Mono - ",pl)
+                    plt.hist(self.trace['mono_period_'+pl].ravel(),bins=50,edgecolor='None',
+                             weights=np.exp(self.trace['logprob_marg_'+pl].ravel()),density=True)
+                    plt.ylabel("prob")
+                    plt.xlabel("Period [d]")
+            plt.savefig(self.savenames[0].replace('_mcmc.pickle','_period_dists.pdf'))
 
-        
-    def PlotMonoInteractive(self):
-        #Plots bokeh figure
-        from bokeh.plotting import figure, output_file, save
-
-        if not hasattr(self,'savenames'):
-            self.GetSavename(how='save')
-        savename=self.savenames[0].replace('_mcmc.pickle','_transit_fit.html')
-        print(savename)
-
-        output_file(savename)
-
-        #Initialising figure:
-        p = figure(plot_width=1000, plot_height=600,title=str(self.ID)+" Transit Fit")
-
-        #Finding if there's a single enormous gap in the lightcurve:
-        x_gap=np.max(np.diff(self.lc['time']))>10
-        if x_gap:
-            print(" GAP IN X OF ",np.argmax(np.diff(lc['time'])))
-            f_all_1=figure(width=360, plot_height=400, title=None)
-            f_all_2=figure(width=360, plot_height=400, title=None)
-            f_all_resid_1=figure(width=360, plot_height=150, title=None)
-            f_all_resid_2=figure(width=360, plot_height=150, title=None)
-        else:
-            f_all=figure(width=720, plot_height=400, title=None)
-            f_all_resid=figure(width=720, plot_height=150, title=None)
-        
-        #In the "duo" case, we have a complicated trace, so we need to remedy this:
-        if "light_curves" in self.trace:
-            pred = self.trace["light_curves"][self.tracemask,:,:]
-        elif len(self.duos)==1:
-            pred=[]
-            for n in range(len(self.planets[self.duos[0]]['period_int_aliases'])):
-                pred+=[self.trace["per_"+str(n)+"_light_curves"][self.tracemask,:,:]]
-            pred=np.vstack(pred)
-        elif len(self.duos)==2:
-            pred=[]
-            for n1 in range(len(self.planets[self.duos[0]]['period_int_aliases'])):
-                for n2 in range(len(self.planets[self.duos[1]]['period_int_aliases'])):
-                    pred+=[self.trace["per_"+str(n1)+"_"+str(n2)+"_light_curves"][self.tracemask,:,:]]
-            pred=np.vstack(pred)
-        #Need to check how many planets are here:
-        pred = np.percentile(pred, [16, 50, 84], axis=0)
-
-        # Compute the GP prediction
-        if 'gp_pred' in self.trace:
-            gp_pred = np.median(self.trace["gp_pred"][self.tracemask,:] + self.trace["mean"][self.tracemask, None], axis=0)
-        elif type(self.gp)==dict:
-            gp_pred=np.zeros(len(self.lc['time']))
-            for nc,cad in enumerate(self.cads):
-                pred[self.lc['cadence']==cad] = self.gp[cad].predict(self.lc['flux'][self.lc['cadence']==cad]-\
-                                                                      pred[self.lc['cadence']==cad,1],
-                                                                     self.lc['time'][self.lc['cadence']==cad],return_cov=False)
-            gp_pred += np.nanmedian(self.trace["mean"][self.tracemask])
-        elif type(self.gp)==xo.gp.GP:
-            gp_pred = self.gp.predict(self.lc['flux']-pred[1,:],
-                                      self.lc['time'],return_cov=False) + np.nanmedian(self.trace["mean"][self.tracemask])
-
-        #if self.lc['oot_mask']!=self.lc['mask']:
-        #Initialising GP was cut away from transits, so maybe we need to re-train with all the points
-
-
-        '''if 'mult' in trace.varnames:
-            pred = trace["light_curves"][tracemask,:,:]/np.tile(trace['mult'],(1,len(trace["light_curves"][0,:,0]),1)).swapaxes(0,2)
-        else:
-            pred = trace["light_curves"][tracemask,:,:]'''
-
-        gp_pred = np.percentile(gp_pred, [16, 50, 84], axis=0)
-
-        #Plotting model with GPs:
-        min_trans=abs(np.min(np.sum(pred[1,:,:],axis=1)))
-        if x_gap:
-            gap_pos=np.average(self.lc['time'][np.argmax(np.diff(self.lc['time'])):(1+np.argmax(np.diff(self.lc['time'])))])
-            before_gap_lc,before_gap_gp=(self.lc['time']<gap_pos),(self.lc['time']<gap_pos)
-            after_gap_lc,after_gap_gp=(self.lc['time']>gap_pos),(self.lc['time']>gap_pos)
-
-            #print(np.sum(before_gap_lc),len(self.lc['time'][before_gap_lc]),np.sum(before_gap_gp),len(gp_mod[before_gap_gp]))
-
-            f_all_1.circle(self.lc['time'][before_gap_lc], self.lc['flux'][before_gap_lc]+2.5*min_trans, ".k", label="data", zorder=-1000,alpha=0.5,markersize=0.75)
-            f_all_2.circle(self.lc['time'][after_gap_lc], self.lc['flux'][after_gap_lc]+2.5*min_trans, ".k", label="data", zorder=-1000,alpha=0.5,markersize=0.75)
-
-            f_all_1.line(self.lc['time'][before_gap_lc], gp_mod[before_gap_gp]+2.5*min_trans, color="C3", label="GP fit")
-            f_all_2.line(self.lc['time'][after_gap_lc], gp_mod[after_gap_gp]+2.5*min_trans, color="C3", label="GP fit")
-
-            f_all_1.circle(self.lc['time'][before_gap_lc], self.lc['flux'][before_gap_lc] - gp_mod[before_gap_gp], ".k", label="data", zorder=-1000,alpha=0.5,markersize=0.75)
-            f_all_2.circle(self.lc['time'][after_gap_lc], self.lc['flux'][after_gap_lc] - gp_mod[after_gap_gp], ".k", label="data", zorder=-1000,alpha=0.5,markersize=0.75)
-
-            #Plotting residuals at the bottom:
-            f_all_resid_1.circle(self.lc['time'][before_gap_lc], 
-                             self.lc['flux'][before_gap_lc] - gp_mod[before_gap_gp] - np.sum(pred[1,before_gap_gp,:],axis=1), 
-                             ".k", label="data", zorder=-1000,alpha=0.5,markersize=0.75)
-            f_all_resid_1.set_xlabel('Time (BJD-245700)')
-            f_all_resid_1.set_xlim(self.lc['time'][before_gap_lc][0],self.lc['time'][before_gap_lc][-1])
-
-            f_all_resid_2.circle(self.lc['time'][after_gap_lc], 
-                             self.lc['flux'][after_gap_lc] - gp_mod[after_gap_gp] - np.sum(pred[1,after_gap_gp,:],axis=1),
-                             ".k", label="data", zorder=-1000,alpha=0.5,markersize=0.75)
-            f_all_resid_2.set_xlabel('Time (BJD-245700)')
-            f_all_resid_2.set_xlim(self.lc['time'][after_gap_lc][0],self.lc['time'][after_gap_lc][-1])
-            #print(len(lc[:,0]),len(lc[lcmask,0]),len(gp_mod))
-            f_all_resid_1.set_ylim(2*np.percentile(self.lc['flux'] - gp_mod - np.sum(pred[1,:,:],axis=1),[0.5,99.5]))
-            f_all_resid_2.set_ylim(2*np.percentile(self.lc['flux'] - gp_mod - np.sum(pred[1,:,:],axis=1),[0.5,99.5]))
-            for n_pl in range(len(pred[1,0,:])):
-                f_all_1.plot(self.lc['time'][before_gap_lc], pred[1,before_gap_gp,n_pl], color="C1", label="model")
-
-                art = f_all_1.patch(np.append(self.lc['time'][before_gap_lc], self.lc['time'][before_gap_lc][::-1]),
-                                    np.append(pred[0,before_gap_gp,n_pl], pred[2,before_gap_gp,n_pl][::-1]),
-                                           color="C1", alpha=0.5, zorder=1000)
-                f_all_1.set_xlim(self.lc['time'][before_gap_lc][0],self.lc['time'][before_gap_lc][-1])
-
-                f_all_2.line(self.lc['time'][after_gap_lc], pred[1,after_gap_gp,n_pl], color="C1", label="model")
-                art = f_all_2.patch(np.append(self.lc['time'][after_gap_lc], self.lc['time'][after_gap_lc][::-1]),
-                                    np.append(pred[0,after_gap_gp,n_pl], pred[2,after_gap_gp,n_pl][::-1]),
-                                    color="C1", alpha=0.5, zorder=1000)
-                f_all_2.set_xlim(self.lc['time'][after_gap_lc][0],self.lc['time'][after_gap_lc][-1])
-
-                f_all_1.set_ylim(np.percentile(self.lc['flux']-gp_mod,0.25),np.percentile(self.lc['flux']+2.5*min_trans,99))
-                f_all_2.set_ylim(np.percentile(self.lc['flux']-gp_mod,0.25),np.percentile(self.lc['flux']+2.5*min_trans,99))
-
-            f_all_1.get_xaxis().set_ticks([])
-            f_all_2.get_yaxis().set_ticks([])
-            f_all_2.get_xaxis().set_ticks([])
-
-            f_all_resid_2.get_yaxis().set_ticks([])
-            f_all_1.spines['right'].set_visible(False)
-            f_all_resid_1.spines['right'].set_visible(False)
-            f_all_2.spines['left'].set_visible(False)
-            f_all_resid_2.spines['left'].set_visible(False)
-            #
-            #spines['right'].set_visible(False)
-            #
-            #f_all_2.set_yticks([])
-            #f_all_2.set_yticklabels([])
-            #f_all_1.tick_params(labelright='off')
-            #f_all_2.yaxis.tick_right()
-
-            f_zoom=fig.add_subplot(gs[:3, 6:])
-            f_zoom_resid=fig.add_subplot(gs[3, 6:])
-
-        else:
-            #No gap in x, plotting normally:
-            print(len(self.lc['time']),len(self.lc['flux']),len(self.lc['time']),len(self.lc['flux']),len(gp_mod),len(np.sum(pred[1,:,:],axis=1)))
-            f_all.circle(self.lc['time'], self.lc['flux']+2.5*min_trans, ".k", label="data", zorder=-1000,alpha=0.5,markersize=0.75)
-            f_all.line(self.lc['time'], gp_mod+2.5*min_trans, color="C3", label="GP fit")
-
-            # Plot the data
-            f_all.plot(self.lc['time'], self.lc['flux'] - gp_mod, ".k", label="data", zorder=-1000,alpha=0.5,markersize=0.75)
-
-            #Plotting residuals at the bottom:
-            f_all_resid.circle(self.lc['time'], self.lc['flux'] - gp_mod - np.sum(pred[1,:,:],axis=1), ".k", label="data", zorder=-1000,alpha=0.5,markersize=0.75)
-            f_all_resid.set_xlabel('Time (BJD-245700)')
-            f_all_resid.set_ylim(2*np.percentile(self.lc['flux'] - gp_mod - np.sum(pred[1,:,:],axis=1),[0.5,99.5]))
-            f_all_resid.set_xlim(self.lc['time'][0],self.lc['time'][-1])
-
-            for n_pl in range(len(pred[1,0,:])):
-                f_all.line(self.lc['time'], pred[1,:,n_pl], color="C1", label="model")
-                art = f_all.patch(np.append(self.lc['time'],self.lc['time'][::-1]),
-                                  np.append(pred[0,:,n_pl], pred[2,:,n_pl][::-1]),
-                                  color="C1", alpha=0.5, zorder=1000)
-                f_all.set_xlim(self.lc['time'][0],self.lc['time'][-1])
-
-            f_all.set_xticks([])
-            f_zoom=figure(width=250, plot_height=400, title=None)
-            f_zoom_resid=figure(width=250, plot_height=150, title=None)
-
-        min_trans=0;min_resid=0
-        for n_pl in range(len(pred[1,0,:])):
-            # Get the posterior median orbital parameters
-            p = np.median(self.trace["period"][tracemask,n_pl])
-            t0 = np.median(self.trace["t0"][tracemask,n_pl])
-            tdur = np.nanmedian(self.trace['tdur'][tracemask,n_pl])
-            #tdurs+=[(2*np.sqrt(1-np.nanmedian(trace['b'][tracemask,n_pl])**2))/np.nanmedian(trace['vrel'][tracemask,n_pl])]
-            #print(min_trans,tdurs[n_pl],2*np.sqrt(1-np.nanmedian(trace['b'][tracemask,n_pl])**2),np.nanmedian(trace['vrel'][tracemask, n_pl]))
-
-            phase=(self.lc['time']-t0+p*0.5)%p-p*0.5
-            zoom_ind=abs(phase)<tdur
-
-            resids=self.lc['flux'][zoom_ind] - gp_mod[zoom_ind] - np.sum(pred[1,zoom_ind,:],axis=1)
-
-            if zoom_plot_time:
-                #Plotting time:
-                f_zoom.plot(phase[zoom_ind], min_trans+self.lc['flux'][zoom_ind] - gp_mod[zoom_ind], ".k", label="data", zorder=-1000,alpha=0.5)
-                f_zoom.plot(phase[zoom_ind], min_trans+pred[1,zoom_ind,n_pl], color="C"+str(n_pl+1), label="model")
-                art = f_zoom.patch(phase[zoom_ind], min_trans+pred[0,zoom_ind,n_pl], min_trans+pred[2,zoom_ind,n_pl],
-                                          color="C"+str(n_pl+1), alpha=0.5,zorder=1000)
-                f_zoom_resid.plot(phase[zoom_ind],min_resid+resids,
-                                  ".k", label="data", zorder=-1000,alpha=0.5)
-                f_zoom_resid.plot([-1,1],[min_resid,min_resid],
-                                  "-",color="C"+str(n_pl+1), label="data", zorder=-1000,alpha=0.75,linewidth=2.0)
-
-            else:
-                print("#Normalising to transit duration",min_trans)
-                f_zoom.plot(phase[zoom_ind]/tdur, min_trans+self.lc['flux'][zoom_ind] - gp_mod[zoom_ind], ".k", label="data", zorder=-1000,alpha=0.5)
-
-                f_zoom.plot(np.sort(phase[zoom_ind]/tdur), min_trans+pred[1,zoom_ind,n_pl][np.argsort(phase[zoom_ind])], color="C"+str(n_pl+1), label="model")
-                art = f_zoom.patch(np.sort(phase[zoom_ind])/tdur,
-                                          min_trans+pred[0,zoom_ind,n_pl][np.argsort(phase[zoom_ind])],
-                                          min_trans+pred[2,zoom_ind,n_pl][np.argsort(phase[zoom_ind])],
-                                          color="C"+str(n_pl+1), alpha=0.5,zorder=1000)
-                f_zoom_resid.plot(phase[zoom_ind]/tdur,min_resid+resids,
-                                  ".k", label="data", zorder=-1000,alpha=0.5)
-                f_zoom_resid.plot([-1,1],[min_resid,min_resid],
-                                  "-",color="C"+str(n_pl+1), label="data", zorder=-1000,alpha=0.75,linewidth=2.0)
-
-            min_resid+=np.percentile(resids,99)
-            min_trans+=abs(1.25*np.min(pred[1,:,n_pl]))
-
-        f_zoom.set_xticks([])
-        if zoom_plot_time:
-            f_zoom_resid.set_xlabel('Time - t_c')
-            f_zoom_resid.set_xlim(-1*tdur,tdur)
-            f_zoom.set_xlim(-1*tdur,tdur)
-        else:
-            f_zoom_resid.set_xlabel('normalised time [t_dur]')
-            f_zoom_resid.set_xlim(-1,1)
-            f_zoom.set_xlim(-1,1)
-        if x_gap:
-            p = gridplot([[f_all_1, f_all_2, f_zoom], [f_all_resid_1, f_all_resid_2, f_zoom_resid]])
-        else:
-            p = gridplot([[f_all, f_zoom], [f_all_resid, f_zoom_resid]])
-
-        save(p)
-        if returnfig:
-            return p
-    def PlotMono(self, overwrite=False, savefileloc=None, 
-           returnfig=False, tracemask=None, zoom_plot_time=False):
-
-        #Plots MPL figure
-        # Plot LC with best-fit transit and GP-model with residuals and transit zooms
-        # INPUTS:
-        # - lc (dictionary of lightcurve with time & flux arrays)
-        # - trace (output of MCMC with model params and 
-        # - ID
-        # - mission
-        # - savename
-        # - overwrite
-        # - savefileloc
-        # - returnfig
-        # - lcmask
-        # - tracemask
-        # - zoom_plot_time (plot zoom plot as time. Default is normalised by tdur)
-
-        #The tracemask is a mask used to remove samples where the period is inconsistent with the presence of photometry:
-        if self.tracemask is None:
-            self.tracemask=np.tile(True,len(self.trace['Rs']))
-
-        import matplotlib.pyplot as plt
-        fig=plt.figure(figsize=(14,6))
-        
-        lcmask=self.lc['oot_mask'][:]
-        
-        # Compute the GP prediction
-        if 'gp_pred' in self.trace:
-            gp_mod = np.median(self.trace["gp_pred"][tracemask,:] + self.trace["mean"][tracemask, None], axis=0)
-            assert len(self.lc['time'][lcmask])==len(gp_mod)
-        elif type(self.gp)==dict:
-            pred=np.zeros(len(self.lc['time']))
-            for nc,cad in enumerate(self.cads):
-                for col in ['logw0','logpower','logS0']:
-                        self.gp[cad].set_parameter(col,np.nanmedian(self.trace[col][tracemask]))
-                self.gp[cad].set_parameter('logs2',np.nanmedian(self.trace['logs2'][tracemask,nc]))
-                pred[self.lc['cadence']==cad] = self.gp[cad].predict(self.lc['time'][self.lc['cadence']==cad])
-            pred += np.nanmedian(self.trace["mean"][tracemask])
-        elif type(self.gp)==xo.gp.GP:
-            for col in ['logw0','logpower','logS0','logs2']:
-                self.gp.set_parameter(col,np.nanmedian(self.trace[col][tracemask]))
-            pred = self.gp.predict(self.lc['time']) + np.nanmedian(self.trace["mean"][tracemask])
-
-        #if self.lc['oot_mask']!=self.lc['mask']:
-        #Initialising GP was cut away from transits, so maybe we need to re-train with all the points
-
-        #Finding if there's a single enormous gap in the lightcurve:
-        x_gap=np.max(np.diff(self.lc['time'][lcmask]))>10
-        if x_gap:
-            print(" GAP IN X OF ",np.argmax(np.diff(self.lc['time'])))
-            gs = fig.add_gridspec(4,8,wspace=0.3,hspace=0.001)
-            f_all_1=fig.add_subplot(gs[:3, :3])
-            f_all_2=fig.add_subplot(gs[:3, 3:6])
-            f_all_resid_1=fig.add_subplot(gs[3, :3])#, sharey=f_all_2)
-            f_all_resid_2=fig.add_subplot(gs[3, 3:6])#, sharey=f_all_resid_1)
-        else:
-            gs = fig.add_gridspec(4,4,wspace=0.3,hspace=0.001)
-            f_all=fig.add_subplot(gs[:3, :3])
-            f_all_resid=fig.add_subplot(gs[3, :3])
-
-            
-        '''if 'mult' in trace.varnames:
-            pred = trace["light_curves"][tracemask,:,:]/np.tile(trace['mult'],(1,len(trace["light_curves"][0,:,0]),1)).swapaxes(0,2)
-        else:
-            pred = trace["light_curves"][tracemask,:,:]
-        '''
-        pred = self.trace["light_curves"][self.tracemask,:,:]
-        #Need to check how many planets are here:
-        pred = np.percentile(pred, [16, 50, 84], axis=0)
-
-        gp_pred = np.percentile(pred, [16, 50, 84], axis=0)
-
-        #Plotting model with GPs:
-        min_trans=abs(np.min(np.sum(pred[1,:,:],axis=1)))
-        if x_gap:
-            gap_pos=np.average(self.lc['time'][np.argmax(np.diff(self.lc['time'])):(1+np.argmax(np.diff(self.lc['time'])))])
-            before_gap_lc,before_gap_gp=(self.lc['time']<gap_pos)&lcmask,(self.lc['time'][lcmask]<gap_pos)
-            after_gap_lc,after_gap_gp=(self.lc['time']>gap_pos)&lcmask,(self.lc['time'][lcmask]>gap_pos)
-
-            print(np.sum(before_gap_lc),len(self.lc['time'][before_gap_lc]),np.sum(before_gap_gp),len(gp_mod[before_gap_gp]))
-
-            f_all_1.plot(self.lc['time'][before_gap_lc], self.lc['flux'][before_gap_lc]+2.5*min_trans, ".k", label="data", zorder=-1000,alpha=0.5,markersize=0.75)
-            f_all_2.plot(self.lc['time'][after_gap_lc], self.lc['flux'][after_gap_lc]+2.5*min_trans, ".k", label="data", zorder=-1000,alpha=0.5,markersize=0.75)
-
-            f_all_1.plot(self.lc['time'][before_gap_lc], gp_mod[before_gap_gp]+2.5*min_trans, color="C3", label="GP fit")
-            f_all_2.plot(self.lc['time'][after_gap_lc], gp_mod[after_gap_gp]+2.5*min_trans, color="C3", label="GP fit")
-
-            f_all_1.plot(self.lc['time'][before_gap_lc], self.lc['flux'][before_gap_lc] - gp_mod[before_gap_gp], ".k", label="data", zorder=-1000,alpha=0.5,markersize=0.75)
-            f_all_2.plot(self.lc['time'][after_gap_lc], self.lc['flux'][after_gap_lc] - gp_mod[after_gap_gp], ".k", label="data", zorder=-1000,alpha=0.5,markersize=0.75)
-
-            #Plotting residuals at the bottom:
-            f_all_resid_1.plot(self.lc['time'][before_gap_lc], 
-                             self.lc['flux'][before_gap_lc] - gp_mod[before_gap_gp] - np.sum(pred[1,before_gap_gp,:],axis=1), 
-                             ".k", label="data", zorder=-1000,alpha=0.5,markersize=0.75)
-            f_all_resid_1.set_xlabel('Time (BJD-245700)')
-            f_all_resid_1.set_xlim(self.lc['time'][before_gap_lc][0],self.lc['time'][before_gap_lc][-1])
-
-            f_all_resid_2.plot(self.lc['time'][after_gap_lc], 
-                             self.lc['flux'][after_gap_lc] - gp_mod[after_gap_gp] - np.sum(pred[1,after_gap_gp,:],axis=1),
-                             ".k", label="data", zorder=-1000,alpha=0.5,markersize=0.75)
-            f_all_resid_2.set_xlabel('Time (BJD-245700)')
-            f_all_resid_2.set_xlim(self.lc['time'][after_gap_lc][0],self.lc['time'][after_gap_lc][-1])
-            #print(len(lc[:,0]),len(lc[lcmask,0]),len(gp_mod))
-            f_all_resid_1.set_ylim(2*np.percentile(self.lc['flux'][lcmask] - gp_mod - np.sum(pred[1,:,:],axis=1),[0.5,99.5]))
-            f_all_resid_2.set_ylim(2*np.percentile(self.lc['flux'][lcmask] - gp_mod - np.sum(pred[1,:,:],axis=1),[0.5,99.5]))
-            for n_pl in range(len(pred[1,0,:])):
-                f_all_1.plot(self.lc['time'][before_gap_lc], pred[1,before_gap_gp,n_pl], color="C1", label="model")
-                art = f_all_1.fill_between(self.lc['time'][before_gap_lc], pred[0,before_gap_gp,n_pl], pred[2,before_gap_gp,n_pl],
-                                           color="C1", alpha=0.5, zorder=1000)
-                f_all_1.set_xlim(self.lc['time'][before_gap_lc][0],self.lc['time'][before_gap_lc][-1])
-
-                f_all_2.plot(self.lc['time'][after_gap_lc], pred[1,after_gap_gp,n_pl], color="C1", label="model")
-                art = f_all_2.fill_between(self.lc['time'][after_gap_lc], pred[0,after_gap_gp,n_pl], pred[2,after_gap_gp,n_pl],
-                                           color="C1", alpha=0.5, zorder=1000)
-                f_all_2.set_xlim(self.lc['time'][after_gap_lc][0],self.lc['time'][after_gap_lc][-1])
-
-                f_all_1.set_ylim(np.percentile(self.lc['flux'][lcmask]-gp_mod,0.25),np.percentile(self.lc['flux'][lcmask]+2.5*min_trans,99))
-                f_all_2.set_ylim(np.percentile(self.lc['flux'][lcmask]-gp_mod,0.25),np.percentile(self.lc['flux'][lcmask]+2.5*min_trans,99))
-
-            f_all_1.get_xaxis().set_ticks([])
-            f_all_2.get_yaxis().set_ticks([])
-            f_all_2.get_xaxis().set_ticks([])
-
-            f_all_resid_2.get_yaxis().set_ticks([])
-            f_all_1.spines['right'].set_visible(False)
-            f_all_resid_1.spines['right'].set_visible(False)
-            f_all_2.spines['left'].set_visible(False)
-            f_all_resid_2.spines['left'].set_visible(False)
-            #
-            #spines['right'].set_visible(False)
-            #
-            #f_all_2.set_yticks([])
-            #f_all_2.set_yticklabels([])
-            #f_all_1.tick_params(labelright='off')
-            #f_all_2.yaxis.tick_right()
-
-            f_zoom=fig.add_subplot(gs[:3, 6:])
-            f_zoom_resid=fig.add_subplot(gs[3, 6:])
-
-        else:
-            #No gap in x, plotting normally:
-            print(len(self.lc['time']),len(self.lc['flux']),len(self.lc['time'][lcmask]),len(self.lc['flux'][lcmask]),len(gp_mod),len(np.sum(pred[1,:,:],axis=1)))
-            f_all.plot(self.lc['time'][lcmask], self.lc['flux'][lcmask]+2.5*min_trans, ".k", label="data", zorder=-1000,alpha=0.5,markersize=0.75)
-            f_all.plot(self.lc['time'][lcmask], gp_mod+2.5*min_trans, color="C3", label="GP fit")
-
-            # Plot the data
-            f_all.plot(self.lc['time'][lcmask], self.lc['flux'][lcmask] - gp_mod, ".k", label="data", zorder=-1000,alpha=0.5,markersize=0.75)
-
-            #Plotting residuals at the bottom:
-            f_all_resid.plot(self.lc['time'][lcmask], self.lc['flux'][lcmask] - gp_mod - np.sum(pred[1,:,:],axis=1), ".k", label="data", zorder=-1000,alpha=0.5,markersize=0.75)
-            f_all_resid.set_xlabel('Time (BJD-245700)')
-            f_all_resid.set_ylim(2*np.percentile(self.lc['flux'][lcmask] - gp_mod - np.sum(pred[1,:,:],axis=1),[0.5,99.5]))
-            f_all_resid.set_xlim(self.lc['time'][lcmask][0],lc['time'][lcmask][-1])
-
-            for n_pl in range(len(pred[1,0,:])):
-                f_all.plot(self.lc['time'][lcmask], pred[1,:,n_pl], color="C1", label="model")
-                art = f_all.fill_between(lc['time'][lcmask], pred[0,:,n_pl], pred[2,:,n_pl], color="C1", alpha=0.5, zorder=1000)
-                f_all.set_xlim(self.lc['time'][lcmask][0],self.lc['time'][lcmask][-1])
-
-            f_all.set_xticks([])
-            f_zoom=fig.add_subplot(gs[:3, 3])
-            f_zoom_resid=fig.add_subplot(gs[3, 3])
-
-        min_trans=0;min_resid=0
-        for n_pl in range(len(pred[1,0,:])):
-            # Get the posterior median orbital parameters
-            p = np.median(self.trace["period"][self.tracemask,n_pl])
-            t0 = np.median(self.trace["t0"][self.tracemask,n_pl])
-            tdur = np.nanmedian(self.trace['tdur'][self.tracemask,n_pl])
-            #tdurs+=[(2*np.sqrt(1-np.nanmedian(trace['b'][tracemask,n_pl])**2))/np.nanmedian(trace['vrel'][tracemask,n_pl])]
-            #print(min_trans,tdurs[n_pl],2*np.sqrt(1-np.nanmedian(trace['b'][tracemask,n_pl])**2),np.nanmedian(trace['vrel'][tracemask, n_pl]))
-
-            phase=(self.lc['time'][lcmask]-t0+p*0.5)%p-p*0.5
-            zoom_ind=abs(phase)<tdur
-
-            resids=self.lc['flux'][lcmask][zoom_ind] - gp_mod[zoom_ind] - np.sum(pred[1,zoom_ind,:],axis=1)
-
-            if zoom_plot_time:
-                #Plotting time:
-                f_zoom.plot(phase[zoom_ind], min_trans+self.lc['flux'][lcmask][zoom_ind] - gp_mod[zoom_ind], ".k", label="data", zorder=-1000,alpha=0.5)
-                f_zoom.plot(phase[zoom_ind], min_trans+pred[1,zoom_ind,n_pl], color="C"+str(n_pl+1), label="model")
-                art = f_zoom.fill_between(phase[zoom_ind], min_trans+pred[0,zoom_ind,n_pl], min_trans+pred[2,zoom_ind,n_pl],
-                                          color="C"+str(n_pl+1), alpha=0.5,zorder=1000)
-                f_zoom_resid.plot(phase[zoom_ind],min_resid+resids,
-                                  ".k", label="data", zorder=-1000,alpha=0.5)
-                f_zoom_resid.plot([-1,1],[min_resid,min_resid],
-                                  "-",color="C"+str(n_pl+1), label="data", zorder=-1000,alpha=0.75,linewidth=2.0)
-
-            else:
-                print("#Normalising to transit duration",min_trans)
-                f_zoom.plot(phase[zoom_ind]/tdur, min_trans+self.lc['flux'][lcmask][zoom_ind] - gp_mod[zoom_ind], ".k", label="data", zorder=-1000,alpha=0.5)
-
-                f_zoom.plot(np.sort(phase[zoom_ind]/tdur), min_trans+pred[1,zoom_ind,n_pl][np.argsort(phase[zoom_ind])], color="C"+str(n_pl+1), label="model")
-                art = f_zoom.fill_between(np.sort(phase[zoom_ind])/tdur,
-                                          min_trans+pred[0,zoom_ind,n_pl][np.argsort(phase[zoom_ind])],
-                                          min_trans+pred[2,zoom_ind,n_pl][np.argsort(phase[zoom_ind])],
-                                          color="C"+str(n_pl+1), alpha=0.5,zorder=1000)
-                f_zoom_resid.plot(phase[zoom_ind]/tdur,min_resid+resids,
-                                  ".k", label="data", zorder=-1000,alpha=0.5)
-                f_zoom_resid.plot([-1,1],[min_resid,min_resid],
-                                  "-",color="C"+str(n_pl+1), label="data", zorder=-1000,alpha=0.75,linewidth=2.0)
-
-            min_resid+=np.percentile(resids,99)
-            min_trans+=abs(1.25*np.min(pred[1,:,n_pl]))
-
-        f_zoom.set_xticks([])
-        if zoom_plot_time:
-            f_zoom_resid.set_xlabel('Time - t_c')
-            f_zoom_resid.set_xlim(-1*tdur,tdur)
-            f_zoom.set_xlim(-1*tdur,tdur)
-        else:
-            f_zoom_resid.set_xlabel('normalised time [t_dur]')
-            f_zoom_resid.set_xlim(-1,1)
-            f_zoom.set_xlim(-1,1)
-
-        if savename is None:
-            savename=GetSavename(ID, mission, how='save', suffix='_TransitFit.png', 
-                                 overwrite=overwrite, savefileloc=savefileloc)[0]
-            print(savename)
-
-        plt.savefig(savename,dpi=250)
-
-        if returnfig:
-            return fig
-
-        
     def PlotCorner(self, varnames=["b", "ecc", "period", "r_pl","u_star","vrel"],
                savename=None, overwrite=False,savefileloc=None,returnfig=False,tracemask=None):
         #Plots Corner plot
@@ -2693,7 +2632,7 @@ class monoModel():
         if mission[0].lower()=="t":
             import pandas as pd
             from astropy.io import ascii
-            TessLDs=ascii.read(os.path.join(MonoFit_path,'data','tables','tessLDs.txt')).to_pandas()
+            TessLDs=ascii.read(os.path.join(MonoData_tablepath,'tessLDs.txt')).to_pandas()
             TessLDs=TessLDs.rename(columns={'col1':'logg','col2':'Teff','col3':'FeH','col4':'L/HP','col5':'a',
                                                'col6':'b','col7':'mu','col8':'chi2','col9':'Mod','col10':'scope'})
             if self.FeH!=0.0:
@@ -2720,7 +2659,7 @@ class monoModel():
             else:
                 print("no key...")
 
-            arr = np.genfromtxt(os.path.join(MonoFit_path,"data/tables","KeplerLDlaws.txt"),skip_header=2)
+            arr = np.genfromtxt(os.path.join(MonoData_tablepath,"KeplerLDlaws.txt"),skip_header=2)
             #Selecting FeH manually:
             feh_ix=arr[:,2]==np.unique(arr[:, 2])[np.argmin(self.FeH-np.unique(arr[:, 2]))]
             a_interp=ct2d(np.column_stack((arr[feh_ix,0],arr[feh_ix,1])),arr[feh_ix,4])

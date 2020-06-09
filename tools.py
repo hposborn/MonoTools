@@ -38,7 +38,13 @@ import glob
 import warnings
 warnings.filterwarnings("ignore")
 
-MonoTools_path = os.path.dirname(os.path.abspath( __file__ ))
+MonoData_tablepath = os.path.join(os.path.dirname(os.path.abspath( __file__ )),'data','tables')
+if os.environ.get('MONOTOOLSPATH') is None:
+    MonoData_savepath = os.path.join(os.path.dirname(os.path.abspath( __file__ )),'data')
+else:
+    MonoData_savepath = os.environ.get('MONOTOOLSPATH')
+
+    
 from .stellar import starpars
 
 id_dic={'TESS':'TIC','tess':'TIC','Kepler':'KIC','kepler':'KIC','KEPLER':'KIC',
@@ -153,17 +159,19 @@ def openFits(f,fname,mission,cut_all_anom_lim=4.0,use_ppt=True):
     elif type(f)==h5py._hl.files.File:
         #QLP is defined in mags, so lets
         def mag2flux(mags):
-            return -2.5*np.log(mags-np.nanmedian(mags))
+            flux = np.power(10,(mags-np.nanmedian(mags))/-2.5)
+            return flux/np.nanmedian(flux)
         def magerr2flux(magerrs,mags):
-             return mag2flux(mags)*(magerrs/(2.5/np.log(10)))
+            flux=np.power(10,(mags-np.nanmedian(mags))/-2.5)
+            return flux*(magerrs/(2.5/np.log(10)))/np.nanmedian(flux)
         #QLP .h5py file
         lc={'time':f['LightCurve']['BJD'],
-            'flux':mag2flux(f['LightCurve']['AperturePhotometry']['Aperture_002']['KSPMagnitude'][:]),
-            'raw_flux':mag2flux(f['LightCurve']['AperturePhotometry']['Aperture_002']['RawMagnitude'][:]),
+            'flux':mag2flux(f['LightCurve']['AperturePhotometry']['Aperture_003']['KSPMagnitude'][:]),
+            'raw_flux':mag2flux(f['LightCurve']['AperturePhotometry']['Aperture_003']['RawMagnitude'][:]),
             'bg_flux':f['LightCurve']['Background']['Value'][:],
-            'cent_1':f['LightCurve']['AperturePhotometry']['Aperture_002']['X'][:],
-            'cent_2':f['LightCurve']['AperturePhotometry']['Aperture_002']['Y'][:],
-            'quality':np.array([np.power(2,15) if c=='G' else 0.0 for c in f['LightCurve']['AperturePhotometry']['Aperture_002']['QualityFlag'][:]]).astype(int),
+            'cent_1':f['LightCurve']['AperturePhotometry']['Aperture_003']['X'][:],
+            'cent_2':f['LightCurve']['AperturePhotometry']['Aperture_003']['Y'][:],
+            'quality':np.array([np.power(2,15) if c=='G' else 0.0 for c in f['LightCurve']['AperturePhotometry']['Aperture_003']['QualityFlag'][:]]).astype(int),
             'flux_sm_ap':mag2flux(f['LightCurve']['AperturePhotometry']['Aperture_000']['KSPMagnitude'][:]),
             'flux_xl_ap':mag2flux(f['LightCurve']['AperturePhotometry']['Aperture_004']['KSPMagnitude'][:])}
         #    'flux_err':magerr2flux(f['LightCurve']['AperturePhotometry']['Aperture_002']['RawMagnitudeError'][:],
@@ -217,7 +225,7 @@ def openFits(f,fname,mission,cut_all_anom_lim=4.0,use_ppt=True):
     return lc
 
     
-def maskLc(lc,fhead,cut_all_anom_lim=5.0,use_ppt=False,end_of_orbit=True,use_binned=False,use_flat=False):
+def maskLc(lc,fhead,cut_all_anom_lim=5.0,use_ppt=False,end_of_orbit=True,use_binned=False,use_flat=False,mask_islands=True):
     # Mask bad data (nans, infs and negatives) 
     
     prefix= 'bin_' if use_binned else ''
@@ -236,6 +244,8 @@ def maskLc(lc,fhead,cut_all_anom_lim=5.0,use_ppt=False,end_of_orbit=True,use_bin
     if cut_all_anom_lim>0:
         #print(np.sum(~lc['mask']),"points before CutAnomDiff")
         mask[mask]=CutAnomDiff(lc[prefix+'flux'+suffix][mask],cut_all_anom_lim)
+        #Doing this a second time with more stringent limits to cut two-point outliers:
+        mask[mask]=CutAnomDiff(lc[prefix+'flux'+suffix][mask],cut_all_anom_lim+3.5)
         #print(np.sum(~lc['mask']),"after before CutAnomDiff")
     mu = np.median(lc[prefix+'flux'+suffix][mask])
     if use_ppt:
@@ -245,6 +255,23 @@ def maskLc(lc,fhead,cut_all_anom_lim=5.0,use_ppt=False,end_of_orbit=True,use_bin
     else:
         lc[prefix+'flux'+suffix] = (lc[prefix+'flux'+suffix] / mu - 1)
         lc[prefix+'flux'+suffix+'_err'] /= mu
+    
+    if mask_islands:
+        #Masking islands of data which are <12hrs long and >12hrs from other data
+        jumps=np.where(np.diff(lc['time'][mask])>0.5)[0]
+        jumps=np.column_stack((np.hstack(([0,jumps+1])),
+                               np.hstack(([jumps,len(lc['time'][mask])-1]))))
+        xmask=np.tile(True,np.sum(mask))
+        for j in range(len(jumps[:,0])):
+            t0=lc['time'][mask][jumps[j,0]]
+            t1=lc['time'][mask][jumps[j,1]]
+            jump_before = 100 if j==0 else t0-(lc['time'][mask][jumps[j-1,1]])
+            jump_after = 100 if j==(len(jumps[:,0])-1) else (lc['time'][mask][jumps[j+1,0]])-t1
+            if (t1-t0)<0.5 and jump_before>0.5 and jump_after>0.5:
+                #ISLAND! NEED TO MASK
+                xmask[jumps[j,0]:(jumps[j,1]+1)]=False
+        mask[mask]*=xmask
+                
     
     #End-of-orbit cut
     # Arbritrarily looking at the first/last 15 points and calculating STD of first/last 300 pts.
@@ -409,8 +436,8 @@ def getKeplerLC(kic,cadence='long',use_ppt=True):
     #        2010265121752,2010355172524,2011073133259,2011177032512,2011271113734,2012004120508,2012088054726,
     #        2012179063303,2012277125453,2013011073258,2013098041711,2013131215648]
     lcs=[]
-    if cadence=='long' and 'llc' in q:
-        for q in [qc for qc in qcodes if qc[-4]=='_llc']:
+    if cadence=='long':
+        for q in [qc for qc in qcodes if qc[-4:]=='_llc']:
             lcloc='http://archive.stsci.edu/pub/kepler/lightcurves/'+str(int(kic)).zfill(9)[0:4]+'/'+str(int(kic)).zfill(9)+'/kplr'+str(int(kic)).zfill(9)+'-'+str(q)+'.fits'
             h = httplib2.Http()
             resp = h.request(lcloc, 'HEAD')
@@ -421,7 +448,7 @@ def getKeplerLC(kic,cadence='long',use_ppt=True):
                         lcs+=[ilc]
                     hdr=hdu[1].header
     elif cadence == 'short' and 'slc' in q:
-        for q in [qc for qc in qcodes if qc[-4]=='_slc']:
+        for q in [qc for qc in qcodes if qc[-4:]=='_slc']:
             lcloc='http://archive.stsci.edu/pub/kepler/lightcurves/'+str(int(kic)).zfill(9)[0:4]+'/'+str(int(kic)).zfill(9)+'/kplr'+str(int(kic)).zfill(9)+'-'+str(q)+'.fits'
             h = httplib2.Http()
             resp = h.request(lcloc, 'HEAD')
@@ -472,7 +499,12 @@ def CutAnomDiff(flux,thresh=4.2):
 def observed(tic):
     # Using "webtess" page to check if TESS object was observed:
     # Returns dictionary of each sector and whether it was observed or not
-    page = requests.get('https://heasarc.gsfc.nasa.gov/cgi-bin/tess/webtess/wtv.py?Entry='+str(tic))
+    if type(tic)==int or type(tic)==float:
+        page = requests.get('https://heasarc.gsfc.nasa.gov/cgi-bin/tess/webtess/wtv.py?Entry='+str(int(tic)))
+    elif type(tic)==SkyCoord:
+        page = requests.get('https://heasarc.gsfc.nasa.gov/cgi-bin/tess/webtess/wtv.py?Entry='+str(tic.ra.deg)+"%2C+"+str(tic.dec.deg))
+    else:
+        print(type(tic),"- unrecognised")
     print('https://heasarc.gsfc.nasa.gov/cgi-bin/tess/webtess/wtv.py?Entry='+str(tic))
     tree = html.fromstring(page.content)
     Lamp = tree.xpath('//pre/text()') #stores class of //pre html element in list Lamp
@@ -485,24 +517,35 @@ def getCorotLC(corid,use_ppt=True):
     lc=openFits(np.load("data/CorotLCs/CoRoT"+str(corid)+".npy"),"CorotLCs/CoRoT"+str(corid)+".npy",mission="Corot")
     return lc
 
-def TESS_lc(tic,sector='all',use_ppt=True, coords=None, use_eleanor=True):
-    #Downloading TESS lc 
-    if sector == 'all':
-        sect_obs=observed(tic)
-    else:
-        sect_obs={sector:True}
+def TESS_lc(tic,sectors='all',use_ppt=True, coords=None, use_eleanor=True, data_loc=None,**kwargs):
+    #Downloading TESS lc     
+    if data_loc is None:
+        data_loc=MonoData_savepath+"/TIC"+str(int(tic)).zfill(11)
     
     epoch={1:'2018206045859_0120',2:'2018234235059_0121',3:'2018263035959_0123',4:'2018292075959_0124',
            5:'2018319095959_0125',6:'2018349182459_0126',7:'2019006130736_0131',8:'2019032160000_0136',
            9:'2019058134432_0139',10:'2019085135100_0140',11:'2019112060037_0143',12:'2019140104343_0144',
            13:'2019169103026_0146',14:'2019198215352_0150',15:'2019226182529_0151',16:'2019253231442_0152',
            17:'2019279210107_0161',18:'2019306063752_0162',19:'2019331140908_0164',20:'2019357164649_0165',
-           21:'2020020091053_0167',22:'2020049080258_0174',23:'2020078014623_0177'}
+           21:'2020020091053_0167',22:'2020049080258_0174',23:'2020078014623_0177',24:'2020106103520_0180'}
     lcs=[];lchdrs=[]
-    if type(sector)==str and sector=='all':
-        epochs=list(epoch.keys())
+    if sectors == 'all':
+        if coords is not None and type(coords)==SkyCoord:
+            sect_obs=observed(coords)
+        else:
+            sect_obs=observed(tic)
+        epochs=[key for key in epoch if sect_obs[key]]
+        
+        if epochs==[]:
+            #NO EPOCHS OBSERVABLE APPARENTLY. USING THE EPOCHS ON EXOFOP/TIC8
+            toi_df=pd.read_csv("https://exofop.ipac.caltech.edu/tess/download_toi.php?sort=toi&output=csv")
+            if tic in toi_df['TIC ID'].values:
+                print("FOUND TIC IN TOI LIST")
+                epochs=list(np.array(toi_df.loc[toi_df['TIC ID']==tic,'Sectors'].values[0].split(',')).astype(int))
+    elif type(sectors)==list or type(sectors)==np.ndarray:
+        epochs=sectors
     else:
-        epochs=[sector]
+        epochs=[sectors]
         #observed_sectors=observed(tic)
         #observed_sectors=np.array([os for os in observed_sectors if observed_sectors[os]])
         #if observed_sectors!=[-1] and len(observed_sectors)>0:
@@ -511,55 +554,55 @@ def TESS_lc(tic,sector='all',use_ppt=True, coords=None, use_eleanor=True):
         #    observed_sectors=sector
         #print(observed_sectors)
     get_qlp=0
+    print(epochs,type(epochs))
     for key in epochs:
-        if sect_obs[key]:
-            try:
-                #2=minute cadence data from tess website
-                fitsloc="https://archive.stsci.edu/missions/tess/tid/s"+str(key).zfill(4)+"/"+str(tic).zfill(16)[:4]+"/"+str(tic).zfill(16)[4:8]+"/"+str(tic).zfill(16)[-8:-4]+"/"+str(tic).zfill(16)[-4:]+"/tess"+epoch[key].split('_')[0]+"-s"+str(key).zfill(4)+"-"+str(tic).zfill(16)+"-"+epoch[key].split('_')[1]+"-s_lc.fits"
-                h = httplib2.Http()
-                resp = h.request(fitsloc, 'HEAD')
-                if int(resp[0]['status']) < 400:
-                    with fits.open(fitsloc) as hdus:
-                        lcs+=[openFits(hdus,fitsloc,mission='tess',use_ppt=use_ppt)]
-                        lchdrs+=[hdus[0].header]
-                else:
-                    raise Exception('No TESS lightcurve')
-            except:
-                if os.path.isdir(os.path.join(MonoTools_path,"data","TIC"+str(int(tic)).zfill(11) )) and len(glob.glob(os.path.join(MonoTools_path,"data","TIC"+str(int(tic)).zfill(11)+"/*.h5")))>0:
-                    get_qlp+=1
-                elif use_eleanor:
-                    print("No QLP files at",os.path.join(MonoTools_path,"data","TIC"+str(int(tic)).zfill(11)),"Loading Eleanor Lightcurve")
+        try:
+            #2=minute cadence data from tess website
+            fitsloc="https://archive.stsci.edu/missions/tess/tid/s"+str(key).zfill(4)+"/"+str(tic).zfill(16)[:4]+"/"+str(tic).zfill(16)[4:8]+"/"+str(tic).zfill(16)[-8:-4]+"/"+str(tic).zfill(16)[-4:]+"/tess"+epoch[key].split('_')[0]+"-s"+str(key).zfill(4)+"-"+str(tic).zfill(16)+"-"+epoch[key].split('_')[1]+"-s_lc.fits"
+            h = httplib2.Http()
+            resp = h.request(fitsloc, 'HEAD')
+            if int(resp[0]['status']) < 400:
+                with fits.open(fitsloc) as hdus:
+                    lcs+=[openFits(hdus,fitsloc,mission='tess',use_ppt=use_ppt)]
+                    lchdrs+=[hdus[0].header]
+            else:
+                raise Exception('No TESS lightcurve')
+        except:
+            if os.path.isdir(data_loc) and len(glob.glob(data_loc+"/*.h5"))>0:
+                get_qlp+=1
+            elif use_eleanor:
+                print("No QLP files at",data_loc,"Loading Eleanor Lightcurve")
+                try:
+                    #Getting eleanor lightcurve:
                     try:
-                        #Getting eleanor lightcurve:
+                        star = eleanor.eleanor.Source(tic=tic, sector=key)
+                    except:
+                        star = eleanor.eleanor.Source(coords=coords, sector=key)
+                    try:
+                        elen_obj=eleanor.eleanor.TargetData(star, height=15, width=15, bkg_size=31, do_psf=True, do_pca=True,save_postcard=False)
+                    except:
                         try:
-                            star = eleanor.eleanor.Source(tic=tic, sector=key)
+                            elen_obj=eleanor.eleanor.TargetData(star, height=15, width=15, bkg_size=31, do_psf=True, do_pca=False,save_postcard=False)
                         except:
-                            star = eleanor.eleanor.Source(coords=coords, sector=key)
-                        try:
-                            elen_obj=eleanor.eleanor.TargetData(star, height=15, width=15, bkg_size=31, do_psf=True, do_pca=True,save_postcard=False)
-                        except:
-                            try:
-                                elen_obj=eleanor.eleanor.TargetData(star, height=15, width=15, bkg_size=31, do_psf=True, do_pca=False,save_postcard=False)
-                            except:
-                                elen_obj=eleanor.eleanor.TargetData(star, height=15, width=15, bkg_size=31, do_psf=False, do_pca=False,save_postcard=False)
-                        elen_hdr={'ID':star.tic,'GaiaID':star.gaia,'Tmag':star.tess_mag,
-                                  'RA':star.coords[0],'dec':star.coords[1],'mission':'TESS','campaign':key,
-                                  'ap_masks':elen_obj.all_apertures,'ap_image':np.nanmedian(elen_obj.tpf[50:80],axis=0)}
-                        elen_lc=openFits(elen_obj,elen_hdr,mission='tess',use_ppt=use_ppt)
-                        lcs+=[elen_lc]
-                        lchdrs+=[elen_hdr]
-                    except Exception as e:
-                        print(e, tic,"not observed by TESS in sector",key)
-    
+                            elen_obj=eleanor.eleanor.TargetData(star, height=15, width=15, bkg_size=31, do_psf=False, do_pca=False,save_postcard=False)
+                    elen_hdr={'ID':star.tic,'GaiaID':star.gaia,'Tmag':star.tess_mag,
+                              'RA':star.coords[0],'dec':star.coords[1],'mission':'TESS','campaign':key,
+                              'ap_masks':elen_obj.all_apertures,'ap_image':np.nanmedian(elen_obj.tpf[50:80],axis=0)}
+                    elen_lc=openFits(elen_obj,elen_hdr,mission='tess',use_ppt=use_ppt)
+                    lcs+=[elen_lc]
+                    lchdrs+=[elen_hdr]
+                except Exception as e:
+                    print(e, tic,"not observed by TESS in sector",key)
+
     #Acessing QLP data from local files - only happens if there's .h5 lightcurves in a TICXXXXXXX folder in the folder where this is run
     if get_qlp>0:
         print("# Loading QLP lightcurves")
         print(tic,type(tic))
-        for orbit in glob.glob(os.path.join(MonoTools_path,"data","TIC"+str(int(tic)).zfill(11),"*.h5")):
+        for orbit in glob.glob(data_loc+"/*.h5"):
             f=h5py.File(orbit)
             if len(lcs)==0 or np.nanmin(abs(np.nanmedian(f['LightCurve']['BJD'])-np.hstack([l['time'] for l in lcs])))>5:
                 # This speciic QLP orbit does not have a SPOC lightcurve attached (i.e. no other obs within 5days)
-                lcs+=[openFits(f,fitsloc,mission='tess',use_ppt=use_ppt)]
+                lcs+=[openFits(f,orbit,mission='tess',use_ppt=use_ppt)]
                 lchdrs+=[None]
     if len(lcs)>1:
         lc=lcStack(lcs)
@@ -617,7 +660,7 @@ def openLightCurve(ID,mission,use_ppt=True,other_data=True,jd_base=2457000,**kwa
     #Opening using url search:
     lcs={};hdrs={}
     if IDs['tess'] is not None:
-        lcs['tess'],hdrs['tess'] = TESS_lc(IDs['tess'],use_ppt=use_ppt,coords=coor)
+        lcs['tess'],hdrs['tess'] = TESS_lc(IDs['tess'],use_ppt=use_ppt,coords=coor,**kwargs)
         lcs['tess']['time']-=(jd_base-2457000)
     if IDs['k2'] is not None:
         lcs['k2'],hdrs['k2'] = K2_lc(IDs['k2'],pers=kwargs.get('periods',None),
@@ -650,7 +693,7 @@ def openLightCurve(ID,mission,use_ppt=True,other_data=True,jd_base=2457000,**kwa
     
     return lc,hdrs[mission.lower()]
 
-def cutLc(lctimes,max_len=10000,return_bool=True):
+def cutLc(lctimes,max_len=10000,return_bool=True,transit_mask=None):
     # Naturally cut the lightcurve time into chunks smaller than max_len (e.g. for GP computations)
     assert(np.isnan(lctimes).sum()==0)
     if return_bool:
@@ -664,6 +707,9 @@ def cutLc(lctimes,max_len=10000,return_bool=True):
                         middle_boost=4*(0.3-((lctimes[bools[n]][:-1]+np.diff(lctimes[bools[n]]) - \
                                               np.median(lctimes[bools[n]]))/(lctimes[bools[n]][-1]-lctimes[bools[n]][0]))**2)
                         #And then cut along the maximum value into two new times:
+                        if transit_mask is not None:
+                            #Making sure we dont do the cuts on transits
+                            middle_boost*=(transit_mask[bools[n]][1:]|transit_mask[bools[n]][:-1]).astype(float)
                         maxloc=np.argmax(np.diff(lctimes[bools[n]])*middle_boost)
                         cut_time=0.5*(lctimes[bools[n]][maxloc]+lctimes[bools[n]][maxloc+1])
                         newbools+=[bools[n]&(lctimes<=cut_time),
@@ -708,7 +754,7 @@ def weighted_avg_and_std(values, errs, axis=None):
     binsize_adj = np.sqrt(len(values)) if axis is None else np.sqrt(values.shape[axis])
     return [average, np.sqrt(variance)/binsize_adj]
 
-def lcBin(lc,binsize=1/48,use_flat=True,use_masked=True):
+def lcBin(lc,binsize=1/48,split_gap_size=0.8,use_flat=True,use_masked=True, extramask=None,modify_lc=True):
     #Binning lightcurve to e.g. 30-min cadence for planet search
     # Can optionally use the flatted lightcurve
     binlc={}
@@ -723,36 +769,58 @@ def lcBin(lc,binsize=1/48,use_flat=True,use_masked=True):
     else:
         flux_dic=['flux']
         binlc['flux']=[]
+    binlc['bin_cadence']=[]
         
-    if np.nanmax(np.diff(lc['time']))>3:
+    if np.nanmax(np.diff(lc['time']))>split_gap_size:
         loop_blocks=np.array_split(np.arange(len(lc['time'])),np.where(np.diff(lc['time'])>2.0)[0])
     else:
         loop_blocks=[np.arange(len(lc['time']))]
+    if type(extramask)==np.ndarray and type(extramask[0])==bool or type(extramask[0])==np.bool_:
+        mask=lc['mask']&extramask
+        print("extramask with n=",np.sum(extramask))
+    else:
+        mask=lc['mask']
+        print("no extramask",type(extramask),type(extramask[0]))
     for sh_time in loop_blocks:
         for fkey in flux_dic:
             if use_masked:
-                lc_segment=np.column_stack((lc['time'][sh_time][lc['mask'][sh_time]],
-                                            lc[fkey][sh_time][lc['mask'][sh_time]],
-                                            lc['flux_err'][sh_time][lc['mask'][sh_time]]))
+                lc_segment=np.column_stack((lc['time'][sh_time][mask[sh_time]],
+                                            lc[fkey][sh_time][mask[sh_time]],
+                                            lc['flux_err'][sh_time][mask[sh_time]]))
+                cads=lc['cadence'][sh_time][mask[sh_time]]
             else:
                 lc_segment=np.column_stack((lc['time'][sh_time],lc[fkey][sh_time],lc['flux_err'][sh_time]))
+                cads=lc['cadence'][sh_time]
             if binsize>(1.66*np.nanmedian(np.diff(lc['time'][sh_time]))):
                 #Only doing the binning if the cadence involved is >> the cadence
-                digi=np.digitize(lc_segment[:,0],np.arange(lc_segment[0,0],lc_segment[-1,0],binsize))
+                digi=np.digitize(lc_segment[:,0],
+                                 np.arange(np.min(lc_segment[:,0])-0.5*binsize,np.max(lc_segment[:,0])+0.5*binsize,binsize))
                 binlc[fkey]+=[bin_lc_segment(lc_segment, binsize)]
+                binlc['bin_cadence']+=[np.array([cads[digi==d] if type(cads[digi==d])==str else cads[digi==d][0] for d in np.unique(digi)])[:,np.newaxis]]
             else:
                 binlc[fkey]+=[lc_segment]
-        
+                binlc['bin_cadence']+=[cads[:,np.newaxis]]
+    
     binlc={fkey:np.vstack(binlc[fkey]) for fkey in binlc}
-    lc['bin_time']=binlc['flux'][:,0]
-    for fkey in binlc:
-        lc['bin_'+fkey]=binlc[fkey][:,1]
-        #Need to clip error here as tiny (and large) errors from few points cause problems down the line.
-        lc['bin_'+fkey+'_err']=np.clip(binlc[fkey][:,2],0.9*np.nanmedian(binlc[fkey][:,2]),20*np.nanmedian(binlc[fkey][:,2]))
-    return lc
+    if modify_lc:
+        lc['bin_time']=binlc['flux'][:,0]
+        for fkey in flux_dic:
+            lc['bin_'+fkey]=binlc[fkey][:,1]
+            #Need to clip error here as tiny (and large) errors from few points cause problems down the line.
+            lc['bin_'+fkey+'_err']=np.clip(binlc[fkey][:,2],0.9*np.nanmedian(binlc[fkey][:,2]),20*np.nanmedian(binlc[fkey][:,2]))
+        return lc
+    else:
+        ret_lc={}
+        ret_lc['time']=binlc['flux'][:,0]
+        for fkey in flux_dic:
+            ret_lc['bin_'+fkey]=binlc[fkey][:,1]
+            #Need to clip error here as tiny (and large) errors from few points cause problems down the line.
+            ret_lc['bin_'+fkey+'_err']=np.clip(binlc[fkey][:,2],0.9*np.nanmedian(binlc[fkey][:,2]),20*np.nanmedian(binlc[fkey][:,2]))
+        ret_lc['bin_cadence']=binlc['bin_cadence'].ravel()
+        return ret_lc
 
 def bin_lc_segment(lc_segment, binsize):
-    digi=np.digitize(lc_segment[:,0],np.arange(np.min(lc_segment[:,0]),np.max(lc_segment[:,0]),binsize))
+    digi=np.digitize(lc_segment[:,0],np.arange(np.min(lc_segment[:,0])-0.5*binsize,np.max(lc_segment[:,0])+0.5*binsize,binsize))
     return np.vstack([[[np.nanmedian(lc_segment[digi==d,0])]+\
                        weighted_avg_and_std(lc_segment[digi==d,1],lc_segment[digi==d,2])] for d in np.unique(digi)])
     
@@ -833,11 +901,13 @@ def lcFlatten(lc, winsize = 3.5, stepsize = 0.15, polydegree = 2,
     uselc=np.column_stack((lc[prefix+'time'][:],lc[prefix+'flux'][:],lc[prefix+'flux_err'][:]))
     if len(lc['mask'])==len(uselc[:,0]) and use_mask:
         initmask=(lc['mask']&(lc['flux']/lc['flux']==1.0)).astype(int)[:]
+        if type(transit_mask)==np.ndarray:
+            print("transit mask:",type(initmask),len(initmask),
+                  initmask[0],type(transit_mask),len(transit_mask),transit_mask[0])
+            initmask=(initmask.astype(bool)&transit_mask).astype(int)
+
     else:
         initmask=np.isfinite(uselc[:,1]).astype(int)
-    if transit_mask is not None:
-        print("transit mask:",type(initmask),len(initmask),initmask[0],type(transit_mask),len(transit_mask),transit_mask[0])
-        initmask=(initmask.astype(bool)&transit_mask).astype(int)
     uselc=np.column_stack((uselc,initmask))
     uselc[:,1:3]/=lc['flux_unit']
     uselc[:,1]-=np.nanmedian(lc[prefix+'flux'])
@@ -1572,7 +1642,7 @@ def GetSavename(ID, mission, how='load', suffix='mcmc.pickle', overwrite=False, 
     # - filepath
     '''
     if savefileloc is None:
-        savefileloc=os.path.join(MonoTools_path,'data',id_dic[mission]+str(ID).zfill(11))
+        savefileloc=os.path.join(MonoData_savepath,id_dic[mission]+str(ID).zfill(11))
     if not os.path.isdir(savefileloc):
         os.mkdir(savefileloc)
     pickles=glob.glob(os.path.join(savefileloc,id_dic[mission]+str(ID).zfill(11)+"*"+suffix))
@@ -1643,7 +1713,7 @@ def getLDs(Ts,logg=4.43812,FeH=0.0,mission="TESS"):
     if mission[0]=="T" or mission[0]=="t":
         import pandas as pd
         from astropy.io import ascii
-        TessLDs=ascii.read(os.path.join(MonoTools_path,'data','tables','tessLDs.txt')).to_pandas()
+        TessLDs=ascii.read(os.path.join(MonoData_tablepath,'tessLDs.txt')).to_pandas()
         TessLDs=TessLDs.rename(columns={'col1':'logg','col2':'Teff','col3':'FeH','col4':'L/HP','col5':'a',
                                            'col6':'b','col7':'mu','col8':'chi2','col9':'Mod','col10':'scope'})
         a_interp=ct2d(np.column_stack((TessLDs.Teff.values.astype(float),TessLDs.logg.values.astype(float))),TessLDs.a.values.astype(float))
@@ -1667,7 +1737,7 @@ def getLDs(Ts,logg=4.43812,FeH=0.0,mission="TESS"):
         else:
             print("no key...")
 
-        arr = np.genfromtxt(os.path.join(MonoTools_path,"data","KeplerLDlaws.txt"),skip_header=2)
+        arr = np.genfromtxt(os.path.join(MonoData_tablepath,"KeplerLDlaws.txt"),skip_header=2)
         FeHarr=np.unique(arr[:, 2])
         FeH=find_nearest_2D(FeH,FeHarr)
 
