@@ -1056,6 +1056,8 @@ def getStellarInfoFromCsv(ID,mission,k2tab=None,keptabs=None):
     # Kepler on Vizier J/ApJ/866/99/table1
     # New K2: "http://kevinkhu.com/table1.txt"
     # TESS on Vizier (TICv8)
+    from ..tools import MonoData_tablepath,weighted_avg_and_std
+    
     if mission.lower()=='tess':
         info = TICdata(int(ID)).iloc[0]
         print("TESS object",ID,info.name)
@@ -1063,7 +1065,6 @@ def getStellarInfoFromCsv(ID,mission,k2tab=None,keptabs=None):
         keptabs = None
     else:
         if mission.lower()=='kepler':
-            from ..tools import MonoData_tablepath
             if keptabs is None:
                 keptabs=[ascii.read(os.path.join(MonoData_tablepath,'GKSPCPapTable1_Final.txt'),delimiter='&').to_pandas(),
                          ascii.read(os.path.join(MonoData_tablepath,'GKSPCPapTable2_Final.txt'),delimiter='&').to_pandas()]
@@ -1128,7 +1129,7 @@ def getStellarInfoFromCsv(ID,mission,k2tab=None,keptabs=None):
                                       '[Fe/H]':'feh','E_[Fe/H]':'epos_feh','e_[Fe/H]':'eneg_feh'})
             info['eneg_teff']=info['e_Teff']
             info['epos_teff']=info['e_Teff']
-            info['e_d']=0.5*(abs(info['epos_dist'])+abs(info['eneg_dist']))
+            info['e_dist']=0.5*(abs(info['epos_dist'])+abs(info['eneg_dist']))
             info['e_rad']=0.5*(abs(info['eneg_rad'])+abs(info['epos_rad']))
             info['e_mass']=0.5*(abs(info['eneg_mass'])+abs(info['epos_mass']))
             info['e_logg']=0.5*(abs(info['eneg_logg'])+abs(info['epos_logg']))
@@ -1168,6 +1169,8 @@ def getStellarInfoFromCsv(ID,mission,k2tab=None,keptabs=None):
             #tic dat is better, we should use ticdat:
             info=tic_dat
         elif tic_dat is not None:
+            print(info)
+            print(tic_dat)
             for key in tic_dat:
                 if key not in info:
                     info[key]=tic_dat[key]
@@ -1256,32 +1259,31 @@ def getStellarInfoFromCsv(ID,mission,k2tab=None,keptabs=None):
             info['eneg_logg']=np.nan
             info['epos_logg']=np.nan
 
-    if 'rho' not in info:
-        #Problem here - need rho. Derive from Teff and Rs, plus Dist vs. mag?
-        if 'mass' in info and 'rad' in info:
-            info['rho']=1.411*(info['mass']/info['rad']**3)
-            info['eneg_rho']=info['rho']-1.411*((info['mass']-abs(info['eneg_mass']))/(info['rad']+info['epos_rad'])**3)
-            info['epos_rho']=1.411*((info['mass']+info['epos_mass'])/(info['rad']-abs(info['eneg_rad']))**3)-info['rho']
-    elif 'mass' in info and 'rad' in info and 'logg' in info:
-        #We might be able to further constrain density here, if we have independent measures of logg/R/M:
-        allrhos=[]
+    
+    print('mass' in info, 'rad' in info, 'logg' in info)
+    #Problem here - need rho. Derive from Teff and Rs, plus Dist vs. mag?
+    allrhos={}
+    if 'mass' in info and 'rad' in info:
         MR={'rho':1.411*(info['mass']/info['rad']**3)}
         MR['eneg_rho']=MR['rho']-1.411*((info['mass']-abs(info['eneg_mass']))/(info['rad']+info['epos_rad'])**3)
         MR['epos_rho']=1.411*((info['mass']+info['epos_mass'])/(info['rad']-abs(info['eneg_rad']))**3)-MR['rho']
-        allrhos+=[MR]
-        if 'eneg_logg' in info and not np.isnan(info['eneg_logg']) and info['eneg_logg']!=0.0:
-            logg={'rho':np.power(10,info['logg']-4.43)/info['rad']}
-            logg['eneg_rho']=logg['rho']-np.power(10,(info['logg']-abs(info['eneg_logg']))-4.43) / (info['rad']+abs(info['epos_rad']))
-            logg['epos_rho']=np.power(10,(info['logg']+abs(info['epos_logg']))-4.43) / (info['rad']-abs(info['eneg_rad']))-logg['rho']
-            allrhos+=[logg]
+        allrhos['MR']= MR
+    if 'logg' in info and 'eneg_logg' in info and not np.isnan(info['eneg_logg']) and info['eneg_logg']!=0.0:
+        logg={'rho':np.power(10,info['logg']-4.43)/info['rad']}
+        #Scaling errors by 1.33 as these are often too low (and correlated with MR error by a factor of 1/3)
+        logg['eneg_rho']=1.333*(logg['rho']-np.power(10,(info['logg']-abs(info['eneg_logg']))-4.43) / (info['rad']+abs(info['epos_rad'])))
+        logg['epos_rho']=1.333*(np.power(10,(info['logg']+abs(info['epos_logg']))-4.43) / (info['rad']-abs(info['eneg_rad']))-logg['rho'])
+        allrhos['logg']=logg
+    if 'rho' in info and info['rho']>0.0:
         rhos={'rho':info['rho'],'epos_rho':info['epos_rho'],'eneg_rho':info['eneg_rho']}
-        allrhos+=[rhos]
-        
-        best_rhos=np.argmin([0.5*(rho['epos_rho']+abs(rho['eneg_rho'])) for rho in allrhos])
-        info['rho']=allrhos[best_rhos]['rho']
-        info['epos_rho']=allrhos[best_rhos]['epos_rho']
-        info['eneg_rho']=allrhos[best_rhos]['eneg_rho']
-        
+        allrhos['rho']=rhos
+    av1, neg_std = weighted_avg_and_std(np.array([allrhos[rho]['rho'] for rho in allrhos]),
+                                       np.array([allrhos[rho]['eneg_rho'] for rho in allrhos]))
+    av2, pos_std = weighted_avg_and_std(np.array([allrhos[rho]['rho'] for rho in allrhos]),
+                                       np.array([allrhos[rho]['epos_rho'] for rho in allrhos]))
+    info['rho']=0.5*(av1+av2)
+    info['epos_rho']=1.5*pos_std
+    info['eneg_rho']=1.5*neg_std
     return info, k2tab, keptabs
         
 
