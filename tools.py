@@ -661,16 +661,19 @@ def openLightCurve(ID,mission,use_ppt=True,other_data=True,jd_base=2457000,**kwa
     lcs={};hdrs={}
     if IDs['tess'] is not None:
         lcs['tess'],hdrs['tess'] = TESS_lc(IDs['tess'],use_ppt=use_ppt,coords=coor,**kwargs)
-        lcs['tess']['time']-=(jd_base-2457000)
+        if lcs['tess'] is not None:
+            lcs['tess']['time']-=(jd_base-2457000)
     if IDs['k2'] is not None:
         lcs['k2'],hdrs['k2'] = K2_lc(IDs['k2'],pers=kwargs.get('periods',None),
                                      durs=kwargs.get('initdurs',None),
                                      t0s=kwargs.get('initt0',None),
                                      use_ppt=use_ppt)
-        lcs['k2']['time']-=(jd_base-2454833)
+        if lcs['k2'] is not None:
+            lcs['k2']['time']-=(jd_base-2454833)
     if IDs['kepler'] is not None:
         lcs['kepler'],hdrs['kepler'] = getKeplerLC(IDs['kepler'],use_ppt=use_ppt)
-        lcs['kepler']['time']-=(jd_base-2454833)
+        if lcs['kepler'] is not None:
+            lcs['kepler']['time']-=(jd_base-2454833)
     if mission.lower() == 'corot':
         lcs['corot'] = getCorotLC(ID,use_ppt=use_ppt)
         lcs['corot']['time']-=(jd_base-2454833)
@@ -775,12 +778,11 @@ def lcBin(lc,binsize=1/48,split_gap_size=0.8,use_flat=True,use_masked=True, extr
         loop_blocks=np.array_split(np.arange(len(lc['time'])),np.where(np.diff(lc['time'])>2.0)[0])
     else:
         loop_blocks=[np.arange(len(lc['time']))]
-    if type(extramask)==np.ndarray and type(extramask[0])==bool or type(extramask[0])==np.bool_:
+    if extramask is not None and type(extramask)==np.ndarray and (type(extramask[0])==bool)|(type(extramask[0])==np.bool_):
         mask=lc['mask']&extramask
         print("extramask with n=",np.sum(extramask))
     else:
         mask=lc['mask']
-        print("no extramask",type(extramask),type(extramask[0]))
     for sh_time in loop_blocks:
         for fkey in flux_dic:
             if use_masked:
@@ -793,13 +795,15 @@ def lcBin(lc,binsize=1/48,split_gap_size=0.8,use_flat=True,use_masked=True, extr
                 cads=lc['cadence'][sh_time]
             if binsize>(1.66*np.nanmedian(np.diff(lc['time'][sh_time]))):
                 #Only doing the binning if the cadence involved is >> the cadence
+                binlc[fkey]+=[bin_lc_segment(lc_segment, binsize)]
                 digi=np.digitize(lc_segment[:,0],
                                  np.arange(np.min(lc_segment[:,0])-0.5*binsize,np.max(lc_segment[:,0])+0.5*binsize,binsize))
-                binlc[fkey]+=[bin_lc_segment(lc_segment, binsize)]
-                binlc['bin_cadence']+=[np.array([cads[digi==d] if type(cads[digi==d])==str else cads[digi==d][0] for d in np.unique(digi)])[:,np.newaxis]]
             else:
                 binlc[fkey]+=[lc_segment]
-                binlc['bin_cadence']+=[cads[:,np.newaxis]]
+        if binsize>(1.66*np.nanmedian(np.diff(lc['time'][sh_time]))):
+            binlc['bin_cadence']+=[np.array([cads[digi==d] if type(cads[digi==d])==str else cads[digi==d][0] for d in np.unique(digi)])[:,np.newaxis]]
+        else:
+            binlc['bin_cadence']+=[cads[:,np.newaxis]]
     
     binlc={fkey:np.vstack(binlc[fkey]) for fkey in binlc}
     if modify_lc:
@@ -822,9 +826,7 @@ def lcBin(lc,binsize=1/48,split_gap_size=0.8,use_flat=True,use_masked=True, extr
 def bin_lc_segment(lc_segment, binsize):
     digi=np.digitize(lc_segment[:,0],np.arange(np.min(lc_segment[:,0])-0.5*binsize,np.max(lc_segment[:,0])+0.5*binsize,binsize))
     return np.vstack([[[np.nanmedian(lc_segment[digi==d,0])]+\
-                       weighted_avg_and_std(lc_segment[digi==d,1],lc_segment[digi==d,2])] for d in np.unique(digi)])
-    
-
+                        weighted_avg_and_std(lc_segment[digi==d,1],lc_segment[digi==d,2])] for d in np.unique(digi)])
 
 def dopolyfit(win,mask=None,stepcent=0.0,d=3,ni=10,sigclip=3):
     mask=np.tile(True,len(win)) if mask is None else mask

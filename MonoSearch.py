@@ -159,7 +159,7 @@ def QuickMonoFit(lc,it0,dur,Rs=None,Ms=None,Teff=None,useL2=False,fit_poly=True,
                                             mu=it0,sd=0.25*dur,testval=it0)
         
         b = pm.Uniform("b",upper=1.0,lower=0.0)
-        log_ror = pm.Uniform("log_ror",lower=-6,upper=-1)
+        log_ror = pm.Uniform("log_ror",lower=-6,upper=-0.5)
         ror = pm.Deterministic("ror", tt.exp(log_ror))
         #ror, b = xo.distributions.get_joint_radius_impact(min_radius=0.0075, max_radius=0.25,
         #                                                  testval_r=np.sqrt(dep), testval_b=0.41)
@@ -1128,12 +1128,11 @@ def DoEBfit(lc,tc,dur):
     # Performs EB fit to primary/secondary.
     return None
 
-def dipmodel_step(params,x):
-    n_poly=int(0.5*(len(params)-1))
-    return np.hstack((np.polyval( params[1:1+n_poly], x[x<params[0]]),
-                      np.polyval( params[-n_poly:], x[x>=params[0]]) ))
+def dipmodel_step(params,x,npolys):
+    return np.hstack((np.polyval( params[1:1+npolys[0]], x[x<params[0]]),
+                      np.polyval( params[-npolys[1]:], x[x>=params[0]]) ))
     
-def Step_neg_lnprob(params, x, y, yerr, priors, polyorder):
+def Step_neg_lnprob(params, x, y, yerr, priors, polyorder,npolys):
     #Getting log prior - we'll leave the polynomials to wander and us:
     lnprior=0
     lnp=log_gaussian(params[0], priors[0], priors[1])
@@ -1143,7 +1142,7 @@ def Step_neg_lnprob(params, x, y, yerr, priors, polyorder):
         lnprior+=1e6*lnp
     #Getting log likelihood:
     
-    model=dipmodel_step(params,x)
+    model=dipmodel_step(params,x,npolys)
     sigma2 = yerr ** 2
     llk = -0.5 * np.sum((y - model) ** 2 / sigma2 + np.log(sigma2))
 
@@ -1409,7 +1408,7 @@ def VariabilityCheck(lc, params, ID, modeltype='both',plot=False,plot_loc=None,n
         mods+=['sin']
     if modeltype=='step' or modeltype=='both':
         priors['step']= [0.0,0.5*params['tdur']]
-        best_mod_res['step']={'fun':1e30,'bic':1e9,'sin_llk':-1e9}
+        best_mod_res['step']={'fun':1e30,'bic':1e9,'sin_llk':-1e9,'npolys':[]}
         mods+=['step']
     if modeltype is not 'none':
         methods=['L-BFGS-B','Nelder-Mead','Powell']
@@ -1446,17 +1445,20 @@ def VariabilityCheck(lc, params, ID, modeltype='both',plot=False,plot_loc=None,n
                     step_guess=x[4]
                 elif np.sum(x>step_guess)==0:
                     step_guess=x[-5]
-                    
+                
+                #Making one side randomly have polyorder 1, and the other 3->6
+                side=np.random.random()<0.5
+                npolys=[np.clip(polyorder+1-int(side)*20,1,6),np.clip(polyorder+1-int(side)*20,1,6)]
                 mod_args= np.hstack((step_guess,
                                      np.polyfit(x[(x<step_guess)&rand_choice],
-                                                y[(x<step_guess)&rand_choice],np.clip(polyorder+1,1,6)),
+                                                y[(x<step_guess)&rand_choice],npolys[0]),
                                      np.polyfit(x[(x>=step_guess)&rand_choice],
-                                                y[(x>=step_guess)&rand_choice],np.clip(polyorder+1,1,6))
+                                                y[(x>=step_guess)&rand_choice],npolys[1])
                                     ))
 
                 mod_res_step=optim.minimize(Step_neg_lnprob, mod_args,
                                        args=(x[np.argsort(x)],y[np.argsort(x)],yerr[np.argsort(x)],priors['step'],
-                                             np.clip(polyorder+1,1,5)),
+                                             np.clip(polyorder+1,1,5),npolys),
                                        method=methods[n%3])
                 mod_res_step['bic']=(2*mod_res_step.fun + np.log(len(x))*len(mod_res_step.x))
                 mod_res_step['llk']=-1*mod_res_step.fun
@@ -1464,6 +1466,7 @@ def VariabilityCheck(lc, params, ID, modeltype='both',plot=False,plot_loc=None,n
                 #print('dip:',dip_args,dip_res,dip_bic)
                 if mod_res_step['bic']<best_mod_res['step']['bic']:
                     best_mod_res['step']=mod_res_step
+                    best_mod_res['step']['npolys']=npolys
 
 
             #Increasing the polynomial order every odd number if we haven't yet found a good solution:
@@ -1514,8 +1517,8 @@ def VariabilityCheck(lc, params, ID, modeltype='both',plot=False,plot_loc=None,n
             ax.plot(x[np.argsort(x)],dipmodel_sinusoid(best_mod_res['sin']['x'],x[np.argsort(x)]),c='C3',alpha=0.5,
                      label='sinusoid',linewidth=2.25,zorder=10,rasterized=True)
         if 'step' in best_mod_res and best_mod_res['step']['fun']<1e30:
-            ax.plot(x[np.argsort(x)],dipmodel_step(best_mod_res['step']['x'],x[np.argsort(x)]),c='C4',alpha=0.5,
-                     label='step model',linewidth=2.25,zorder=10,rasterized=True)
+            ax.plot(x[np.argsort(x)],dipmodel_step(best_mod_res['step']['x'],x[np.argsort(x)],best_mod_res['step']['npolys']),
+                    c='C4',alpha=0.5,label='step model',linewidth=2.25,zorder=10,rasterized=True)
         
         ax.plot(x,y_trans,c='C2',label='transit',linewidth=3.0,alpha=0.5,zorder=11)
         
@@ -1591,6 +1594,7 @@ def CentroidCheck(lc,monoparams,interpmodel,ID,order=2,dur_region=3.5, plot=True
     # - one with a "dip" correlated to the transit combined with a polynomial trend
     # - one with only a polynomial trend
     # These are then compared, and the BIC returned to judge 
+    print("Centroid check...",lc.keys())
     if 'cent_1' in lc:
         
         if monoparams['orbit_flag']=='mono':
@@ -1764,7 +1768,7 @@ def CentroidCheck(lc,monoparams,interpmodel,ID,order=2,dur_region=3.5, plot=True
         elif not plot:
             return DeltaBIC, None
     else:
-        return None
+        return None, None
 
 
 def CheckPeriodConfusedPlanets(lc,all_dets,mono_mono=True,multi_multi=True,mono_multi=True):
@@ -2339,6 +2343,9 @@ def VetCand(pl_dic,pl,ID,lc,Rs=1.0,Ms=1.0,Teff=5800,
             #Only doing the sinusoidal model in the periodic case
             varfits,varfig=VariabilityCheck(deepcopy(lc), pl_dic, plot=plot,modeltype='sin',
                                             ID=str(ID).zfill(11)+'_'+pl, plot_loc=var_ax, **kwargs)
+        print("Vetted after variability:",pl_dic['snr'],pl_dic['snr_r'],
+              pl_dic['depth'],pl_dic['stepLogLik'],variable_llk_thresh,varfits['sin']['llk_ratio'])
+        print(pl_dic['flag']) if 'flag' in pl_dic else ''
         pl_dic['variableLogLik']=varfits['sin']['llk_ratio']
 
         #>1 means variability fits the data ~2.7 times better than a transit.
@@ -2429,20 +2436,25 @@ def MonoVetting(ID, mission, tcen=None, tdur=None, overwrite=None, do_search=Tru
      - poly_order=4
      '''
     if overwrite is None:
-        overwrites={'starpars':False,'lc':False,'monos':False,'multis':False,'vet':False,'fit':False}
+        overwrites={'starpars':False,'lc':False,'monos':False,'multis':False,'vet':False,'fit':False, 'model_plots':False}
     elif overwrite=='all':
-        overwrites={'starpars':True,'lc':True,'monos':True,'multis':True,'vet':True,'fit':True}
+        overwrites={'starpars':True,'lc':True,'monos':True,'multis':True,'vet':True,'fit':True, 'model_plots':True}
     else:
         overwrites={}
-        for step in ['starpars','lc','monos','multis','vet','fit']:
+        
+        for step in ['starpars','lc','monos','multis','vet','fit','model_plots']:
             overwrites[step]=step in overwrite
-            
+        print(overwrite,overwrites)
+        if overwrites['starpars']:
+            overwrites['fit']=True
         if overwrites['lc']:
             overwrites['monos']=True
             overwrites['multis']=True
         if overwrites['monos'] or overwrites['multis']:
             overwrites['vet']=True
             overwrites['fit']=True
+        if overwrites['fit']:
+            overwrites['model_plots']=True
                 
     if file_loc is None:
         #Creating a ID directory in the current directory for the planet fits/docs
@@ -2475,7 +2487,7 @@ def MonoVetting(ID, mission, tcen=None, tdur=None, overwrite=None, do_search=Tru
             print("Seaborn not loaded")
         figs={}
 
-    if 'StarPars' not in kwargs:
+    if 'StarPars' not in kwargs or overwrites['starpars']:
         #loading Rstar,Tess, logg and rho from csvs:
         if not os.path.isfile(file_loc+"/"+file_loc.split('/')[-1]+'_starpars.csv') or overwrites['starpars']:
             from .stellar import starpars
@@ -2491,6 +2503,7 @@ def MonoVetting(ID, mission, tcen=None, tdur=None, overwrite=None, do_search=Tru
         logg=[float(info['logg']),float(info['eneg_logg']),float(info['epos_logg'])]
         rhostar=[float(info['rho'])/1.411,float(info['eneg_rho'])/1.411,float(info['epos_rho'])/1.411]
         FeH=0.0 if 'FeH' not in info else float(info['FeH'])
+        print(Rstar,Teff,logg,rhostar)
         if 'mass' in info:
             Ms=float(info['mass'])
         else:
@@ -2712,20 +2725,6 @@ def MonoVetting(ID, mission, tcen=None, tdur=None, overwrite=None, do_search=Tru
         print({pl:{'tcen':both_dic[pl]['tcen'],'depth':both_dic[pl]['depth'],'period':both_dic[pl]['period'],
                    'orbit_flag':both_dic[pl]['orbit_flag'],'flag':both_dic[pl]['flag']} for pl in both_dic})
         
-        # CREATING CANDIDATE VETTING REPORT:
-        if plot:
-            #print(figs)
-            #Compiling figures into a multi-page PDF
-            from PyPDF2 import PdfFileReader, PdfFileWriter
-
-            output = PdfFileWriter()
-            pdfPages=[]
-            for figname in figs:
-                #print(figname,type(figs[figname]))
-                output.addPage(PdfFileReader(open(figs[figname], "rb")).getPage(0))
-            outputStream = open(file_loc+"/"+file_loc.split('/')[-1]+'_report.pdf', "wb")
-            output.write(outputStream)
-            outputStream.close()
         
         # EB MODELLING:
         if np.any([both_dic[obj]['flag']=='EB' for obj in both_dic]):
@@ -2772,27 +2771,57 @@ def MonoVetting(ID, mission, tcen=None, tdur=None, overwrite=None, do_search=Tru
                 pickle.dump(mod,open(file_loc+"/"+file_loc.split('/')[-1]+'_model.pickle','wb'))
                 mod.init_model(useL2=useL2,FeH=FeH,**kwargs)
                 pickle.dump(mod,open(file_loc+"/"+file_loc.split('/')[-1]+'_model.pickle','wb'))
-            else:
+            elif os.path.isfile(file_loc+"/"+file_loc.split('/')[-1]+'_model.pickle'):
                 mod = pickle.load(open(file_loc+"/"+file_loc.split('/')[-1]+'_model.pickle','rb'))
-            if do_fit:
+            else:
+                mod=None
+            if mod is not None and do_fit and not overwrites['fit']:
+                #Attempting to load past MCMC file
+                mod.LoadPickle()
+            if mod is not None and do_fit and (not hasattr(mod,'trace') or overwrites['fit']):
                 mod.RunMcmc()
                 pickle.dump(mod,open(file_loc+"/"+file_loc.split('/')[-1]+'_model.pickle','wb'))
-                if plot:
-                    print("plotting")
-                    mod.Plot(n_samp=1)
+
+            if mod is not None and plot:
+                print("Gathering plots, overwrite:",overwrites['model_plots'])
+                #Gathering plots if they exist:
+                if not os.path.exists(file_loc+"/"+str(ID).zfill(11)+'_model_plot.pdf') or overwrites['model_plots']:
+                    mod.Plot(n_samp=1,plot_loc=file_loc+"/"+str(ID).zfill(11)+'_model_plot.pdf',interactive=False)
                     pickle.dump(mod,open(file_loc+"/"+file_loc.split('/')[-1]+'_model.pickle','wb'))
-                    mod.PlotPeriods()
-                    #pickle.dump(mod,open(file_loc+"/"+file_loc.split('/')[-1]+'_model.pickle','wb'))
-                    #mod.PlotCorner()
-                    #pickle.dump(mod,open(file_loc+"/"+file_loc.split('/')[-1]+'_model.pickle','wb'))
-                    #mod.Table()
-                    #pickle.dump(mod,open(file_loc+"/"+file_loc.split('/')[-1]+'_model.pickle','wb'))
-            return mod, both_dic
+                figs['mcmc_mod']=file_loc+"/"+str(ID).zfill(11)+'_model_plot.pdf'
+                if not os.path.exists(file_loc+"/"+str(ID).zfill(11)+'_model_plot.html') or overwrites['model_plots']:
+                    mod.Plot(n_samp=1,plot_loc=file_loc+"/"+str(ID).zfill(11)+'_model_plot.html',interactive=True)
+                    pickle.dump(mod,open(file_loc+"/"+file_loc.split('/')[-1]+'_model.pickle','wb'))
+                if not os.path.exists(file_loc+"/"+str(ID).zfill(11)+'_model_periods.pdf') or overwrites['model_plots']:
+                    mod.PlotPeriods(plot_loc=file_loc+"/"+str(ID).zfill(11)+'_model_periods.pdf')
+                figs['mcmc_pers']=file_loc+"/"+str(ID).zfill(11)+'_model_periods.pdf'
+                if not os.path.exists(file_loc+"/"+str(ID).zfill(11)+'_model_table.pdf') or overwrites['model_plots']:
+                    mod.PlotTable(plot_loc=file_loc+"/"+str(ID).zfill(11)+'_model_table.pdf')
+                figs['mcmc_tab']=file_loc+"/"+str(ID).zfill(11)+'_model_table.pdf'
+                pickle.dump(mod,open(file_loc+"/"+file_loc.split('/')[-1]+'_model.pickle','wb'))
+                
         else:
             #NO EB OR PC candidates - likely low-SNR or FP.
             print("likely low-SNR or FP. Flags=",[both_dic[obj]['flag']=='planet' for obj in both_dic])
             #Save to table here.
-            return None,both_dic
+            mod=None
+        
+        # CREATING CANDIDATE VETTING REPORT:
+        if plot:
+            #print(figs)
+            #Compiling figures into a multi-page PDF
+            from PyPDF2 import PdfFileReader, PdfFileWriter
+
+            output = PdfFileWriter()
+            pdfPages=[]
+            for figname in figs:
+                #print(figname,type(figs[figname]))
+                output.addPage(PdfFileReader(open(figs[figname], "rb")).getPage(0))
+            outputStream = open(file_loc+"/"+file_loc.split('/')[-1]+'_report.pdf', "wb")
+            output.write(outputStream)
+            outputStream.close()
+        
+        return mod, both_dic
     else:
         print("nothing detected")
         
