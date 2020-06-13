@@ -2404,7 +2404,7 @@ def VetCand(pl_dic,pl,ID,lc,Rs=1.0,Ms=1.0,Teff=5800,
 
 def MonoVetting(ID, mission, tcen=None, tdur=None, overwrite=None, do_search=True,
                 useL2=False,PL_ror_thresh=0.2,variable_llk_thresh=5,file_loc=None,
-                plot=False,do_fit=False,re_vet=False,re_fit=False,
+                plot=True,do_fit=False,re_vet=False,re_fit=False,
                 **kwargs):
     '''#Here we're going to initialise the Monotransit fitting by searching for other planets/transits/secondaries and filtering out binaries.
     INPUTS:
@@ -2441,7 +2441,6 @@ def MonoVetting(ID, mission, tcen=None, tdur=None, overwrite=None, do_search=Tru
         overwrites={'starpars':True,'lc':True,'monos':True,'multis':True,'vet':True,'fit':True, 'model_plots':True}
     else:
         overwrites={}
-        
         for step in ['starpars','lc','monos','multis','vet','fit','model_plots']:
             overwrites[step]=step in overwrite
         print(overwrite,overwrites)
@@ -2830,18 +2829,19 @@ if __name__=='__main__':
     assert(len(sys.argv)==15)
     ID=int(sys.argv[1])
     mission=sys.argv[2]
+    
     tcen=float(sys.argv[3]) if sys.argv[3]!=0.0 else None
     tdur=float(sys.argv[4]) if sys.argv[4]!=0.0 else None
-    overwrite=sys.argv[5]
-    do_search=bool(sys.argv[6])
-    useL2=bool(sys.argv[7])
-    PL_ror_thresh=float(sys.argv[8])
-    variable_llk_thresh=float(sys.argv[9])
-    file_loc=sys.argv[10]
-    plot=bool(sys.argv[11])
-    do_fit=bool(sys.argv[12])
-    re_vet=bool(sys.argv[13])
-    re_fit=bool(sys.argv[14])
+    overwrite=sys.argv[5] if len(sys.argv)>=5 else None
+    do_search=bool(sys.argv[6]) if len(sys.argv)>=6 else True
+    useL2=bool(sys.argv[7]) if len(sys.argv)>=7 else False
+    PL_ror_thresh=float(sys.argv[8]) if len(sys.argv)>=8 else 0.2
+    variable_llk_thresh=float(sys.argv[9]) if len(sys.argv)>=9 else 5
+    file_loc=sys.argv[10] if len(sys.argv)>=10 else None
+    plot=bool(sys.argv[11]) if len(sys.argv)>=11 else True
+    do_fit=bool(sys.argv[12]) if len(sys.argv)>=11 else True
+    re_vet=bool(sys.argv[13]) if len(sys.argv)>=11 else True
+    re_fit=bool(sys.argv[14]) if len(sys.argv)>=11 else True
     out=MonoVetting(ID,mission,
                     tcen=tcen,tdur=tdur,overwrite=overwrite,do_search=do_search,
                     useL2=useL2,PL_ror_thresh=PL_ror_thresh,variable_llk_thresh=variable_llk_thresh,file_loc=file_loc,
