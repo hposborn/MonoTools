@@ -438,7 +438,7 @@ class monoModel():
             while not success and target<0.21:
                 try:
                     low=(2*np.pi)/(lcrange/(target/0.01))
-                    up=(2*np.pi)/(0.5*av_dur*(target/0.01))
+                    up=(2*np.pi)/(av_dur*(target/0.01))
                     w0 = pm.InverseGamma("w0",testval=(2*np.pi)/10,**xo.estimate_inverse_gamma_parameters(lower=low,upper=up))
                     success=True
                 except:
@@ -447,8 +447,8 @@ class monoModel():
                     target*=1.15
                     success=False
             print(success, target,lcrange,low,up)
-            maxpower=1.25*np.nanstd(self.lc['flux'][(~self.lc['no_trans_mask'])&self.lc['mask']])
-            minpower=0.1*np.nanmedian(abs(np.diff(self.lc['flux'][(~self.lc['no_trans_mask'])&self.lc['mask']])))
+            maxpower=1.0*np.nanstd(self.lc['flux'][(~self.lc['no_trans_mask'])&self.lc['mask']])
+            minpower=0.02*np.nanmedian(abs(np.diff(self.lc['flux'][(~self.lc['no_trans_mask'])&self.lc['mask']])))
             print(np.nanmedian(abs(np.diff(self.lc['flux'][self.lc['near_trans']]))),np.nanstd(self.lc['flux'][self.lc['near_trans']]),minpower,maxpower)
             success=False;target=0.01
             while not success and target<0.2:
@@ -547,7 +547,7 @@ class monoModel():
                     if 'log_per' in self.planets[pl]:
                         testindex=[]
                         for ngap in np.arange(len(self.planets[pl]['per_gaps'][:,1])):
-                            if np.exp(self.planets[pl]['log_per'])>self.planets[pl]['per_gaps'][:,0] and np.exp(self.planets[pl]['log_per'])<self.planets[pl]['per_gaps'][:,1]:
+                            if np.exp(self.planets[pl]['log_per'])>self.planets[pl]['per_gaps'][ngap,0] and np.exp(self.planets[pl]['log_per'])<self.planets[pl]['per_gaps'][ngap,1]:
                                 testindex+=[((np.exp(self.planets[pl]['log_per'])/self.planets[pl]['per_gaps'][ngap,0])**per_index - ind_min[ngap])/(1-ind_min[ngap])]
                             else:
                                 testindex+=[np.clip(np.random.normal(0.5,0.25),0.00001,0.99999)]
@@ -970,7 +970,7 @@ class monoModel():
                     iter_models[n_mod]={'name':duo,
                                         'n_points':np.sum((abs(lc['time']-self.planets[duo]['tcen'])<0.5*self.planets[duo]['tdur'])|(abs(lc['time']-self.planets[duo]['tcen_2'])<0.5*self.planets[duo]['tdur'])),
                                        'durs':duo_tdurs[duo],
-                                       'pers':duo_perios[duo],
+                                       'pers':duo_periods[duo],
                                        'len':len(self.planets[duo]['period_int_aliases']),
                                        'range':np.arange(len(self.planets[duo]['period_int_aliases'])),
                                        'lcs':duo_per_info[duo]['lcs'],
@@ -981,7 +981,7 @@ class monoModel():
                     iter_models[n_mod]={'name':mono,
                                         'n_points':np.sum(abs(lc['time']-self.planets[mono]['tcen'])<0.5*self.planets[mono]['tdur']),
                                         'durs':mono_tdurs[mono],
-                                        'pers':mono_perios[mono],
+                                        'pers':mono_periods[mono],
                                         'len':len(self.planets[mono]['per_gaps']),
                                         'range':np.arange(len(self.planets[mono]['per_gaps'])),
                                         'lcs':mono_gap_info[mono]['lcs'],
@@ -1123,7 +1123,7 @@ class monoModel():
             self.model = model
             self.init_soln = map_soln
     
-    def RunMcmc(self, n_draws=100, plot=True, do_per_gap_cuts=True, LoadFromFile=False, overwrite=False,**kwargs):
+    def RunMcmc(self, n_draws=1200, plot=True, do_per_gap_cuts=True, LoadFromFile=False, overwrite=False,**kwargs):
         if LoadFromFile and not overwrite:
             self.LoadPickle()
             print("LOADED MCMC")
