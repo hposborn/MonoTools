@@ -2511,7 +2511,8 @@ def MonoVetting(ID, mission, tcen=None, tdur=None, overwrite=None, do_search=Tru
         #                                                         fileloc=savenames[1].replace('_mcmc.pickle','_starpars.csv'),
         #                                                         savedf=True)
     else:
-        Rstar, rhostar, Teff, logg = StarPars
+        Rstar, rhostar, Teff, logg = kwargs['StarPars']
+        Ms=rhostar[0]*Rstar[0]**3
         
     #opening lightcurve:
     if not os.path.isfile(file_loc+"/"+file_loc.split('/')[-1]+'_lc.pickle') or overwrites['lc']:
@@ -2804,25 +2805,26 @@ def MonoVetting(ID, mission, tcen=None, tdur=None, overwrite=None, do_search=Tru
             print("likely low-SNR or FP. Flags=",[both_dic[obj]['flag']=='planet' for obj in both_dic])
             #Save to table here.
             mod=None
-        
-        # CREATING CANDIDATE VETTING REPORT:
-        if plot:
-            #print(figs)
-            #Compiling figures into a multi-page PDF
-            from PyPDF2 import PdfFileReader, PdfFileWriter
-
-            output = PdfFileWriter()
-            pdfPages=[]
-            for figname in figs:
-                #print(figname,type(figs[figname]))
-                output.addPage(PdfFileReader(open(figs[figname], "rb")).getPage(0))
-            outputStream = open(file_loc+"/"+file_loc.split('/')[-1]+'_report.pdf', "wb")
-            output.write(outputStream)
-            outputStream.close()
-        
-        return mod, both_dic
     else:
         print("nothing detected")
+        mod, both_dic =  None, None
+    # CREATING CANDIDATE VETTING REPORT:
+    if plot:
+        #print(figs)
+        #Compiling figures into a multi-page PDF
+        from PyPDF2 import PdfFileReader, PdfFileWriter
+
+        output = PdfFileWriter()
+        pdfPages=[]
+        for figname in figs:
+            #print(figname,type(figs[figname]))
+            output.addPage(PdfFileReader(open(figs[figname], "rb")).getPage(0))
+        outputStream = open(file_loc+"/"+file_loc.split('/')[-1]+'_report.pdf', "wb")
+        output.write(outputStream)
+        outputStream.close()
+
+    return mod, both_dic
+        
         
 if __name__=='__main__':
     import sys

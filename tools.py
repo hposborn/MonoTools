@@ -934,7 +934,7 @@ def lcFlatten(lc, winsize = 3.5, stepsize = 0.15, polydegree = 2,
                                  partlc[:,1:], 
                                  partlc[-1*len(xx[1]):,1:][::-1]  ))
             refl_bool=np.hstack((np.zeros(len(xx[0])),np.tile(1.0,len(partlc[:,0])),np.zeros(len(xx[1]))))
-            print(partlc.shape,len(xx[0]),len(xx[1]),refl_t.shape,refl_flux.shape,refl_bool.shape)
+            #print(partlc.shape,len(xx[0]),len(xx[1]),refl_t.shape,refl_flux.shape,refl_bool.shape)
             uselc_w_reflect+=[np.column_stack((refl_t,refl_flux,refl_bool))]
     stepcentres=np.hstack(stepcentres)
     if reflect:
@@ -942,7 +942,7 @@ def lcFlatten(lc, winsize = 3.5, stepsize = 0.15, polydegree = 2,
     else:
         uselc=np.column_stack((uselc,np.ones(len(uselc[:,0])) ))
     uselc[:,2]=np.clip(uselc[:,2],np.nanmedian(uselc[:,2])*0.8,100)
-    print(len(uselc),np.sum(uselc[:,3]),np.sum(uselc[:,4]))
+    #print(len(uselc),np.sum(uselc[:,3]),np.sum(uselc[:,4]))
     #now for each step centre we perform the flattening:
     #actual flattening
     for s,stepcent in enumerate(stepcentres):
