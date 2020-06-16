@@ -125,19 +125,56 @@ class monoModel():
     def add_mono(self, pl_dic, name):
         #Adds planet with single eclipses
         assert name not in self.planets
-        p_gaps=self.compute_period_gaps(pl_dic['tcen'],tdur=pl_dic['tdur'])
+        p_gaps=self.compute_period_gaps(pl_dic['tcen'],tdur=pl_dic['tdur'],depth=pl_dic['depth'])
         pl_dic['per_gaps']=np.column_stack((p_gaps,p_gaps[:,1]-p_gaps[:,0]))
         pl_dic['P_min']=p_gaps[0,0]
         self.planets[name]=pl_dic
         self.monos+=[name]
         print(self.planets[name]['per_gaps'])
         
-    def compute_period_gaps(self,tcen,tdur,max_per=8000):
+    def compute_rms_series(self,tdur,split_gap_size=2.0,n_steps_per_dur=7):
+        # Computing an RMS time series for the lightcurve by binning
+        # split_gap_size = Duration at which to cut the lightcurve and compute in loops
+        # n_steps_per_dur = number of steps with which to cut up each duration. Odd numbers work most uniformly
+        
+        if not hasattr(self.lc,'flux_flat'):
+            self.lc=tools.lcFlatten(self.lc,winsize=tdur*9,stepsize=tdur/n_steps_per_dur)
+        
+        rms_series=np.zeros((len(self.lc['time'])))
+        binsize=(1/n_steps_per_dur)*tdur
+        if np.nanmax(np.diff(self.lc['time']))>split_gap_size:
+            loop_blocks=np.array_split(np.arange(len(self.lc['time'])),np.where(np.diff(self.lc['time'])>split_gap_size)[0])
+        else:
+            loop_blocks=[np.arange(len(self.lc['time']))]
+        for sh_time in loop_blocks:
+            lc_segment=np.column_stack((self.lc['time'][sh_time],self.lc['flux_flat'][sh_time],
+                                        self.lc['flux_err'][sh_time],self.lc['mask'][sh_time].astype(int)))
+            digi=np.digitize(lc_segment[:,0],
+                             np.arange(np.min(lc_segment[:,0])-0.5*binsize,np.max(lc_segment[:,0])+0.5*binsize,binsize))
+            digi=np.hstack((digi,0.0))
+            unq_digi=np.unique(digi[:-1][lc_segment[:,3]==1.0])
+            digis=np.vstack(([digi[:-1]+n for n in np.arange(0,n_steps_per_dur,1)-int(np.floor(n_steps_per_dur*0.5))]))
+            rms_series_sh=np.tile(1000.,digis.shape)
+
+            for d in unq_digi:
+                rms_series_sh[digis==d]=tools.weighted_avg_and_std(lc_segment[(digi[:-1]==d)&(lc_segment[:,3]==1.0),1],
+                                                                   lc_segment[(digi[:-1]==d)&(lc_segment[:,3]==1.0),2])[1]
+
+            rms_series_sh[digis==-1]=1000.
+            rms_series[sh_time] = np.sqrt(np.sum(rms_series_sh**2,axis=0))
+        return rms_series
+
+    def compute_period_gaps(self,tcen,tdur,depth,max_per=8000,SNR_thresh=4):
         # Given the time array, the t0 of transit, and the fact that another transit is not observed, 
         #   we want to calculate a distribution of impossible periods to remove from the Period PDF post-MCMC
         # In this case, a list of periods is returned, with all points within 0.5dur to be cut
         dist_from_t0=np.sort(abs(tcen-self.lc['time'][self.lc['mask']]))
         
+        rmsseries = depth/self.compute_rms_series(tdur)
+        
+        #Removing parts of the timeseries where we would not have detected another transit with SNR>thresh
+        dist_from_t0=dist_from_t0[rmsseries[self.lc['mask']]<SNR_thresh]
+            
         gaps=np.where(np.diff(dist_from_t0)>(0.9*tdur))[0]
         if len(gaps)>0:
             #Looping from minimum distance from transit to gap, to maximum distance from transit to end-of-lc
@@ -363,7 +400,7 @@ class monoModel():
                 self.lc_near_trans={}
                 lc_len=len(self.lc['time'])
                 for key in self.lc:
-                    if len(self.lc[key])==lc_len:
+                    if type(self.lc[key])==np.ndarray and len(self.lc[key])==lc_len:
                         self.lc_near_trans[key]=self.lc[key][self.lc['near_trans']]
                     else:
                         self.lc_near_trans[key]=self.lc[key]
@@ -384,27 +421,34 @@ class monoModel():
         self.lc['flux_err_index']=np.column_stack([np.where(self.lc['cadence']==cad,1.0,0.0) for cad in self.cads])
         if self.bin_oot:
             self.pseudo_binlc['flux_err_index']=np.column_stack([np.where(self.pseudo_binlc['cadence']==cad,1.0,0.0) for cad in self.cads])
+        else:
+            self.lc_near_trans['flux_err_index']=self.lc['flux_err_index'][self.lc['near_trans']]
 
         
-        if not hasattr(self,'tele_index') or ((bin_oot)&~hasattr(self.pseudo_binlc,'tele_index')):
+        if not hasattr(self.lc,'tele_index'):
             #Here we're making an index for which telescope (kepler vs tess) did the observations,
             # then we multiply the output n_time array by the n_time x 2 index and sum along the 2nd axis
             
             self.lc['tele_index']=np.zeros((len(self.lc['time']),2))
-            if self.bin_oot:
+            if bin_oot:
                 self.pseudo_binlc['tele_index']=np.zeros((len(self.pseudo_binlc['time']),2))
+            else:
+                self.lc_near_trans['tele_index']=np.zeros((len(self.lc_near_trans['time']),2))
             for ncad in range(len(self.cads)):
                 if self.cads[ncad][0].lower()=='t':
                     self.lc['tele_index'][:,0]+=self.lc['flux_err_index'][:,ncad]
                     print(self.bin_oot,'making tele_index')
                     if self.bin_oot:
                         self.pseudo_binlc['tele_index'][:,0]+=self.pseudo_binlc['flux_err_index'][:,ncad]
+                    else:
+                        self.lc_near_trans['tele_index'][:,0]+=self.lc_near_trans['flux_err_index'][:,ncad]
                 elif self.cads[ncad][0].lower()=='k':
                     self.lc['tele_index'][:,1]+=self.lc['flux_err_index'][:,ncad]
                     if self.bin_oot:
                         self.pseudo_binlc['tele_index'][:,1]+=self.pseudo_binlc['flux_err_index'][:,ncad]
+                    else:
+                        self.lc_near_trans['tele_index'][:,1]+=self.lc_near_trans['flux_err_index'][:,ncad]
 
-        
         if self.use_GP:
             self.gp={}
             if self.train_GP and not hasattr(self,'gp_init_trace'):
@@ -415,7 +459,7 @@ class monoModel():
         elif use_multinest:
             self.run_multinest(**kwargs)
         
-    def GP_training(self,n_draws=900):
+    def GP_training(self,n_draws=900,max_len_lc=25000):
         with pm.Model() as gp_train_model:
             #####################################################
             #     Training GP kernel on out-of-transit data
@@ -424,9 +468,17 @@ class monoModel():
             mean=pm.Normal("mean",mu=np.median(self.lc['flux'][self.lc['mask']]),
                                   sd=np.std(self.lc['flux'][self.lc['mask']]))
 
-            log_flux_std=np.array([np.log(np.nanstd(self.lc['flux'][~self.lc['no_trans_mask']][self.lc['cadence'][~self.lc['no_trans_mask']]==c])) for c in self.cads]).ravel().astype(np.float32)
-            print(log_flux_std)
-            logs2 = pm.Normal("logs2", mu = log_flux_std+1, sd = np.tile(1.0,len(log_flux_std)), shape=len(log_flux_std))
+            self.log_flux_std=np.array([np.log(np.nanstd(self.lc['flux'][self.lc['no_trans_mask']][self.lc['cadence'][self.lc['no_trans_mask']]==c])) for c in self.cads]).ravel().astype(np.float32)
+            print(self.log_flux_std)
+            print(np.sum(self.lc['no_trans_mask']),len(self.lc['no_trans_mask']))
+            print(np.unique(self.lc['cadence'][self.lc['no_trans_mask']]))
+            print(np.nanstd(self.lc['flux'][self.lc['cadence']==self.cads[0]]),
+                  np.nanstd(self.lc['flux'][self.lc['cadence']==self.cads[1]]))
+            print(self.cads,np.unique(self.lc['cadence']),self.lc['time'][self.lc['cadence']=='t'],
+                  self.log_flux_std,np.sum(self.lc['no_trans_mask']))
+
+            logs2 = pm.Normal("logs2", mu = self.log_flux_std+1, 
+                              sd = np.tile(1.0,len(self.log_flux_std)), shape=len(self.log_flux_std))
 
             # Transit jitter & GP parameters
             #logs2 = pm.Normal("logs2", mu=np.log(np.var(y[m])), sd=10)
@@ -466,7 +518,12 @@ class monoModel():
 
             # GP model for the light curve
             kernel = xo.gp.terms.SHOTerm(S0=S0, w0=w0, Q=1/np.sqrt(2))
-
+            
+            if len(self.lc['time']>max_len_lc):
+                mask=(~self.lc['no_trans_mask'])*(np.arange(0,len(self.lc['time']),1)<max_len_lc)
+            else:
+                mask=~self.lc['no_trans_mask']
+            
             self.gp['train'] = xo.gp.GP(kernel, self.lc['time'][~self.lc['no_trans_mask']].astype(np.float32),
                                    self.lc['flux_err'][~self.lc['no_trans_mask']].astype(np.float32)**2 + \
                                    tt.dot(self.lc['flux_err_index'][~self.lc['no_trans_mask']],tt.exp(logs2)),
@@ -484,7 +541,7 @@ class monoModel():
         
         if self.bin_oot:
             lc=self.pseudo_binlc
-        elif self.cut_distance>0:
+        elif self.cutDistance>0:
             lc=self.lc_near_trans
         else:
             lc=self.lc
@@ -700,10 +757,12 @@ class monoModel():
             
             mean=pm.Normal("mean",mu=np.median(lc['flux'][lc['mask']]),
                                   sd=np.std(lc['flux'][lc['mask']]))
-
-            log_flux_std=np.array([np.log(np.nanstd(lc['flux'][lc['no_trans_mask']][lc['cadence'][lc['no_trans_mask']]==c])) for c in self.cads]).ravel().astype(np.float32)
-            print(self.cads,np.unique(lc['cadence']),lc['time'][lc['cadence']=='t'],log_flux_std,np.sum(lc['no_trans_mask']))
-            logs2 = pm.Normal("logs2", mu = log_flux_std+1, sd = np.tile(2.0,len(log_flux_std)), shape=len(log_flux_std))
+            if not hasattr(self,'log_flux_std'):
+                self.log_flux_std=np.array([np.log(np.nanstd(lc['flux'][lc['no_trans_mask']][lc['cadence'][lc['no_trans_mask']]==c])) for c in self.cads]).ravel().astype(np.float32)
+            print(self.log_flux_std,np.sum(lc['no_trans_mask']),"/",len(lc['no_trans_mask']))
+            
+            logs2 = pm.Normal("logs2", mu = self.log_flux_std+1, 
+                              sd = np.tile(2.0,len(self.log_flux_std)), shape=len(self.log_flux_std))
 
             if self.use_GP:
                 ######################################
@@ -1087,8 +1146,8 @@ class monoModel():
                     if not self.assume_circ:
                         initvars2+=[mono_eccs[pl], mono_omegas[pl]]
 
-                        #exec("initvars1 += [mono_period_"+pl+"_"+str(int(n))+"]")
-                        #exec("initvars4 += [mono_period_"+pl+"_"+str(int(n))+"]")
+                        #exec("initvars1 += [mono_periods_"+pl+"_"+str(int(n))+"]")
+                        #exec("initvars4 += [mono_periods_"+pl+"_"+str(int(n))+"]")
             if len(self.duos)>0:
                 #for pl in self.duos:
                 #    eval("initvars1+=[duo_period_"+pl+"]")
@@ -1542,8 +1601,8 @@ class monoModel():
         #       Varied plotting function for MonoTransit model
         ################################################################
         import seaborn as sns
-        sns.set_palette('viridis', len(self.planets)+2)
-        pal = sns.color_palette('viridis', len(self.planets)+2)
+        sns.set_palette('viridis', len(self.planets)+3)
+        pal = sns.color_palette('viridis', len(self.planets)+3)
         pal = pal.as_hex()
 
         #Rasterizing matplotlib files if we have a lot of datapoints:
@@ -1555,7 +1614,7 @@ class monoModel():
         #Assigning which lc was connected to the transit/gp modelling:
         if self.bin_oot:
             lc=self.pseudo_binlc
-        elif self.cut_distance>0:
+        elif self.cutDistance>0:
             lc=self.lc_near_trans
         else:
             lc=self.lc
@@ -1593,7 +1652,7 @@ class monoModel():
         
         #Finding if there's a single enormous gap in the lightcurve, and creating time splits for each region
         x_gaps=np.hstack((0, np.where(np.diff(self.lc['time'])>10)[0]+1, len(self.lc['time'])))
-        
+        print(x_gaps)
         limits=[]
         binlimits=[]
         if len(lc['time'])!=len(self.lc['time']):
@@ -1627,10 +1686,10 @@ class monoModel():
         f_alls=[];f_all_resids=[];f_trans=[];f_trans_resids=[]
         if not interactive:
             #Creating cumulative list of integers which add up to 24 but round to nearest length ratio:
-            n_pl_widths=np.hstack((0,np.cumsum(np.array(saferound(list(24*gap_lens/all_lens), places=0))))).astype(int)
+            n_pl_widths=np.hstack((0,np.cumsum(1+np.array(saferound(list((24-len(gap_lens))*gap_lens/all_lens), places=0))))).astype(int)
             #(gs[0, :]) - all top
             #(gs[:, 0]) - all left
-            #print(gap_lens/all_lens,n_pl_widths,32)
+            print(gap_lens/all_lens,n_pl_widths,32,range(len(n_pl_widths)-1))
             for ng in range(len(n_pl_widths)-1):
                 if ng==0:
                     f_all_resids+=[fig.add_subplot(gs[len(self.planets)*3:,n_pl_widths[ng]:n_pl_widths[ng+1]])]
@@ -2008,15 +2067,15 @@ class monoModel():
                                     lower=self.trans_to_plot['all']['-2sig'][unmasked_lim_bool],
                                     upper=self.trans_to_plot['all']['+2sig'][unmasked_lim_bool]))
                     f_alls[n].add_layout(Band(source=trband,base='base',lower='lower',upper='upper',
-                           level='underlay',fill_alpha=0.25, line_width=0.0, fill_color=pal[4]))
+                           level='underlay',fill_alpha=0.25, line_width=0.0, fill_color=pal[1]))
                     trband = ColumnDataSource(data=dict(base=self.lc['time'][unmasked_lim_bool],
                                     lower=self.trans_to_plot['all']['-1sig'][unmasked_lim_bool],
                                     upper=self.trans_to_plot['all']['+1sig'][unmasked_lim_bool]))
                     f_alls[n].add_layout(Band(source=trband,base='base',lower='lower',upper='upper',
-                           level='underlay',fill_alpha=0.25, line_width=0.0, fill_color=pal[4]))
+                           level='underlay',fill_alpha=0.25, line_width=0.0, fill_color=pal[1]))
                 f_alls[n].line(self.lc['time'][unmasked_lim_bool],
                                self.trans_to_plot["all"]["med"][unmasked_lim_bool],
-                               color=pal[4], legend="transit fit")
+                               color=pal[1], legend="transit fit")
                 
                 if n>0:
                     f_alls[n].yaxis.major_tick_line_color = None  # turn off x-axis major ticks
@@ -2262,10 +2321,10 @@ class monoModel():
                 #Plotting mono
                 if hasattr(self,'trace'):
                     t0=np.nanmedian(self.trace['mono_t0s_'+pl])
-                    per=2e3#per=np.nanmedian(self.trace['mono_period_'+pl][-1])
+                    per=2e3#per=np.nanmedian(self.trace['mono_periods_'+pl][-1])
                 elif hasattr(self,'init_soln'):
                     t0=self.init_soln['mono_t0s_'+pl]
-                    per=2e3#per=self.init_soln['mono_period_'+pl][-1]
+                    per=2e3#per=self.init_soln['mono_periods_'+pl][-1]
                 #phase-folding onto t0
                 self.lc['phase'][pl]=phase=(self.lc['time']-t0-0.5*per)%per-0.5*per
                 for ns in range(len(limits)):
@@ -2446,32 +2505,32 @@ class monoModel():
                     if 'logprob_marg_'+pl in self.trace.varnames:
                         #Checking seaborn version:
                         if log and float('.'.join(sns.__version__.split('.')[:2]))>=0.11:
-                            sns.distplot(self.trace['mono_period_'+pl].ravel(), hist=True, kde=True, bins=nbins, norm_hist=True,
+                            sns.distplot(self.trace['mono_periods_'+pl].ravel(), hist=True, kde=True, bins=nbins, norm_hist=True,
                                          hist_kws={'edgecolor':'None','log':log,
                                                    'weights':np.exp(self.trace['logprob_marg_'+pl].ravel())},
                                          kde_kws={'linewidth': 2,'weights':np.exp(self.trace['logprob_marg_'+pl].ravel())})
                         else:
-                            sns.distplot(self.trace['mono_period_'+pl].ravel(), hist=True, kde=False, bins=nbins, norm_hist=True,
+                            sns.distplot(self.trace['mono_periods_'+pl].ravel(), hist=True, kde=False, bins=nbins, norm_hist=True,
                                          hist_kws={'edgecolor':'None','log':log,
                                                    'weights':np.exp(self.trace['logprob_marg_'+pl].ravel())},
                                          kde_kws={'linewidth': 2})
 
-                        #plt.hist(self.trace['mono_period_'+pl].ravel(),bins=50,edgecolor='None',
+                        #plt.hist(self.trace['mono_periods_'+pl].ravel(),bins=50,edgecolor='None',
                         #         weights=np.exp(self.trace['logprob_marg_'+pl].ravel()),density=True)
                     else:
-                        sns.distplot(self.trace['mono_period_'+pl].ravel(), hist=True, kde=True, bins=nbins, norm_hist=True,
+                        sns.distplot(self.trace['mono_periods_'+pl].ravel(), hist=True, kde=True, bins=nbins, norm_hist=True,
                                      hist_kws={'edgecolor':'None','log':log},
                                      kde_kws={'linewidth': 3})
-
-                        #plt.hist(self.trace['mono_period_'+pl].ravel(),bins=50,edgecolor='None',
+                        #plt.hist(self.trace['mono_periods_'+pl].ravel(),bins=50,edgecolor='None',
                         #         density=True)
                     if log:
                         #plt.yscale('log')
-                        plt.ylabel("$\log_{10}{\\rm prob. density}$")
-                        print(np.nanmedian(self.trace['mono_period_'+pl]*self.trace['logprob_marg_'+pl],axis=0).shape)
-                        plt.ylim(np.clip(0.5*np.nanmin(np.nanmedian(self.trace['mono_period_'+pl] * \
-                                                                    self.trace['logprob_marg_'+pl],axis=0)),
-                                         1e-50,1.0),1.0)
+                        plt.ylabel("$\log_{10}{\\rm prob. density}$")                        
+                        bins = np.histogram(self.trace['mono_periods_'+pl].ravel(),
+                                            weights=np.exp(self.trace['logprob_marg_'+pl].ravel()),bins=nbins,density=True)
+                        bin_mins=np.nanmin((bins[0]/np.nanmedian(np.diff(bins[1])))[bins[0]>0])
+                        print(bin_mins)
+                        plt.ylim(np.clip(0.01*bin_mins,1e-50,1.0),1.0)
                     else:
                         plt.ylabel("prob. density")
                     plt.xlabel("Period [d]")
