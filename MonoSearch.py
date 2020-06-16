@@ -113,14 +113,16 @@ def QuickMonoFit(lc,it0,dur,Rs=None,Ms=None,Teff=None,useL2=False,fit_poly=True,
         #Mono case:
         x=lc[timeindex][nearby&mask].astype(np.float32)
         yerr=lc[fluxerrindex][nearby&mask]
-        if not fit_poly:
+        if not fit_poly or np.sum(abs(x-it0)<0.6)==0.0:
             y=lc[fluxindex][nearby&mask]
             y-=np.nanmedian(y)
             oot_flux=np.nanmedian(y[(abs(x-it0)>0.65*dur)])
             int_flux=np.nanmedian(y[(abs(x-it0)<0.35*dur)])
+            fit_poly=False
         else:
             y=lc[fluxindex][nearby&mask]
             y-=np.nanmedian(y)
+            print(np.sum(abs(x-it0)<0.6),it0,np.min(x),np.max(x))
             init_poly=np.polyfit(x[abs(x-it0)<0.6]-it0,y[abs(x-it0)<0.6],polyorder)
             oot_flux=np.nanmedian((y-np.polyval(init_poly,x-it0))[abs(x-it0)>0.65*dur])
             int_flux=np.nanmedian((y-np.polyval(init_poly,x-it0))[abs(x-it0)<0.35*dur])
@@ -231,9 +233,6 @@ def QuickMonoFit(lc,it0,dur,Rs=None,Ms=None,Teff=None,useL2=False,fit_poly=True,
         map_soln = xo.optimize(start=map_soln,verbose=False)
         '''
         map_soln, func = xo.optimize(start=map_soln,verbose=False,return_info=True)
-        if not func['success']:
-            print("model failing. Why?")
-            print(model.check_test_point())
         '''
         interpy=xo.LimbDarkLightCurve(map_soln['u_star']).get_light_curve(
                     r=float(map_soln['r_pl']),
@@ -1018,111 +1017,6 @@ def GenModelLc(lc,all_pls,mission,Rstar=1.0,rhostar=1.0,Teff=5800,logg=4.43):
             light_curves+=[light_curve]
     return np.column_stack(light_curves)
 
-
-def xoEB():
-    with pm.Model() as model:
-
-        # Systemic parameters
-        mean_lc = pm.Normal("mean_lc", mu=0.0, sd=5.0)
-        u1 = xo.QuadLimbDark("u1")
-        u2 = xo.QuadLimbDark("u2")
-
-        # Parameters describing the primary
-        M1 = pm.Lognormal("M1", mu=0.0, sigma=10.0)
-        R1 = pm.Lognormal("R1", mu=0.0, sigma=10.0)
-
-        # Secondary ratios
-        R2R1 = pm.Lognormal("R2R1", mu=0.0, sigma=10.0)  # radius ratio
-        M2M1 = pm.Lognormal("M2M1", mu=0.0, sigma=10.0)  # mass ratio
-        sbr = pm.Lognormal("sbr", mu=np.log(0.5), sigma=10.0)  # surface brightness ratio
-
-        # Prior on flux ratio
-        pm.Normal(
-            "flux_prior",
-            mu=lit_flux_ratio[0],
-            sigma=lit_flux_ratio[1],
-            observed=R2R1 ** 2 * sbr,
-        )
-
-        # Parameters describing the orbit
-        b = xo.ImpactParameter("b", ror=R2R1, testval=1.5)
-        period = pm.Lognormal("period", mu=np.log(lit_period), sigma=1.0)
-        t0 = pm.Normal("t0", mu=lit_t0, sigma=1.0)
-
-        # Parameters describing the eccentricity: ecs = [e * cos(w), e * sin(w)]
-        ecs = xo.UnitDisk("ecs", testval=np.array([1e-5, 0.0]))
-        ecc = pm.Deterministic("ecc", tt.sqrt(tt.sum(ecs ** 2)))
-        omega = pm.Deterministic("omega", tt.arctan2(ecs[1], ecs[0]))
-
-        # Build the orbit
-        R2 = pm.Deterministic("R2", R2R1 * R1)
-        M2 = pm.Deterministic("M2", M2M1 * M1)
-        orbit = xo.orbits.KeplerianOrbit(
-            period=period,
-            t0=t0,
-            ecc=ecc,
-            omega=omega,
-            b=b,
-            r_star=R1,
-            m_star=M1,
-            m_planet=M2,
-        )
-
-        # Track some other orbital elements
-        pm.Deterministic("incl", orbit.incl)
-        pm.Deterministic("a", orbit.a)
-
-        # Noise model for the light curve
-        sigma_lc = pm.InverseGamma(
-            "sigma_lc", testval=1.0, **xo.estimate_inverse_gamma_parameters(0.1, 2.0)
-        )
-        S_tot_lc = pm.InverseGamma(
-            "S_tot_lc", testval=2.5, **xo.estimate_inverse_gamma_parameters(1.0, 5.0)
-        )
-        ell_lc = pm.InverseGamma(
-            "ell_lc", testval=2.0, **xo.estimate_inverse_gamma_parameters(1.0, 5.0)
-        )
-        kernel_lc = xo.gp.terms.SHOTerm(
-            S_tot=S_tot_lc, w0=2 * np.pi / ell_lc, Q=1.0 / 3
-        )
-
-
-        # Set up the light curve model
-        lc = xo.SecondaryEclipseLightCurve(u1, u2, sbr)
-
-        def model_lc(t):
-            return (
-                mean_lc
-                + 1e3 * lc.get_light_curve(orbit=orbit, r=R2, t=t, texp=texp)[:, 0]
-            )
-
-        # Condition the light curve model on the data
-        gp_lc = xo.gp.GP(
-            kernel_lc, x[mask], tt.zeros(mask.sum()) ** 2 + sigma_lc ** 2, mean=model_lc
-        )
-        gp_lc.marginal("obs_lc", observed=y[mask])
-
-        # Set up the radial velocity model
-        def model_rv1(t):
-            return mean_rv + 1e-3 * orbit.get_radial_velocity(t)
-
-        def model_rv2(t):
-            return mean_rv - 1e-3 * orbit.get_radial_velocity(t) / M2M1
-
-        # Optimize the logp
-        map_soln = model.test_point
-
-        # Then the LC parameters
-        map_soln = xo.optimize(map_soln, [mean_lc, R1, R2R1, sbr, b])
-        map_soln = xo.optimize(map_soln, [mean_lc, R1, R2R1, sbr, b, u1, u2])
-        map_soln = xo.optimize(map_soln, [mean_lc, sigma_lc, S_tot_lc, ell_lc])
-        map_soln = xo.optimize(map_soln, [t0, period])
-
-        # Then all the parameters together
-        map_soln = xo.optimize(map_soln)
-
-        model.gp_lc = gp_lc
-        model.model_lc = model_lc
 
 def DoEBfit(lc,tc,dur):
     # Performs EB fit to primary/secondary.
@@ -2078,6 +1972,130 @@ def pri_sec_const(time,t_pri,dur_pri,t_sec=None,dur_sec=None):
     else:
         print("No good period here?")
     
+def exoplanet_EB_model(lc, objects, Teffs, Rs, Ms, nrep=9,try_sec=False,use_ellc=False):
+    with pm.Model() as model:
+        return None
+
+
+def xoEB(lc,planets):
+    
+    EBs=[pl for pl in planets if planets['pl']['flag']=='EB']
+    if len(EBs)==1:
+        eb=EBs[0]
+    else:
+        eb=EBs[np.argmax([planets[eb]['logror'] for eb in EBs])]
+    with pm.Model() as model:
+
+        # Systemic parameters
+        mean_lc = pm.Normal("mean_lc", mu=0.0, sd=5.0)
+        u1 = xo.QuadLimbDark("u1")
+        u2 = xo.QuadLimbDark("u2")
+
+        # Parameters describing the primary
+        M1 = pm.Lognormal("M1", mu=Ms[0], sigma=abs(Ms[1]+Ms[2]))
+        R1 = pm.Lognormal("R1", mu=Rs[0], sigma=abs(Rs[1]+Rs[2]))
+
+        # Secondary ratios
+        k = pm.Lognormal("k", mu=0.0, sigma=10.0, testval=np.exp(planets['pl']['logror']))  # radius ratio
+        q = pm.Lognormal("q", mu=0.0, sigma=10.0)  # mass ratio
+        s = pm.Lognormal("s", mu=np.log(0.5), sigma=10.0)  # surface brightness ratio
+
+        # Prior on flux ratio
+        pm.Beta("flux_prior",a=0.5, b=0.5,
+            observed=k ** 2 * s)
+
+        pm.Normal(
+            "flux_prior",
+            mu=lit_flux_ratio[0],
+            sigma=lit_flux_ratio[1],
+            observed=k ** 2 * s,
+        )
+
+        # Parameters describing the orbit
+        b = xo.ImpactParameter("b", ror=k, testval=1.5)
+        if planets[eb]['orbit_flag']=='mono':
+            period = pm.Pareto("period", m=planets[eb]['minP'], alpha=1.0)
+            newmask=lc['mask']&(abs(lc['time']-planets[eb]['tcen'])<planets[eb]['tdur']*2.5)
+        else:
+            period = pm.Lognormal("period", mu=np.log(planets[eb]['period']), sigma=0.1)
+            newmask=lc['mask']&(abs((lc['time']-planets[eb]['tcen']-0.5*planets[eb]['period'])%planets[eb]['period'] - \
+                                0.5*planets[eb]['period'])<planets[eb]['tdur']*2.5)
+        #period = pm.Lognormal("period", mu=np.log(lit_period), sigma=1.0)
+        t0 = pm.Normal("t0", mu=planets[eb]['tcen'], sigma=1.0)
+
+        # Parameters describing the eccentricity: ecs = [e * cos(w), e * sin(w)]
+        ecs = xo.UnitDisk("ecs", testval=np.array([1e-5, 0.0]))
+        ecc = pm.Deterministic("ecc", tt.sqrt(tt.sum(ecs ** 2)))
+        omega = pm.Deterministic("omega", tt.arctan2(ecs[1], ecs[0]))
+
+        # Build the orbit
+        R2 = pm.Deterministic("R2", k * R1)
+        M2 = pm.Deterministic("M2", q * M1)
+        orbit = xo.orbits.KeplerianOrbit(
+            period=period,
+            t0=t0,
+            ecc=ecc,
+            omega=omega,
+            b=b,
+            r_star=R1,
+            m_star=M1,
+            m_planet=M2,
+        )
+
+        # Track some other orbital elements
+        pm.Deterministic("incl", orbit.incl)
+        pm.Deterministic("a", orbit.a)
+
+        # Noise model for the light curve
+        sigma_lc = pm.InverseGamma(
+            "sigma_lc", testval=1.0, **xo.estimate_inverse_gamma_parameters(0.1, 2.0)
+        )
+        S_tot_lc = pm.InverseGamma(
+            "S_tot_lc", testval=2.5, **xo.estimate_inverse_gamma_parameters(1.0, 5.0)
+        )
+        ell_lc = pm.InverseGamma(
+            "ell_lc", testval=2.0, **xo.estimate_inverse_gamma_parameters(1.0, 5.0)
+        )
+        kernel_lc = xo.gp.terms.SHOTerm(
+            S_tot=S_tot_lc, w0=2 * np.pi / ell_lc, Q=1.0 / 3
+        )
+
+        # Set up the light curve model
+        model_lc = xo.SecondaryEclipseLightCurve(u1, u2, s)
+
+        def get_model_lc(t):
+            return (
+                mean_lc
+                + 1e3 * model_lc.get_light_curve(orbit=orbit, r=R2, t=t, texp=texp)[:, 0]
+            )
+
+        # Condition the light curve model on the data
+        gp_lc = xo.gp.GP(
+            kernel_lc, lc['time'][newmask], lc['flux_err'][newmask] ** 2 + sigma_lc ** 2, mean=get_model_lc
+        )
+        gp_lc.marginal("obs_lc", observed=lc['flux'][newmask])
+
+        # Optimize the logp
+        map_soln = model.test_point
+
+        # Then the LC parameters
+        map_soln = xo.optimize(map_soln, [mean_lc, R1, k, s, b])
+        map_soln = xo.optimize(map_soln, [mean_lc, R1, k, s, b, u1, u2])
+        map_soln = xo.optimize(map_soln, [mean_lc, sigma_lc, S_tot_lc, ell_lc, q])
+        map_soln = xo.optimize(map_soln, [t0, period])
+
+        # Then all the parameters together
+        map_soln = xo.optimize(map_soln)
+
+        model.gp_lc = gp_lc
+        model.get_model_lc = get_model_lc
+
+        model.x = lc['time'][newmask]
+        model.y = lc['flux'][newmask]
+
+    return model, map_soln
+    
+    
 def minimize_EBmodel(lc, objects, Teffs, Rs, Ms, nrep=9,try_sec=False,use_ellc=False):
     #Running a quick EB model:
     
@@ -2274,10 +2292,10 @@ def VetCand(pl_dic,pl,ID,lc,Rs=1.0,Ms=1.0,Teff=5800,
     if pl_dic['orbit_flag']=='mono' and do_fit:
         monoparams = QuickMonoFit(deepcopy(lc),pl_dic['tcen'],pl_dic['tdur'],
                                                Rs=Rs,Ms=Ms,Teff=Teff,how='mono')
-        if monoparams['model_success']=='False':
-            #Redoing without fitting the polynomial if the fit fails:
-            monoparams = QuickMonoFit(deepcopy(lc),pl_dic['tcen'],pl_dic['tdur'],
-                                                   Rs=Rs,Ms=Ms,Teff=Teff,how='mono',fit_poly=False)
+        #if not bool(monoparams['model_success']):
+        #    #Redoing without fitting the polynomial if the fit fails:
+        #    monoparams = QuickMonoFit(deepcopy(lc),pl_dic['tcen'],pl_dic['tdur'],
+        #                                           Rs=Rs,Ms=Ms,Teff=Teff,how='mono',fit_poly=False)
 
         #Keeping detection tcen/tdur:
         monoparams['init_tdur']=pl_dic['tdur']
@@ -2629,7 +2647,7 @@ def MonoVetting(ID, mission, tcen=None, tdur=None, overwrite=None, do_search=Tru
                 if both_dic[pl]['flag'] not in ['EB','asteroid','instrumental','FP - confusion',
                                                 'lowSNR/V-shaped','lowSNR','discrepant duration']:
                     #Check if the Depth/Rp suggests we have a very likely EB, we search for a secondary
-                    if 'rp_rs' in both_dic[pl] and both_dic[pl]['rp_rs']>PL_ror_thresh:
+                    if 'rp_rs' in both_dic[pl] and (both_dic[pl]['rp_rs']>PL_ror_thresh or Rs[0]*both_dic[pl]['rp_rs']>PL_ror_thresh):
                         #Likely EB
                         both_dic[pl]['flag']='EB'
             pickle.dump(both_dic,open(file_loc+"/"+file_loc.split('/')[-1]+'_allpls.pickle','wb'))
@@ -2728,14 +2746,15 @@ def MonoVetting(ID, mission, tcen=None, tdur=None, overwrite=None, do_search=Tru
         
         # EB MODELLING:
         if np.any([both_dic[obj]['flag']=='EB' for obj in both_dic]):
-            #Minimising EB model with ELLC:
+            '''#Minimising EB model with ELLC:
             eb_dict={obj:both_dic[obj] for obj in both_dic if both_dic[obj]['flag'] not in ['asteroid','instrumental','FP - confusion']}
             EBdic=minimize_EBmodel(lc, eb_dict,Teff,Rstar[0],rhostar[0]*Rstar[0]**3)#lc, planet, Teffs, Rs, Ms, nrep=9,try_sec=False,use_ellc=False
 
             EBdic['ID']=ID
             EBdic['mission']=mission
             #Save to table here.
-            return EBdic, both_dic
+            '''
+            mod = None
 
         elif np.any([both_dic[obj]['flag']=='planet' for obj in both_dic]):
              #Doing this import here so that Pymc3 gains the seperate compiledir location for theano
@@ -2744,7 +2763,10 @@ def MonoVetting(ID, mission, tcen=None, tdur=None, overwrite=None, do_search=Tru
             print("Planets to model:",[obj for obj in both_dic if both_dic[obj]['flag']=='planet'])
             if not os.path.isfile(file_loc+"/"+file_loc.split('/')[-1]+'_model.pickle') or overwrites['fit'] or re_fit:
                 
-                mod=MonoFit.monoModel(ID, lc, {}, savefileloc=file_loc+'/')
+                if mission=='kepler' and cutDistance not in kwargs and bin_oot not in kwargs:
+                    mod=MonoFit.monoModel(ID, lc, {}, savefileloc=file_loc+'/',cutDistance=2.0,bin_oot=False)
+                else:
+                    mod=MonoFit.monoModel(ID, lc, {}, savefileloc=file_loc+'/')
                 #If not, we have a planet.
                 #Checking if monoplanet is single, double-with-gap, or periodic.
                 multis=[]
@@ -2792,14 +2814,15 @@ def MonoVetting(ID, mission, tcen=None, tdur=None, overwrite=None, do_search=Tru
                 if not os.path.exists(file_loc+"/"+str(ID).zfill(11)+'_model_plot.html') or overwrites['model_plots']:
                     mod.Plot(n_samp=1,plot_loc=file_loc+"/"+str(ID).zfill(11)+'_model_plot.html',interactive=True)
                     pickle.dump(mod,open(file_loc+"/"+file_loc.split('/')[-1]+'_model.pickle','wb'))
-                if not os.path.exists(file_loc+"/"+str(ID).zfill(11)+'_model_periods.pdf') or overwrites['model_plots']:
-                    mod.PlotPeriods(plot_loc=file_loc+"/"+str(ID).zfill(11)+'_model_periods.pdf')
-                figs['mcmc_pers']=file_loc+"/"+str(ID).zfill(11)+'_model_periods.pdf'
-                if not os.path.exists(file_loc+"/"+str(ID).zfill(11)+'_model_table.pdf') or overwrites['model_plots']:
-                    mod.PlotTable(plot_loc=file_loc+"/"+str(ID).zfill(11)+'_model_table.pdf')
-                figs['mcmc_tab']=file_loc+"/"+str(ID).zfill(11)+'_model_table.pdf'
-                pickle.dump(mod,open(file_loc+"/"+file_loc.split('/')[-1]+'_model.pickle','wb'))
-                
+                if hasattr(mod, 'trace'):
+                    if not os.path.exists(file_loc+"/"+str(ID).zfill(11)+'_model_periods.pdf') or overwrites['model_plots']:
+                        mod.PlotPeriods(plot_loc=file_loc+"/"+str(ID).zfill(11)+'_model_periods.pdf')
+                    figs['mcmc_pers']=file_loc+"/"+str(ID).zfill(11)+'_model_periods.pdf'
+                    if not os.path.exists(file_loc+"/"+str(ID).zfill(11)+'_model_table.pdf') or overwrites['model_plots']: 
+                        mod.PlotTable(plot_loc=file_loc+"/"+str(ID).zfill(11)+'_model_table.pdf')
+                    figs['mcmc_tab']=file_loc+"/"+str(ID).zfill(11)+'_model_table.pdf'
+                    pickle.dump(mod,open(file_loc+"/"+file_loc.split('/')[-1]+'_model.pickle','wb'))
+
         else:
             #NO EB OR PC candidates - likely low-SNR or FP.
             print("likely low-SNR or FP. Flags=",[both_dic[obj]['flag']=='planet' for obj in both_dic])
