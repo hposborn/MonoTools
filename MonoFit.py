@@ -41,9 +41,12 @@ if os.environ.get('MONOTOOLSPATH') is None:
 else:
     MonoData_savepath = os.environ.get('MONOTOOLSPATH')
 
-from . import tools
-from .stellar import starpars
-from . import MonoSearch
+import tools
+import starpars
+import MonoSearch
+#from . import tools
+#from .stellar import starpars
+#from . import MonoSearch
 
 
 #creating new hidden directory for theano compilations:

@@ -44,8 +44,8 @@ if os.environ.get('MONOTOOLSPATH') is None:
 else:
     MonoData_savepath = os.environ.get('MONOTOOLSPATH')
 
-    
-from .stellar import starpars
+import starpars
+#from .stellar import starpars
 
 id_dic={'TESS':'TIC','tess':'TIC','Kepler':'KIC','kepler':'KIC','KEPLER':'KIC',
         'K2':'EPIC','k2':'EPIC','CoRoT':'CID','corot':'CID'}

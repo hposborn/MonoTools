@@ -13,7 +13,7 @@ import os
 
 from copy import deepcopy
 from datetime import datetime
-from . import tools
+
 from scipy import optimize
 import exoplanet as xo
 import scipy.interpolate as interp
@@ -50,8 +50,11 @@ import theano
 theano.config.print_test_value = True
 theano.config.exception_verbosity='high'
 
-from . import tools
-from . import MonoFit
+import tools
+import MonoFit
+#from . import tools
+#from . import MonoFit
+
 
 def transit(pars,x):
     log_per,b,t0,log_r_pl,u1,u2=pars
@@ -2509,7 +2512,8 @@ def MonoVetting(ID, mission, tcen=None, tdur=None, overwrite=None, do_search=Tru
     if 'StarPars' not in kwargs or overwrites['starpars']:
         #loading Rstar,Tess, logg and rho from csvs:
         if not os.path.isfile(file_loc+"/"+file_loc.split('/')[-1]+'_starpars.csv') or overwrites['starpars']:
-            from .stellar import starpars
+            import starpars
+            #from .stellar import starpars
             #Gets stellar info
             info,_,_=starpars.getStellarInfoFromCsv(ID,mission)
             info.to_csv(file_loc+"/"+file_loc.split('/')[-1]+'_starpars.csv')
@@ -2547,7 +2551,8 @@ def MonoVetting(ID, mission, tcen=None, tdur=None, overwrite=None, do_search=Tru
     #  DOING MONOTRANSIT PLANET SEARCH:
     #####################################
     if not os.path.isfile(file_loc+"/"+file_loc.split('/')[-1]+'_monos.pickle') or overwrites['monos']:
-        if do_search and not re_vet:
+        if do_search and (not os.path.exists(file_loc+"/"+file_loc.split('/')[-1]+'_monos.pickle') or overwrites['monos']):
+            #Doing search if we dont have a mono pickle file or we want to overwrite one:
             both_dic, monosearchparams, monofig = MonoTransitSearch(deepcopy(lc),ID,
                                                                     Rs=Rstar[0],Ms=Ms,Teff=Teff[0],
                                                                     plot_loc=file_loc+"/", plot=plot,**kwargs)
@@ -2555,16 +2560,18 @@ def MonoVetting(ID, mission, tcen=None, tdur=None, overwrite=None, do_search=Tru
             
             if plot:
                 figs['mono']=monofig
-        elif re_vet:
+        elif re_vet and os.path.exists(file_loc+"/"+file_loc.split('/')[-1]+'_monos.pickle'):
             both_dic=pickle.load(open(file_loc+"/"+file_loc.split('/')[-1]+'_monos.pickle','rb'))
             if plot and os.path.isfile(file_loc+"/"+str(ID).zfill(11)+'_Monotransit_Search.pdf'):
                 figs['mono']= file_loc+"/"+str(ID).zfill(11)+'_Monotransit_Search.pdf'
-        else:
+        elif tcen is not None and tdur is not None:
             intr=lc['mask']&(abs(lc['time']-tcen)<0.45*tdur)
             outtr=lc['mask']&(abs(lc['time']-tcen)<1.25*tdur)&(~intr)
             both_dic={'00':{'tcen':tcen,'tdur':tdur,'orbit_flag':'mono','poly_DeltaBIC':0.0,
                             'depth':np.nanmedian(lc['flux'][outtr])-np.nanmedian(lc['flux'][intr]),
                             'P_min':calc_min_P(lc['time'],tcen,tdur)}}
+        else:
+            raise InputError("Must either specify do_search or include tdur and tcen")
         ###################################
         #    VETTING MONO CANDIDATES:
         ###################################
@@ -2850,26 +2857,3 @@ def MonoVetting(ID, mission, tcen=None, tdur=None, overwrite=None, do_search=Tru
 
     return mod, both_dic
         
-        
-if __name__=='__main__':
-    import sys
-    assert(len(sys.argv)==15)
-    ID=int(sys.argv[1])
-    mission=sys.argv[2]
-    
-    tcen=float(sys.argv[3]) if len(sys.argv)>=3 else None
-    tdur=float(sys.argv[4]) if len(sys.argv)>=4 else None
-    overwrite=sys.argv[5] if len(sys.argv)>=5 else None
-    do_search=bool(sys.argv[6]) if len(sys.argv)>=6 else True
-    useL2=bool(sys.argv[7]) if len(sys.argv)>=7 else False
-    PL_ror_thresh=float(sys.argv[8]) if len(sys.argv)>=8 else 0.2
-    variable_llk_thresh=float(sys.argv[9]) if len(sys.argv)>=9 else 5
-    file_loc=sys.argv[10] if len(sys.argv)>=10 else None
-    plot=bool(sys.argv[11]) if len(sys.argv)>=11 else True
-    do_fit=bool(sys.argv[12]) if len(sys.argv)>=11 else True
-    re_vet=bool(sys.argv[13]) if len(sys.argv)>=11 else True
-    re_fit=bool(sys.argv[14]) if len(sys.argv)>=11 else True
-    out=MonoVetting(ID,mission,
-                    tcen=tcen,tdur=tdur,overwrite=overwrite,do_search=do_search,
-                    useL2=useL2,PL_ror_thresh=PL_ror_thresh,variable_llk_thresh=variable_llk_thresh,file_loc=file_loc,
-                    plot=plot,do_fit=do_fit,re_vet=re_vet,re_fit=re_fit)

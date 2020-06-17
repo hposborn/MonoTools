@@ -463,7 +463,7 @@ def GetExoFop(icid,mission='tess',file=''):
 
 def LoadModel():
     #Loading isoclassify "mesa" model from file:
-    from .isoclassify import classify, pipeline
+    from stellar.isoclassify import classify, pipeline
     mist_loc='/'.join(classify.__file__.split('/')[:-3])+'/mesa.h5'
     import h5py
     file = h5py.File(mist_loc,'r+', driver='core', backing_store=False)
@@ -635,7 +635,7 @@ def CheckSpecCsv(radec,icid,thresh=20*u.arcsec):
 def Assemble_and_run_isoclassify(icid,sc,mission,survey_dat,exofop_dat,errboost=0.2,spec_dat=None,
                                  useGaiaLum=True,useGaiaBR=True,useBV=True,useGaiaSpec=True,
                                  use2mass=True,useGriz=True,useGaiaAg=True):
-    from .isoclassify import classify, pipeline
+    from stellar.isoclassify import classify, pipeline
     ############################################
     #    Building isoclassify input data:      #
     ############################################
@@ -1056,7 +1056,7 @@ def getStellarInfoFromCsv(ID,mission,k2tab=None,keptabs=None):
     # Kepler on Vizier J/ApJ/866/99/table1
     # New K2: "http://kevinkhu.com/table1.txt"
     # TESS on Vizier (TICv8)
-    from ..tools import MonoData_tablepath,weighted_avg_and_std
+    from tools import MonoData_tablepath,weighted_avg_and_std
     
     if mission.lower()=='tess':
         info = TICdata(int(ID)).iloc[0]
@@ -1117,8 +1117,12 @@ def getStellarInfoFromCsv(ID,mission,k2tab=None,keptabs=None):
                     info['feh']=xtra['feh']
             k2tab=None
         elif mission.lower()=='k2':
+            MonoData_tablepath = os.path.join(os.path.dirname(os.path.abspath( __file__ )),'data','tables')
             if k2tab is None:
-                k2tab=ascii.read('http://kevinkhu.com/table1.txt',header_start=93,data_start=95).to_pandas()
+                if not path.isfile(path.join(MonoData_tablepath,"k2_table.txt")):
+                    print("Downloading K2 Stellar parameters table")
+                    os.system("wget http://kevinkhu.com/table1.txt "+path.join(MonoData_tablepath,"k2_table.txt"))
+                k2tab=ascii.read(path.join(MonoData_tablepath,"k2_table.txt"),header_start=93,data_start=95).to_pandas()
             info = k2tab.loc[k2tab['EPIC']==int(ID)].iloc[0]
             info['mission']='K2'
             info=info.rename(index={'EPIC':'ID','Gaia':'GAIA',
