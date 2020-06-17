@@ -1119,10 +1119,10 @@ def getStellarInfoFromCsv(ID,mission,k2tab=None,keptabs=None):
         elif mission.lower()=='k2':
             MonoData_tablepath = os.path.join(os.path.dirname(os.path.abspath( __file__ )),'data','tables')
             if k2tab is None:
-                if not path.isfile(path.join(MonoData_tablepath,"k2_table.txt")):
+                if not os.path.isfile(os.path.join(MonoData_tablepath,"k2_table.txt")):
                     print("Downloading K2 Stellar parameters table")
-                    os.system("wget http://kevinkhu.com/table1.txt "+path.join(MonoData_tablepath,"k2_table.txt"))
-                k2tab=ascii.read(path.join(MonoData_tablepath,"k2_table.txt"),header_start=93,data_start=95).to_pandas()
+                    os.system("wget http://kevinkhu.com/table1.txt "+os.path.join(MonoData_tablepath,"k2_table.txt"))
+                k2tab=ascii.read(os.path.join(MonoData_tablepath,"k2_table.txt"),header_start=93,data_start=95).to_pandas()
             info = k2tab.loc[k2tab['EPIC']==int(ID)].iloc[0]
             info['mission']='K2'
             info=info.rename(index={'EPIC':'ID','Gaia':'GAIA',
