@@ -1121,7 +1121,7 @@ def getStellarInfoFromCsv(ID,mission,k2tab=None,keptabs=None):
             if k2tab is None:
                 if not os.path.isfile(os.path.join(MonoData_tablepath,"k2_table.txt")):
                     print("Downloading K2 Stellar parameters table")
-                    os.system("wget http://kevinkhu.com/table1.txt "+os.path.join(MonoData_tablepath,"k2_table.txt"))
+                    os.system("wget http://kevinkhu.com/table1.txt -O "+os.path.join(MonoData_tablepath,"k2_table.txt"))
                 k2tab=ascii.read(os.path.join(MonoData_tablepath,"k2_table.txt"),header_start=93,data_start=95).to_pandas()
             info = k2tab.loc[k2tab['EPIC']==int(ID)].iloc[0]
             info['mission']='K2'
