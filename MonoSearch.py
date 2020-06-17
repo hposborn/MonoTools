@@ -11,8 +11,9 @@ import pandas as pd
 import pickle
 import os
 os.environ["THEANO_FLAGS"] = "device=cpu,floatX=float32,cxx=/usr/local/Cellar/gcc/9.3.0_1/bin/g++-9,cxxflags = -fbracket-depth=1024"
-os.environ["CXXFLAGS"] = "-fbracket-depth=512,"+os.environ["CXXFLAGS"]
-os.environ["CFLAGS"] = "-fbracket-depth=512,"+os.environ["CFLAGS"]+"-fbracket-depth=512"
+
+os.environ["CXXFLAGS"]="-fbracket-depth=512" if not "CXXFLAGS" in os.environ else "-fbracket-depth=512,"+os.environ["CXXFLAGS"]
+os.environ["CFLAGS"] = "-fbracket-depth=512" if not "CXXFLAGS" in os.environ else "-fbracket-depth=512,"+os.environ["CFLAGS"]
 import theano.tensor as tt
 import pymc3 as pm
 
@@ -2855,8 +2856,8 @@ if __name__=='__main__':
     ID=int(sys.argv[1])
     mission=sys.argv[2]
     
-    tcen=float(sys.argv[3]) if sys.argv[3]!=0.0 else None
-    tdur=float(sys.argv[4]) if sys.argv[4]!=0.0 else None
+    tcen=float(sys.argv[3]) if len(sys.argv)>=3 else None
+    tdur=float(sys.argv[4]) if len(sys.argv)>=4 else None
     overwrite=sys.argv[5] if len(sys.argv)>=5 else None
     do_search=bool(sys.argv[6]) if len(sys.argv)>=6 else True
     useL2=bool(sys.argv[7]) if len(sys.argv)>=7 else False
