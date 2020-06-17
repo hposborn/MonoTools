@@ -50,7 +50,12 @@ from . import MonoSearch
 theano_dir=MonoData_savepath+'/.theano_dir_'+str(np.random.randint(8))
 if not os.path.isdir(theano_dir):
     os.mkdir(theano_dir)
-os.environ["THEANO_FLAGS"] = "device=cpu,floatX=float32,cxx=/usr/local/Cellar/gcc/9.3.0_1/bin/g++-9,cxxflags = -fbracket-depth=1024,base_compiledir="+theano_dir
+
+if MonoData_savepath=="/Users/hosborn/python/MonoToolsData":
+    os.environ["THEANO_FLAGS"] = "device=cpu,floatX=float32,cxx=/usr/local/Cellar/gcc/9.3.0_1/bin/g++-9,cxxflags = -fbracket-depth=1024,base_compiledir="+theano_dir
+else:
+    os.environ["THEANO_FLAGS"] = "device=cpu,floatX=float32,cxxflags = -fbracket-depth=1024,base_compiledir="+theano_dir
+
 import theano.tensor as tt
 import pymc3 as pm
 import theano
@@ -907,7 +912,7 @@ class monoModel():
                     #         tt.log(multi_tdur)-tt.log([self.planets[multi]['tdur'] for multi in self.multis]))
                     pm.Potential("match_input_potential_multi",
                                  self.force_match_input*tt.sum(multi_logrors - \
-                                 tt.exp((tt.log(multi_tdur)-tt.log([self.planets[multi]['tdur'] for multi in self.multis]))**4)
+                                 tt.exp((tt.log(multi_tdur)-tt.log([self.planets[multi]['tdur'] for multi in self.multis]))**2)
                                                               ))
                 print("summing multi lcs:")
                 if len(self.multis)>1:
@@ -959,7 +964,7 @@ class monoModel():
                         #pm.Bound("bounded_tdur_duo_"+str(duo),upper=0.5,lower=-0.5,
                         #         tt.log(duo_tdurs[duo])-tt.log(self.planets[duo]['tdur']))
                         pm.Potential("match_input_potential_duo_"+str(duo),duo_logrors[duo] - 
-                             self.force_match_input*tt.exp((tt.log(duo_tdurs[duo])-tt.log(self.planets[duo]['tdur']))**4))
+                             self.force_match_input*tt.exp((tt.log(duo_tdurs[duo])-tt.log(self.planets[duo]['tdur']))**2))
 
                     duo_per_info[duo]['logpriors'] = tt.log(duoorbit.dcosidb) - 2 * tt.log(duo_periods[duo])
                     duo_per_info[duo]['lcs'] = gen_lc(duoorbit,tt.tile(tt.exp(duo_logrors[duo]),npers),npers,
@@ -1003,7 +1008,7 @@ class monoModel():
                         #pm.Bound("bounded_tdur_mono_"+str(mono),upper=0.5,lower=-0.5,
                         #         tt.log(mono_tdurs[mono])-tt.log(self.planets[mono]['tdur']))
                         pm.Potential("match_input_potential_mono_"+str(mono),mono_logrors[mono] - self.force_match_input * \
-                                     (tt.exp((tt.log(mono_tdurs[mono])-tt.log(self.planets[mono]['tdur']))**4)))
+                                     (tt.exp((tt.log(mono_tdurs[mono])-tt.log(self.planets[mono]['tdur']))**2)))
 
                     mono_gap_info[mono]['logpriors'] = tt.log(monoorbit.dcosidb) - 2*tt.log(per_meds[mono])
                     mono_gap_info[mono]['lcs'] = gen_lc(monoorbit, tt.tile(tt.exp(mono_logrors[mono]),n_gaps),
@@ -1088,7 +1093,8 @@ class monoModel():
                         iter_models[pl]['marg_lc'] = pm.Deterministic('marg_light_curve_'+str(iter_models[pl]['name']),
                                                                       tt.sum(iter_models[pl]['lcs']*tt.exp(iter_models[pl]['logprob']-iter_models[pl]['logprob_marg']).dimshuffle('x',0),axis=1))
                     else:
-                        iter_models[pl]['marg_lc'] = pm.Deterministic('marg_light_curve_'+str(iter_models[pl]['name']),iter_models[pl]['lcs'])
+                        iter_models[pl]['marg_lc'] = pm.Deterministic('marg_light_curve_'+str(iter_models[pl]['name']),
+                                                                      iter_models[pl]['lcs'])
                         pm.Deterministic('period_marg_'+str(iter_models[pl]['name']),iter_models[pl]['pers'])
                         pm.Deterministic('tdur_marg_'+str(iter_models[pl]['name']),iter_models[pl]['durs'])
                     #Now summing over all lcs:
