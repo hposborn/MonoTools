@@ -13,7 +13,7 @@ import os
 os.environ["THEANO_FLAGS"] = "device=cpu,floatX=float32,cxx=/usr/local/Cellar/gcc/9.3.0_1/bin/g++-9,cxxflags = -fbracket-depth=1024"
 
 os.environ["CXXFLAGS"]="-fbracket-depth=512" if not "CXXFLAGS" in os.environ else "-fbracket-depth=512,"+os.environ["CXXFLAGS"]
-os.environ["CFLAGS"] = "-fbracket-depth=512" if not "CXXFLAGS" in os.environ else "-fbracket-depth=512,"+os.environ["CFLAGS"]
+os.environ["CFLAGS"] = "-fbracket-depth=512" if not "CFLAGS" in os.environ else "-fbracket-depth=512,"+os.environ["CFLAGS"]
 import theano.tensor as tt
 import pymc3 as pm
 
