@@ -10,12 +10,6 @@ import numpy as np
 import pandas as pd
 import pickle
 import os
-os.environ["THEANO_FLAGS"] = "device=cpu,floatX=float32,cxx=/usr/local/Cellar/gcc/9.3.0_1/bin/g++-9,cxxflags = -fbracket-depth=1024"
-
-os.environ["CXXFLAGS"]="-fbracket-depth=512" if not "CXXFLAGS" in os.environ else "-fbracket-depth=512,"+os.environ["CXXFLAGS"]
-os.environ["CFLAGS"] = "-fbracket-depth=512" if not "CFLAGS" in os.environ else "-fbracket-depth=512,"+os.environ["CFLAGS"]
-import theano.tensor as tt
-import pymc3 as pm
 
 from copy import deepcopy
 from datetime import datetime
@@ -36,7 +30,10 @@ if os.environ.get('MONOTOOLSPATH') is None:
     MonoData_savepath = os.path.join(os.path.dirname(os.path.abspath( __file__ )),'data')
 else:
     MonoData_savepath = os.environ.get('MONOTOOLSPATH')
-    
+
+os.environ["CXXFLAGS"]="-fbracket-depth=512" if not "CXXFLAGS" in os.environ else "-fbracket-depth=512,"+os.environ["CXXFLAGS"]
+os.environ["CFLAGS"] = "-fbracket-depth=512" if not "CFLAGS" in os.environ else "-fbracket-depth=512,"+os.environ["CFLAGS"]
+
 #creating new hidden directory for theano compilations:
 theano_dir=MonoData_savepath+'/.theano_dir_'+str(np.random.randint(8))
 
@@ -46,6 +43,7 @@ if MonoData_savepath=="/Users/hosborn/python/MonoToolsData":
     os.environ["THEANO_FLAGS"] = "device=cpu,floatX=float32,cxx=/usr/local/Cellar/gcc/9.3.0_1/bin/g++-9,cxxflags = -fbracket-depth=1024,base_compiledir="+theano_dir
 else:
     os.environ["THEANO_FLAGS"] = "device=cpu,floatX=float32,cxxflags = -fbracket-depth=1024,base_compiledir="+theano_dir
+
 import theano.tensor as tt
 import pymc3 as pm
 import theano
