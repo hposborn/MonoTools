@@ -30,6 +30,8 @@ if os.environ.get('MONOTOOLSPATH') is None:
     MonoData_savepath = os.path.join(os.path.dirname(os.path.abspath( __file__ )),'data')
 else:
     MonoData_savepath = os.environ.get('MONOTOOLSPATH')
+if not os.path.isdir(MonoData_savepath):
+    os.mkdir(MonoData_savepath)
 
 os.environ["CXXFLAGS"]="-fbracket-depth=512" if not "CXXFLAGS" in os.environ else "-fbracket-depth=512,"+os.environ["CXXFLAGS"]
 os.environ["CFLAGS"] = "-fbracket-depth=512" if not "CFLAGS" in os.environ else "-fbracket-depth=512,"+os.environ["CFLAGS"]

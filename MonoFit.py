@@ -40,6 +40,8 @@ if os.environ.get('MONOTOOLSPATH') is None:
     MonoData_savepath = os.path.join(os.path.dirname(os.path.abspath( __file__ )),'data')
 else:
     MonoData_savepath = os.environ.get('MONOTOOLSPATH')
+if not os.path.isdir(MonoData_savepath):
+    os.mkdir(MonoData_savepath)
 
 import tools
 import starpars
