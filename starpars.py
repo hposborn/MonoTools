@@ -1223,7 +1223,7 @@ def getStellarInfoFromCsv(ID,mission,k2tab=None,keptabs=None):
                 k2tab=ascii.read(os.path.join(MonoData_tablepath,"k2_table.txt"),header_start=93,data_start=95).to_pandas()
             if ID in k2tab['EPIC'].values:
                 info = k2tab.loc[k2tab['EPIC']==int(ID)]
-                info = info if type(info)==pd.Series else info.iloc[0]
+                info = info.iloc[0] if type(info)==pd.DataFrame else info
                 info['mission']='K2'
                 info=info.rename(index={'EPIC':'ID','Gaia':'GAIA',
                                           'Dist':'dist','E_Dist':'epos_dist','e_Dist':'eneg_dist',
