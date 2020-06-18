@@ -73,7 +73,7 @@ def getK2lc(epic,camp,saveloc=None,pers=None,durs=None,t0s=None,use_ppt=True):
     import everest
     lcs=[]
     try:
-        lcs+=[openEverest(epic,camp,pers=pers,durs=durs,t0s=t0s,use_ppt=use_ppt)]
+        lcs+=openEverest(epic,camp,pers=pers,durs=durs,t0s=t0s,use_ppt=use_ppt)
     except:
         print("No everest")
     try:
@@ -369,8 +369,8 @@ def openVand(epic,camp,v=1,use_ppt=True):
  
 def openEverest(epic,camp,pers=None,durs=None,t0s=None,use_ppt=True):
     import everest
-    if camp in ['10','11']:
-        camp=[camp+'1',camp+'2']
+    if str(camp) in ['10','11']:
+        camp=[str(camp)+'1',str(camp)+'2']
     else:
         camp=[int(camp)]
     
@@ -406,7 +406,7 @@ def openEverest(epic,camp,pers=None,durs=None,t0s=None,use_ppt=True):
         #    lcev=openFits(fits.open(lcloc),lcloc)
     #print(np.unique(lcev['quality']))
     hdr={'cdpp':st1.cdpp,'ID':st1.ID,'Tmag':st1.mag,'mission':'K2','name':st1.name,'campaign':camp,'lcsource':'everest'}
-    return openFits(lcev,hdr,mission='k2',use_ppt=use_ppt)
+    return [openFits(lcev,hdr,mission='k2',use_ppt=use_ppt)]
    
 def getKeplerLC(kic,cadence='long',use_ppt=True):
     '''

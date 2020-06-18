@@ -864,8 +864,8 @@ def PeriodicPlanetSearch(lc,ID,planets,use_binned=False,use_flat=True,binsize=15
         modx = lc[prefix+'time']
         mody = lc[prefix+'flux'+suffix] * lc['flux_unit']+(1.0-np.nanmedian(lc[prefix+'flux'+suffix][anommask])*lc['flux_unit'])
         #print(n_pl,len(mody),len(anommask),np.sum(anommask),len(plmask),np.sum(plmask))
+        print(n_pl,np.sum(plmask),np.sum(anommask))
         if np.sum(plmask)>0:
-            print(n_pl,np.sum(plmask),np.sum(anommask))
             mody[plmask] = mody[anommask][np.random.choice(np.sum(anommask),np.sum(plmask))][:]
             print(n_pl,np.sum(plmask),np.sum(anommask))
         #anommask *= tools.CutAnomDiff(mody)
