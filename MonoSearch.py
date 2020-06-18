@@ -2601,16 +2601,17 @@ def MonoVetting(ID, mission, tcen=None, tdur=None, overwrite=None, do_search=Tru
     #   DOING PERIODIC PLANET SEARCH:
     ###################################
     if not os.path.isfile(file_loc+"/"+file_loc.split('/')[-1]+'_multis.pickle') or overwrites['multis'] or re_vet:
-        if do_search and not re_vet:
+        if do_search and (not os.path.exists(file_loc+"/"+file_loc.split('/')[-1]+'_multis.pickle') or overwrites['monos']):
             both_dic, perfig = PeriodicPlanetSearch(deepcopy(lc),ID,deepcopy(both_dic),plot_loc=file_loc+"/",plot=plot,
                                                     rhostar=rhostar[0], Mstar=Ms, Rstar=Rstar[0], Teff=Teff[0], **kwargs)
             if plot:
                 figs['multi']=perfig
-        elif re_vet:
+        elif re_vet and os.path.exists(file_loc+"/"+file_loc.split('/')[-1]+'_monos.pickle'):
             both_dic=pickle.load(open(file_loc+"/"+file_loc.split('/')[-1]+'_multis.pickle','rb'))
             if plot and os.path.isfile(file_loc+"/"+str(ID).zfill(11)+'_multi_search.pdf'):
                 figs['multi']= file_loc+"/"+str(ID).zfill(11)+'_multi_search.pdf'
-
+        else:
+            raise InputError("Must either specify do_search or include tdur and tcen")
         ###################################
         #  VETTING PERIODIC CANDIDATES:
         ###################################
