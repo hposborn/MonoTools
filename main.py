@@ -20,7 +20,7 @@ do_fit=bool(sys.argv[12]) if len(sys.argv)>12 else True
 re_vet=bool(sys.argv[13]) if len(sys.argv)>13 else True
 re_fit=bool(sys.argv[14]) if len(sys.argv)>14 else True
 
-from .MonoTools import MonoSearch
+from MonoTools import MonoSearch
 
 out=MonoSearch.MonoVetting(ID,mission,
                             tcen=tcen,tdur=tdur,overwrite=overwrite,do_search=do_search,
