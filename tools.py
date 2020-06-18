@@ -467,7 +467,8 @@ def getKeplerLC(kic,cadence='long',use_ppt=True):
 def lcStack(lcs):
     #Stacks multiple lcs together
     outlc={}
-    allkeys=np.unique(np.hstack([list(lcs[nlc].keys()) for nlc in range(len(lcs))]))
+    print([nlc for nlc in range(len(lcs)) if lcs[nlc] is not None])
+    allkeys=np.unique(np.hstack([list(lcs[nlc].keys()) for nlc in range(len(lcs)) if lcs[nlc] is not None]))
     allkeys=allkeys[allkeys!='flux_format'] #This is the only non-timeseries keyword
     #Stacking each timeseries on top of each other
     for nlc in range(len(lcs)):

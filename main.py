@@ -1,5 +1,9 @@
 import sys
 
+#Making this nicer and therefore lower priority:
+import os
+os.nice(4)
+
 ID=int(sys.argv[1])
 mission=sys.argv[2]
 print(sys.argv, len(sys.argv))
