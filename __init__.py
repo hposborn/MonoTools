@@ -6,8 +6,8 @@ if os.environ.get('MONOTOOLSPATH') is None:
 else:
     MonoData_savepath = os.path.join(os.path.dirname(os.path.abspath( __file__ )),'data')
 
-from . import tools
-from . import MonoSearch
+#from . import tools
+#from . import MonoSearch
 #from . import MonoFit
-from . import starpars
+#from . import starpars
 
