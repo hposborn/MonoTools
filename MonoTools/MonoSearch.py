@@ -786,11 +786,10 @@ def PlotMonoSearch(lc,ID,monosearchparams,mono_dic,interpmodels,tdurs,
                 'dep':outparams[peak,0],'dur':outparams[peak,1]}
 '''
 
-def PeriodicPlanetSearch(lc,ID,planets,use_binned=False,use_flat=True,binsize=15/1440.0,n_search_loops=5,
-                         rhostar=None,Ms=1.0,Rs=1.0,Teff=5800,
-                         multi_FAP_thresh=0.00125,multi_SNR_thresh=7.0,
-                         plot=False, plot_loc=None, mask_prev_planets=True,
-                         **kwargs):
+def PeriodicPlanetSearch(lc, ID, planets, use_binned=False, use_flat=True, binsize=15/1440.0, n_search_loops=5,
+                         rhostar=None, Ms=1.0, Rs=1.0, Teff=5800,
+                         multi_FAP_thresh=0.00125, multi_SNR_thresh=7.0,
+                         plot=False, plot_loc=None, mask_prev_planets=True, **kwargs):
     #Searches an LC (ideally masked for the monotransiting planet) for other *periodic* planets.
     from transitleastsquares import transitleastsquares
     print("Using TLS on ID="+str(ID)+" to search for multi-transiting planets")
@@ -849,7 +848,7 @@ def PeriodicPlanetSearch(lc,ID,planets,use_binned=False,use_flat=True,binsize=15
     else:
         anommask=~np.isnan(lc[prefix+'flux'+suffix][:])
     plmask=np.tile(False,len(anommask))
-    
+    t_zero=np.min(lc['time'])
     SNR_last_planet=100;init_n_pl=len(planets);n_pl=len(planets);results=[]
     while SNR_last_planet>multi_SNR_thresh and n_pl<(n_search_loops+init_n_pl):
         if len(planets)>1:
@@ -862,7 +861,7 @@ def PeriodicPlanetSearch(lc,ID,planets,use_binned=False,use_flat=True,binsize=15
             #Re-doing flattening with other transits now masked (these might be causing 
             lc=tools.lcFlatten(lc,winsize=11*durmax,use_binned=use_binned,transit_mask=~plmask)
         '''
-        modx = lc[prefix+'time']
+        modx = lc[prefix+'time']-t_zero
         mody = lc[prefix+'flux'+suffix] * lc['flux_unit']+(1.0-np.nanmedian(lc[prefix+'flux'+suffix][anommask])*lc['flux_unit'])
         #print(n_pl,len(mody),len(anommask),np.sum(anommask),len(plmask),np.sum(plmask))
         print(n_pl,np.sum(plmask),np.sum(anommask))
@@ -894,11 +893,12 @@ def PeriodicPlanetSearch(lc,ID,planets,use_binned=False,use_flat=True,binsize=15
         if (FAP<multi_FAP_thresh) and SNR>multi_SNR_thresh and len(trans)>2:
             SNR_last_planet=SNR
             planets[planet_name]=plparams
+            planets[planet_name]['tcen']+=t_zero
             planets[planet_name].update({'period':results[-1].period, 'period_err':results[-1].period_uncertainty,
                                          'P_min':results[-1].period,
                                          'snr_tls':results[-1].snr, 'FAP':results[-1].FAP, 
                                          'orbit_flag':'periodic',
-                                         'xmodel':results[-1].model_lightcurve_time,
+                                         'xmodel':results[-1].model_lightcurve_time+t_zero,
                                          'ymodel':results[-1].model_lightcurve_model, 'N_trans':len(trans)})
             if plot:
                 plt.subplot(311)
@@ -906,7 +906,7 @@ def PeriodicPlanetSearch(lc,ID,planets,use_binned=False,use_flat=True,binsize=15
                          linewidth=4.5,alpha=0.4,c=sns.color_palette()[n_pl-init_n_pl],label=planet_name+'/det_'+str(n_pl))
                 plt.plot(results[-1].periods,results[-1].power,c=sns.color_palette()[n_pl-init_n_pl])
                 plt.subplot(312)
-                plt.plot(results[-1]['model_lightcurve_time'],results[-1]['model_lightcurve_model'],'.',
+                plt.plot(results[-1]['model_lightcurve_time']+t_zero,results[-1]['model_lightcurve_model'],'.',
                          alpha=0.75,c=sns.color_palette()[n_pl-init_n_pl],label=planet_name+'/det='+str(n_pl),
                          rasterized=True)
 
