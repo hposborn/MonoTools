@@ -1192,8 +1192,8 @@ class monoModel():
             self.model = model
             self.init_soln = map_soln
     
-    def RunMcmc(self, n_draws=1200, plot=True, do_per_gap_cuts=True, LoadFromFile=False, overwrite=False,**kwargs):
-        if LoadFromFile and not overwrite:
+    def RunMcmc(self, n_draws=1200, plot=True, do_per_gap_cuts=True, overwrite=False,**kwargs):
+        if not overwrite:
             self.LoadPickle()
             print("LOADED MCMC")
 
