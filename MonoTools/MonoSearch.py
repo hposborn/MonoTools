@@ -791,6 +791,7 @@ def PeriodicPlanetSearch(lc, ID, planets, use_binned=False, use_flat=True, binsi
                          multi_FAP_thresh=0.00125, multi_SNR_thresh=7.0,
                          plot=False, plot_loc=None, mask_prev_planets=True, **kwargs):
     #Searches an LC (ideally masked for the monotransiting planet) for other *periodic* planets.
+    import batman
     from transitleastsquares import transitleastsquares
     print("Using TLS on ID="+str(ID)+" to search for multi-transiting planets")
     
