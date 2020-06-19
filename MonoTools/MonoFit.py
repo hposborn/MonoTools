@@ -2241,7 +2241,7 @@ class monoModel():
                         
                     else:
                         f_alls[n].errorbar(self.lc['time'][limit_mask[n]], self.lc['flux_flat'][limit_mask[n]],
-                                           yerr=bin_detrend[:,2],fmt=".", label="detrended", 
+                                           yerr=self.lc['flux_err'][limit_mask[n]],fmt=".", label="detrended", 
                                            ecolor='#dddddd', alpha=0.5,markersize=3.5, rasterized=raster)
                         
                         f_all_resids[n].errorbar(self.lc['time'][limit_mask[n]], 

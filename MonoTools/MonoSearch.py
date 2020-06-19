@@ -2427,17 +2427,14 @@ def VetCand(pl_dic,pl,ID,lc,Rs=1.0,Ms=1.0,Teff=5800,
     else:
         return pl_dic, None
 
-def MonoVetting(ID, mission, tcen=None, tdur=None, overwrite=None, do_search=True,
-                useL2=False,PL_ror_thresh=0.2,variable_llk_thresh=5,file_loc=None,
-                plot=True,do_fit=False,re_vet=False,re_fit=False,
-                **kwargs):
+def MonoVetting(ID, mission, tcen=None, tdur=None, overwrite=None, do_search=True, do_fit=True,
+                useL2=False,PL_ror_thresh=0.2,variable_llk_thresh=5,file_loc=None, plot=True, **kwargs):
     '''#Here we're going to initialise the Monotransit fitting by searching for other planets/transits/secondaries and filtering out binaries.
     INPUTS:
     - ID
     - mission
     - useL2=False
     - PL_ror_thresh=0.2
-    - re_vet = redo the vetting stage
     
     **kwargs:
      - StarPars=None, a list of radius, rho, teff and logg which are each lists of values/errors
@@ -2562,7 +2559,7 @@ def MonoVetting(ID, mission, tcen=None, tdur=None, overwrite=None, do_search=Tru
             
             if plot:
                 figs['mono']=monofig
-        elif re_vet and os.path.exists(file_loc+"/"+file_loc.split('/')[-1]+'_monos.pickle'):
+        elif os.path.exists(file_loc+"/"+file_loc.split('/')[-1]+'_monos.pickle'):
             both_dic=pickle.load(open(file_loc+"/"+file_loc.split('/')[-1]+'_monos.pickle','rb'))
             if plot and os.path.isfile(file_loc+"/"+str(ID).zfill(11)+'_Monotransit_Search.pdf'):
                 figs['mono']= file_loc+"/"+str(ID).zfill(11)+'_Monotransit_Search.pdf'
@@ -2600,13 +2597,13 @@ def MonoVetting(ID, mission, tcen=None, tdur=None, overwrite=None, do_search=Tru
     ###################################
     #   DOING PERIODIC PLANET SEARCH:
     ###################################
-    if not os.path.isfile(file_loc+"/"+file_loc.split('/')[-1]+'_multis.pickle') or overwrites['multis'] or re_vet:
+    if not os.path.isfile(file_loc+"/"+file_loc.split('/')[-1]+'_multis.pickle') or overwrites['multis']:
         if do_search and (not os.path.exists(file_loc+"/"+file_loc.split('/')[-1]+'_multis.pickle') or overwrites['monos']):
             both_dic, perfig = PeriodicPlanetSearch(deepcopy(lc),ID,deepcopy(both_dic),plot_loc=file_loc+"/",plot=plot,
                                                     rhostar=rhostar[0], Mstar=Ms, Rstar=Rstar[0], Teff=Teff[0], **kwargs)
             if plot:
                 figs['multi']=perfig
-        elif re_vet and os.path.exists(file_loc+"/"+file_loc.split('/')[-1]+'_monos.pickle'):
+        elif os.path.exists(file_loc+"/"+file_loc.split('/')[-1]+'_monos.pickle'):
             both_dic=pickle.load(open(file_loc+"/"+file_loc.split('/')[-1]+'_multis.pickle','rb'))
             if plot and os.path.isfile(file_loc+"/"+str(ID).zfill(11)+'_multi_search.pdf'):
                 figs['multi']= file_loc+"/"+str(ID).zfill(11)+'_multi_search.pdf'
@@ -2619,8 +2616,7 @@ def MonoVetting(ID, mission, tcen=None, tdur=None, overwrite=None, do_search=Tru
             for pl in [pl for pl in both_dic if both_dic[pl]['orbit_flag']=='periodic']:
                 pl_dic, pl_fig = VetCand(both_dic[pl],pl,ID,lc,Rs=Rstar[0],Ms=Ms,Teff=Teff[0],
                                          mono_SNR_thresh=mono_SNR_thresh,mono_SNR_r_thresh=mono_SNR_r_thresh,
-                                         variable_llk_thresh=variable_llk_thresh,plot=plot,
-                                         do_fit=re_vet,**kwargs)
+                                         variable_llk_thresh=variable_llk_thresh,plot=plot,**kwargs)
                 if plot:
                     figs[pl]=pl_fig
         pickle.dump(both_dic,open(file_loc+"/"+file_loc.split('/')[-1]+'_multis.pickle','wb'))
@@ -2633,7 +2629,7 @@ def MonoVetting(ID, mission, tcen=None, tdur=None, overwrite=None, do_search=Tru
     #  IDENTIFYING CONFUSED CANDIDATES:
     #######################################
     if len(both_dic)>0:
-        if not os.path.isfile(file_loc+"/"+file_loc.split('/')[-1]+'_allpls.pickle') or overwrites['vet'] or re_vet:
+        if not os.path.isfile(file_loc+"/"+file_loc.split('/')[-1]+'_allpls.pickle') or overwrites['vet']:
             #Loading candidates from file:
             # Removing any monos or multis which are confused (e.g. a mono which is in fact in a multi)
             both_dic,monos,multis = CheckPeriodConfusedPlanets(deepcopy(lc),deepcopy(both_dic),mono_multi=False)
@@ -2718,7 +2714,7 @@ def MonoVetting(ID, mission, tcen=None, tdur=None, overwrite=None, do_search=Tru
         if plot:
             #Chcking if values in df are different:
             new_df=True
-            if not os.path.exists(file_loc+"/"+file_loc.split('/')[-1]+'_candidates.csv') or re_vet:
+            if not os.path.exists(file_loc+"/"+file_loc.split('/')[-1]+'_candidates.csv'):
                 # Making table a plot for PDF:
                 fig=plt.figure(figsize=(11.69,2+0.5*len(both_dic)))
                 ax=fig.add_subplot(111)
@@ -2742,7 +2738,7 @@ def MonoVetting(ID, mission, tcen=None, tdur=None, overwrite=None, do_search=Tru
                 figs['tab']=file_loc+"/"+str(ID).zfill(11)+'_table.pdf'
             else:
                 figs['tab']=file_loc+"/"+str(ID).zfill(11)+'_table.pdf'
-        if not os.path.isfile(file_loc+"/"+file_loc.split('/')[-1]+'_candidates.csv') or overwrites['vet'] or re_vet:
+        if not os.path.isfile(file_loc+"/"+file_loc.split('/')[-1]+'_candidates.csv') or overwrites['vet']:
             df.to_csv(file_loc+"/"+file_loc.split('/')[-1]+'_candidates.csv')
         #all_cands_df.to_csv("all_cands.csv")
         
@@ -2767,13 +2763,13 @@ def MonoVetting(ID, mission, tcen=None, tdur=None, overwrite=None, do_search=Tru
             #Save to table here.
             '''
             mod = None
-
+        
         elif np.any([both_dic[obj]['flag']=='planet' for obj in both_dic]):
              #Doing this import here so that Pymc3 gains the seperate compiledir location for theano
             # PLANET MODELLING:
             print({pl:{'tcen':both_dic[pl]['tcen'],'depth':both_dic[pl]['depth'],'period':both_dic[pl]['period'],'orbit_flag':both_dic[pl]['orbit_flag'],'flag':both_dic[pl]['flag']} for pl in both_dic})
             print("Planets to model:",[obj for obj in both_dic if both_dic[obj]['flag']=='planet'])
-            if not os.path.isfile(file_loc+"/"+file_loc.split('/')[-1]+'_model.pickle') or overwrites['fit'] or re_fit:
+            if not os.path.isfile(file_loc+"/"+file_loc.split('/')[-1]+'_model.pickle') or overwrites['fit']:
                 
                 if mission=='kepler' and cutDistance not in kwargs and bin_oot not in kwargs:
                     mod=MonoFit.monoModel(ID, lc, {}, savefileloc=file_loc+'/',cutDistance=2.0,bin_oot=False)
