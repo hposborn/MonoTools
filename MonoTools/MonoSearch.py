@@ -409,8 +409,8 @@ def MonoTransitSearch(lc,ID,mission, Rs=None,Ms=None,Teff=None,
         model=x*params[1]+np.exp(params[0])*(amp*np.sin(newt-np.pi*0.5)-0.1)
         return 0.5 * np.sum((y - model)**2 / sigma2 + np.log(sigma2))
     
-    from progress.bar import IncrementalBar
-    bar = IncrementalBar('Searching for monotransit', max = np.sum([len(xr) for xr in search_xranges]))
+    #from progress.bar import IncrementalBar
+    #bar = IncrementalBar('Searching for monotransit', max = np.sum([len(xr) for xr in search_xranges]))
 
     #For each duration we scan across the lightcurve and compare a transit model to others:
     for n,search_xrange in enumerate(search_xranges):

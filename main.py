@@ -2,6 +2,9 @@ import sys
 import logging
 import os
 
+import matplotlib as mpl
+#Here, assuming this is server use, we make sure there's no X-server needed:
+mpl.use('Agg')
 
 ##############################
 #  FORCING LOGGING TO FILE:  #
