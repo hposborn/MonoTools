@@ -329,7 +329,7 @@ def QuickMonoFit(lc,it0,dur,Rs=None,Ms=None,Teff=None,useL2=False,fit_poly=True,
         best_fit['period']=init_period
     return best_fit
 
-def MonoTransitSearch(lc,ID,Rs=None,Ms=None,Teff=None,
+def MonoTransitSearch(lc,ID,mission, Rs=None,Ms=None,Teff=None,
                       mono_SNR_thresh=6.5,mono_BIC_thresh=-6,n_durs=5,poly_order=3,
                       n_oversamp=20,binsize=15/1440.0,
                       transit_zoom=3.5,use_flat=False,use_binned=True,use_poly=True,
@@ -363,7 +363,7 @@ def MonoTransitSearch(lc,ID,Rs=None,Ms=None,Teff=None,
     Teff=5800.0 if Teff is None else float(Teff)
 
     mincad=np.min([float(cad[1:])/1440 for cad in np.unique(lc['cadence'])])
-    interpmodels,tdurs=get_interpmodels(Rs,Ms,Teff,lc['time'],lc['flux_unit'],n_durs=n_durs,texp=mincad)
+    interpmodels,tdurs=get_interpmodels(Rs,Ms,Teff,lc['time'],lc['flux_unit'],n_durs=n_durs,texp=mincad, mission=mission)
     
 
     #print("Checking input model matches. flux:",np.nanmedian(uselc[:,0]),"std",np.nanstd(uselc[:,1]),"transit model:",
@@ -2552,7 +2552,7 @@ def MonoVetting(ID, mission, tcen=None, tdur=None, overwrite=None, do_search=Tru
     if not os.path.isfile(file_loc+"/"+file_loc.split('/')[-1]+'_monos.pickle') or overwrites['monos']:
         if do_search and (not os.path.exists(file_loc+"/"+file_loc.split('/')[-1]+'_monos.pickle') or overwrites['monos']):
             #Doing search if we dont have a mono pickle file or we want to overwrite one:
-            both_dic, monosearchparams, monofig = MonoTransitSearch(deepcopy(lc),ID,
+            both_dic, monosearchparams, monofig = MonoTransitSearch(deepcopy(lc),ID,mission,
                                                                     Rs=Rstar[0],Ms=Ms,Teff=Teff[0],
                                                                     plot_loc=file_loc+"/", plot=plot,**kwargs)
             pickle.dump(monosearchparams,open(file_loc+"/"+file_loc.split('/')[-1]+'_mono_searchpars.pickle','wb'))
@@ -2772,9 +2772,9 @@ def MonoVetting(ID, mission, tcen=None, tdur=None, overwrite=None, do_search=Tru
             if not os.path.isfile(file_loc+"/"+file_loc.split('/')[-1]+'_model.pickle') or overwrites['fit']:
                 
                 if mission=='kepler' and cutDistance not in kwargs and bin_oot not in kwargs:
-                    mod=MonoFit.monoModel(ID, lc, {}, savefileloc=file_loc+'/',cutDistance=2.0,bin_oot=False)
+                    mod=MonoFit.monoModel(ID, mission, lc, {}, savefileloc=file_loc+'/',cutDistance=2.0,bin_oot=False)
                 else:
-                    mod=MonoFit.monoModel(ID, lc, {}, savefileloc=file_loc+'/')
+                    mod=MonoFit.monoModel(ID, mission, lc, {}, savefileloc=file_loc+'/')
                 #If not, we have a planet.
                 #Checking if monoplanet is single, double-with-gap, or periodic.
                 multis=[]
