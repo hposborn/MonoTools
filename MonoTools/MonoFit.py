@@ -1102,10 +1102,10 @@ class monoModel():
                                                                       iter_models[pl]['lcs'])
                         pm.Deterministic('period_marg_'+str(iter_models[pl]['name']),iter_models[pl]['pers'])
                         pm.Deterministic('tdur_marg_'+str(iter_models[pl]['name']),iter_models[pl]['durs'])
-                    #Now summing over all lcs:
-                    marg_all_light_curves = tt.stack([iter_models[pl]['marg_lc'] for pl in iter_models], axis=1)
-                    marg_all_light_curve = pm.Deterministic("marg_all_light_curve",
-                                                            tt.sum(marg_all_light_curves,axis=1) + multi_mask_light_curve)
+                #Now summing over all lcs:
+                marg_all_light_curves = tt.stack([iter_models[pl]['marg_lc'] for pl in iter_models], axis=1)
+                marg_all_light_curve = pm.Deterministic("marg_all_light_curve",
+                                                        tt.sum(marg_all_light_curves,axis=1) + multi_mask_light_curve)
                     
                 if self.use_GP:
                     total_llk = pm.Deterministic("total_llk",self.gp['use'].log_likelihood(lc['flux'][lc['mask']] - \
