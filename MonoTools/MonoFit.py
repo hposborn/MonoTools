@@ -1119,7 +1119,6 @@ class monoModel():
                     pm.Normal("all_obs",mu=(marg_all_light_curve[lc['mask']] + mean),sd=new_yerr,
                               observed=lc['flux'][lc['mask']].astype(np.float32))
 
-
             # Fit for the maximum a posteriori parameters, I've found that I can get
             # a better solution by trying different combinations of parameters in turn
             if start is None:
@@ -1799,7 +1798,7 @@ class monoModel():
         from celerite import terms
         gp_pred=[]
         gp_sd=[]
-        if self.use_GP and not hasattr(self, 'gp_to_plot') or self.gp_to_plot['n_samp']!=n_samp or 'gp_pred' not in self.gp_to_plot or overwrite:
+        if self.use_GP and (not hasattr(self, 'gp_to_plot') or self.gp_to_plot['n_samp']!=n_samp or 'gp_pred' not in self.gp_to_plot or overwrite):
             self.gp_to_plot={'n_samp':n_samp}
             if hasattr(self,'trace'):
                 #Using the output of the model trace
