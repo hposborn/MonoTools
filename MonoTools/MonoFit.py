@@ -72,7 +72,7 @@ theano.config.exception_verbosity='high'
 class monoModel():
     #The default monoModel class. This is what we will use to build a Pymc3 model
     
-    def __init__(self, ID, lc, planets=None, mission='tess', LoadFromFile=False, overwrite=False, savefileloc=None):
+    def __init__(self, ID, mission, lc, planets=None, LoadFromFile=False, overwrite=False, savefileloc=None):
         #Initalising MonoModel
                     
         if 'mask' not in lc:
@@ -2247,7 +2247,7 @@ class monoModel():
                         f_all_resids[n].errorbar(self.lc['time'][limit_mask[n]], 
                                                  self.lc['flux_flat'][limit_mask[n]] - \
                                                  self.trans_to_plot['all']['med'][limit_mask[n]],
-                                                 yerr=self.lc['flux_err'], fmt=".",
+                                                 yerr=self.lc['flux_err'][limit_mask[n]], fmt=".",
                                                  ecolor='#dddddd', alpha=0.5,markersize=0.75, rasterized=raster)
 
                 #Plotting transit
