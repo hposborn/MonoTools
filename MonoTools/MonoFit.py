@@ -2521,7 +2521,7 @@ class monoModel():
                             sns.distplot(self.trace['mono_periods_'+pl].ravel(), hist=True, kde=True, bins=nbins, norm_hist=True,
                                          hist_kws={'edgecolor':'None','log':log,
                                                    'weights':probs},
-                                         kde_kws={'linewidth': 2,'weights':})
+                                         kde_kws={'linewidth': 2,'weights':np.exp(self.trace['logprob_marg_'+pl].ravel())})
                         else:
                             sns.distplot(self.trace['mono_periods_'+pl].ravel(), hist=True, kde=False, bins=nbins, norm_hist=True,
                                          hist_kws={'edgecolor':'None','log':log,
