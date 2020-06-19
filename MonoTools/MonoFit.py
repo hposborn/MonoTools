@@ -1015,7 +1015,10 @@ class monoModel():
                         pm.Potential("match_input_potential_mono_"+str(mono),mono_logrors[mono] - self.force_match_input * \
                                      (tt.exp((tt.log(mono_tdurs[mono])-tt.log(self.planets[mono]['tdur']))**2)))
 
-                    mono_gap_info[mono]['logpriors'] = tt.log(monoorbit.dcosidb) - 2*tt.log(per_meds[mono])
+                    mono_gap_info[mono]['logpriors'] = tt.log(monoorbit.dcosidb) - 2*tt.log(per_meds[mono]) + \
+                                                       tt.log(self.planets[pl]['per_gaps'][:,2])
+                    #Including in logprior the gap width
+                    # - if a gap is 2.7 times larger, then a sample from that gap is 2.7x more probable (i.e. logprob + 1)
                     mono_gap_info[mono]['lcs'] = gen_lc(monoorbit, tt.tile(tt.exp(mono_logrors[mono]),n_gaps),
                                                         n_gaps,mask=None,prefix='mono_mask_'+mono+'_')
                     pm.Deterministic('mono_priors_'+mono,mono_gap_info[mono]['logpriors'])
@@ -2517,8 +2520,8 @@ class monoModel():
                         if log and float('.'.join(sns.__version__.split('.')[:2]))>=0.11:
                             sns.distplot(self.trace['mono_periods_'+pl].ravel(), hist=True, kde=True, bins=nbins, norm_hist=True,
                                          hist_kws={'edgecolor':'None','log':log,
-                                                   'weights':np.exp(self.trace['logprob_marg_'+pl].ravel())},
-                                         kde_kws={'linewidth': 2,'weights':np.exp(self.trace['logprob_marg_'+pl].ravel())})
+                                                   'weights':probs},
+                                         kde_kws={'linewidth': 2,'weights':})
                         else:
                             sns.distplot(self.trace['mono_periods_'+pl].ravel(), hist=True, kde=False, bins=nbins, norm_hist=True,
                                          hist_kws={'edgecolor':'None','log':log,
@@ -2535,9 +2538,13 @@ class monoModel():
                         #         density=True)
                     if log:
                         #plt.yscale('log')
-                        plt.ylabel("$\log_{10}{\\rm prob. density}$")                        
-                        bins = np.histogram(self.trace['mono_periods_'+pl].ravel(),
-                                            weights=np.exp(self.trace['logprob_marg_'+pl].ravel()),bins=nbins,density=True)
+                        plt.ylabel("$\log_{10}{\\rm prob. density}$")
+                        if 'logprob_marg_'+pl in self.trace.varnames:
+                            bins = np.histogram(self.trace['mono_periods_'+pl].ravel(),
+                                                weights=np.exp(self.trace['logprob_marg_'+pl].ravel()),bins=nbins,density=True)
+                        else:
+                            bins = np.histogram(self.trace['mono_periods_'+pl].ravel(),bins=nbins,density=True)
+
                         bin_mins=np.nanmin((bins[0]/np.nanmedian(np.diff(bins[1])))[bins[0]>0])
                         print(bin_mins)
                         plt.ylim(np.clip(0.01*bin_mins,1e-50,1.0),1.0)
