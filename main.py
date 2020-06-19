@@ -18,9 +18,9 @@ id_dic={'TESS':'TIC','tess':'TIC','Kepler':'KIC','kepler':'KIC','KEPLER':'KIC',
     
 ID=int(sys.argv[1])
 mission=sys.argv[2]
-file_loc=MonoData_savepath+'/'+id_dic[mission]+str(ID).zfill(11)
-if not os.path.isdir(file_loc):
-    os.mkdir(file_loc)
+x_file_loc=MonoData_savepath+'/'+id_dic[mission]+str(ID).zfill(11)
+if not os.path.isdir(x_file_loc):
+    os.mkdir(x_file_loc)
 
 class StreamToLogger(object):
     """
@@ -54,7 +54,7 @@ class StreamToLogger(object):
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s:%(levelname)s:%(name)s:%(message)s',
-    filename=os.path.join(file_loc,id_dic[mission]+str(ID).zfill(11)+"_sysout.log"),
+    filename=os.path.join(x_file_loc,id_dic[mission]+str(ID).zfill(11)+"_sysout.log"),
     filemode='a'
 )
 
@@ -90,7 +90,7 @@ re_vet=bool(sys.argv[13]) if len(sys.argv)>13 else True
 re_fit=bool(sys.argv[14]) if len(sys.argv)>14 else True
 
 #Only running if we haven't already created a report:
-if not os.path.exists(os.path.join(file_loc,id_dic[mission]+str(ID).zfill(11)+"_report.pdf")) or overwrite is not None:
+if not os.path.exists(os.path.join(x_file_loc,id_dic[mission]+str(ID).zfill(11)+"_report.pdf")) or overwrite is not None:
     from MonoTools import MonoSearch
 
     outs=MonoSearch.MonoVetting(ID,mission,
