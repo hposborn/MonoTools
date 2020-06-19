@@ -1,11 +1,80 @@
 import sys
+import logging
+import os
+
+
+##############################
+#  FORCING LOGGING TO FILE:  #
+##############################
+
+if os.environ.get('MONOTOOLSPATH') is None:
+    MonoData_savepath = os.path.join(os.path.dirname( __file__ ),'data')
+else:
+    MonoData_savepath = os.environ.get('MONOTOOLSPATH')
+
+    
+id_dic={'TESS':'TIC','tess':'TIC','Kepler':'KIC','kepler':'KIC','KEPLER':'KIC',
+        'K2':'EPIC','k2':'EPIC','CoRoT':'CID','corot':'CID'}
+    
+ID=int(sys.argv[1])
+mission=sys.argv[2]
+file_loc=MonoData_savepath+'/'+id_dic[mission]+str(ID).zfill(11)
+if not os.path.isdir(file_loc):
+    os.mkdir(file_loc)
+
+class StreamToLogger(object):
+    """
+    Fake file-like stream object that redirects writes to a logger instance.
+    """
+    def __init__(self, logger, log_level=logging.INFO):
+        self.logger = logger
+        self.log_level = log_level
+        self.linebuf = ''
+
+    def write(self, buf):
+        temp_linebuf = self.linebuf + buf
+        self.linebuf = ''
+        for line in temp_linebuf.splitlines(True):
+            # From the io.TextIOWrapper docs:
+            #   On output, if newline is None, any '\n' characters written
+            #   are translated to the system default line separator.
+            # By default sys.stdout.write() expects '\n' newlines and then
+            # translates them so this is still cross platform.
+            if line[-1] == '\n':
+                self.logger.log(self.log_level, line.rstrip())
+            else:
+                self.linebuf += line
+
+    def flush(self):
+        if self.linebuf != '':
+            self.logger.log(self.log_level, self.linebuf.rstrip())
+        self.linebuf = ''
+
+
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s:%(levelname)s:%(name)s:%(message)s',
+    filename=os.path.join(file_loc,id_dic[mission]+str(ID).zfill(11)+"_sysout.log"),
+    filemode='a'
+)
+
+stdout_logger = logging.getLogger('STDOUT')
+sl = StreamToLogger(stdout_logger, logging.INFO)
+sys.stdout = sl
+
+stderr_logger = logging.getLogger('STDERR')
+sl = StreamToLogger(stderr_logger, logging.ERROR)
+sys.stderr = sl
 
 #Making this nicer and therefore lower priority:
 import os
 os.nice(4)
 
-ID=int(sys.argv[1])
-mission=sys.argv[2]
+
+####################################
+#  GETTING ARGUMENTS AND RUNNING:  #
+####################################
+
 print(sys.argv, len(sys.argv))
 tcen=float(sys.argv[3]) if len(sys.argv)>3 else None
 tdur=float(sys.argv[4]) if len(sys.argv)>4 else None
@@ -22,7 +91,7 @@ re_fit=bool(sys.argv[14]) if len(sys.argv)>14 else True
 
 from MonoTools import MonoSearch
 
-out=MonoSearch.MonoVetting(ID,mission,
+outs=MonoSearch.MonoVetting(ID,mission,
                             tcen=tcen,tdur=tdur,overwrite=overwrite,do_search=do_search,
                             useL2=useL2,PL_ror_thresh=PL_ror_thresh,variable_llk_thresh=variable_llk_thresh,file_loc=file_loc,
                             plot=plot,do_fit=do_fit,re_vet=re_vet,re_fit=re_fit, use_GP=False)
