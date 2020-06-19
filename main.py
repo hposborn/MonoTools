@@ -89,9 +89,11 @@ do_fit=bool(sys.argv[12]) if len(sys.argv)>12 else True
 re_vet=bool(sys.argv[13]) if len(sys.argv)>13 else True
 re_fit=bool(sys.argv[14]) if len(sys.argv)>14 else True
 
-from MonoTools import MonoSearch
+#Only running if we haven't already created a report:
+if not file.exists(os.path.join(file_loc,id_dic[mission]+str(ID).zfill(11)+"_report.pdf") or overwrite is not None:
+    from MonoTools import MonoSearch
 
-outs=MonoSearch.MonoVetting(ID,mission,
-                            tcen=tcen,tdur=tdur,overwrite=overwrite,do_search=do_search,
-                            useL2=useL2,PL_ror_thresh=PL_ror_thresh,variable_llk_thresh=variable_llk_thresh,file_loc=file_loc,
-                            plot=plot,do_fit=do_fit,re_vet=re_vet,re_fit=re_fit, use_GP=False)
+    outs=MonoSearch.MonoVetting(ID,mission,
+                                tcen=tcen,tdur=tdur,overwrite=overwrite,do_search=do_search,
+                                useL2=useL2,PL_ror_thresh=PL_ror_thresh,variable_llk_thresh=variable_llk_thresh,file_loc=file_loc,
+                                plot=plot,do_fit=do_fit,re_vet=re_vet,re_fit=re_fit, use_GP=False)
