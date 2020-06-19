@@ -1106,16 +1106,17 @@ def compileInfos(ID,norminfo,tic_dat,epicdat):
         #print(col,tic_dat[col],type(tic_dat[col]))
         if col in ['teff','rad','mass','dist','logg','rho']:
             col_errs={}
+            
             if norminfo is not None:
-                cols=[norminfo[col],norminfo['epos_'+col],norminfo['eneg_'+col]]
+                cols=[float(norminfo[col]),float(norminfo['epos_'+col]),float(norminfo['eneg_'+col])]
                 if not np.all(np.isnan(np.array(cols))) and not np.all(np.array(cols)==0.0):
                     col_errs['norm']=cols
             if tic_dat is not None:
-                cols=[tic_dat[col],tic_dat['epos_'+col],tic_dat['eneg_'+col]]
+                cols=[float(tic_dat[col]),float(tic_dat['epos_'+col]),float(tic_dat['eneg_'+col])]
                 if not np.all(np.isnan(np.array(cols))) and not np.all(np.array(cols)==0.0):
                     col_errs['tic']=cols
             if epicdat is not None:
-                cols=[epicdat[col],epicdat['epos_'+col],epicdat['eneg_'+col]]
+                cols=[float(epicdat[col]),float(epicdat['epos_'+col]),float(epicdat['eneg_'+col])]
                 if not np.all(np.isnan(np.array(cols))) and not np.all(np.array(cols)==0.0):
                     col_errs['epic']=cols
             if len(col_errs)>0:
@@ -1124,25 +1125,24 @@ def compileInfos(ID,norminfo,tic_dat,epicdat):
                 info[col]=col_errs[key][0]
                 info['epos_'+col]=col_errs[key][1]
                 info['eneg_'+col]=col_errs[key][2]
-            elif tic_dat is not None and col in tic_dat and tic_dat[col] is not None and (type(tic_dat[col])==str or np.isfinite(tic_dat[col])):
+            elif tic_dat is not None and col in tic_dat and tic_dat[col] is not None and (type(tic_dat[col])==str or np.isfinite(float(tic_dat[col]))):
                 info[col]=tic_dat[col]
                 info['epos_'+col]=0.33*tic_dat[col]
                 info['eneg_'+col]=0.33*tic_dat[col]
-            elif norminfo is not None and col in norminfo and norminfo[col] is not None and (type(norminfo[col])==str or np.isfinite(norminfo[col])):
-                info[col]=norminfo[col]
-                info['epos_'+col]=0.33*norminfo[col]
-                info['eneg_'+col]=0.33*norminfo[col]
-            elif epicdat is not None and col in epicdat and epicdat[col] is not None and (type(epicdat[col])==str or np.isfinite(epicdat[col])):
+            elif norminfo is not None and col in norminfo and norminfo[col] is not None and (type(norminfo[col])==str or np.isfinite(float(col_errs['norm'][0]))):
+                info[col]=float(norminfo[col])
+                info['epos_'+col]=0.33*float(norminfo[col])
+                info['eneg_'+col]=0.33*float(norminfo[col])
+            elif epicdat is not None and col in epicdat and epicdat[col] is not None and (type(epicdat[col])==str or np.isfinite(float(epicdat[col]))):
                 info[col]=epicdat[col]
                 info['epos_'+col]=0.33*epicdat[col]
                 info['eneg_'+col]=0.33*epicdat[col]
-            print(col,info[col],col_errs)
-        elif tic_dat is not None and col in tic_dat and tic_dat[col] is not None and (type(tic_dat[col])==str or np.isfinite(tic_dat[col])):
             
+        elif tic_dat is not None and col in tic_dat and tic_dat[col] is not None:
             info[col]=tic_dat[col]
-        elif norminfo is not None and col in norminfo and norminfo[col] is not None and (type(norminfo[col])==str or np.isfinite(norminfo[col])):
+        elif norminfo is not None and col in norminfo and norminfo[col] is not None:
             info[col]=norminfo[col]
-        elif epicdat is not None and col in epicdat and epicdat[col] is not None and (type(epicdat[col])==str or np.isfinite(epicdat[col])):
+        elif epicdat is not None and col in epicdat and epicdat[col] is not None:
             info[col]=epicdat[col]
     print(info)
     return pd.Series(info,name=ID)
