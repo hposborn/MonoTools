@@ -14,6 +14,8 @@ import os
 from copy import deepcopy
 from datetime import datetime
 
+import batman
+
 from scipy import optimize
 import exoplanet as xo
 import scipy.interpolate as interp
@@ -52,8 +54,6 @@ import pymc3 as pm
 import theano
 theano.config.print_test_value = True
 theano.config.exception_verbosity='high'
-
-import batman
 
 from . import tools
 from . import MonoFit
