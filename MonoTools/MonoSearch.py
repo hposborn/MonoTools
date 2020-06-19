@@ -1003,8 +1003,7 @@ def GenModelLc(lc,all_pls,mission,Rstar=1.0,rhostar=1.0,Teff=5800,logg=4.43):
                                              period=all_pls[pl]['period'], t0=all_pls[pl]['tcen'], b=0.4)
             # Compute a limb-darkened light curve using starry
             light_curves+=[xo.LimbDarkLightCurve(u).get_light_curve(orbit=orbit, r=np.sqrt(all_pls[pl]['depth']), 
-                                                                   t=lc['time'], texp=cad*0.98
-                                                                  ).eval()]
+                                                                   t=lc['time'], texp=cad*0.98).eval()]
         elif all_pls[pl]['orbit_flag'] in ['mono','duo']:
             #generating two monos for duo
             per_guess=18226*rhostar*(2*np.sqrt(1-0.4**2)/all_pls[pl]['tdur'])**-3#from circular orbit and b=0.4

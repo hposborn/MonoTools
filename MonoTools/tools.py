@@ -59,7 +59,7 @@ def K2_lc(epic,pers=None,durs=None,t0s=None, use_ppt=True):
     lcs=[]
     print("K2 campaigns to search:",df['campaign'])
     for camp in str(df['campaign']).split(','):
-        lcs+=[getK2lc(epic,int(float(camp)),pers=pers,durs=durs,t0s=t0s, use_ppt=use_ppt)]
+        lcs+=[getK2lc(epic,camp,pers=pers,durs=durs,t0s=t0s, use_ppt=use_ppt)]
         
     lcs=lcStack(lcs)
     return lcs,df
@@ -72,7 +72,7 @@ def getK2lc(epic,camp,saveloc=None,pers=None,durs=None,t0s=None,use_ppt=True):
     import everest
     lcs=[]
     try:
-        lcs+=openEverest(epic,camp,pers=pers,durs=durs,t0s=t0s,use_ppt=use_ppt)
+        lcs+=openEverest(epic,int(camp),pers=pers,durs=durs,t0s=t0s,use_ppt=use_ppt)
     except:
         print("No everest")
     try:
@@ -330,14 +330,14 @@ def openPDC(epic,camp,use_ppt=True):
 def openVand(epic,camp,v=1,use_ppt=True):
     lcvand=[]
     #camp=camp.split(',')[0] if len(camp)>3
-    if camp=='10':
+    if camp=='10' or camp==10:
         camp='102'
     elif camp=='et' or camp=='E':
         camp='e'
         #https://www.cfa.harvard.edu/~avanderb/k2/ep60023342alldiagnostics.csv
     else:
         camp=str(int(camp)).zfill(2)
-    if camp in ['09','11']:
+    if camp in ['09','11',9,11]:
         #C91: https://archive.stsci.edu/missions/hlsp/k2sff/c91/226200000/35777/hlsp_k2sff_k2_lightcurve_226235777-c91_kepler_v1_llc.fits
         url1='http://archive.stsci.edu/missions/hlsp/k2sff/c'+str(int(camp))+'1/'+str(epic)[:4]+'00000/'+str(epic)[4:]+'/hlsp_k2sff_k2_lightcurve_'+str(epic)+'-c'+str(int(camp))+'1_kepler_v1_llc.fits'
         print("Vanderburg LC at ",url1)
@@ -360,10 +360,12 @@ def openVand(epic,camp,v=1,use_ppt=True):
         lcvand+=[openFits(lc,url,mission='k2',use_ppt=use_ppt)]
     else:
         urlfitsname='http://archive.stsci.edu/missions/hlsp/k2sff/c'+str(camp)+'/'+str(epic)[:4]+'00000/'+str(epic)[4:]+'/hlsp_k2sff_k2_lightcurve_'+str(epic)+'-c'+str(camp)+'_kepler_v'+str(int(v))+'_llc.fits'.replace(' ','')
-        print("Vanderburg LC at ",urlfitsname)
         if requests.get(urlfitsname, timeout=600).status_code==200:
             with fits.open(urlfitsname) as hdus:
                 lcvand+=[openFits(hdus,urlfitsname,mission='k2',use_ppt=use_ppt)]
+            print("Extracted vanderburg LC from ",urlfitsname)
+        else:
+            print("Cannot find vanderburg LC at ",urlfitsname)
     return lcStack(lcvand)
  
 def openEverest(epic,camp,pers=None,durs=None,t0s=None,use_ppt=True):
