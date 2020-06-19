@@ -53,11 +53,10 @@ import theano
 theano.config.print_test_value = True
 theano.config.exception_verbosity='high'
 
+import batman
+
 from . import tools
 from . import MonoFit
-#from . import tools
-#from . import MonoFit
-
 
 def transit(pars,x):
     log_per,b,t0,log_r_pl,u1,u2=pars
@@ -791,7 +790,6 @@ def PeriodicPlanetSearch(lc, ID, planets, use_binned=False, use_flat=True, binsi
                          multi_FAP_thresh=0.00125, multi_SNR_thresh=7.0,
                          plot=False, plot_loc=None, mask_prev_planets=True, **kwargs):
     #Searches an LC (ideally masked for the monotransiting planet) for other *periodic* planets.
-    import batman
     from transitleastsquares import transitleastsquares
     print("Using TLS on ID="+str(ID)+" to search for multi-transiting planets")
     
