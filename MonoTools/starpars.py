@@ -1058,7 +1058,6 @@ def RenameSeries(info):
         #Switching out capitals:
         if 'd' in info.index:
             info=info.rename(index={'d':'dist'})
-        print(info)
         for col in ['teff','rad','mass','dist','logg','rho']:
             captd=col[0].upper()+col[1:]
             if captd in info.index:
@@ -1101,7 +1100,6 @@ def compileInfos(ID,norminfo,tic_dat,epicdat):
     cols_to_avoid = ['eneg_teff','eneg_rad','eneg_mass','eneg_dist','eneg_logg','eneg_rho',
                      'epos_teff','epos_rad','epos_mass','epos_dist','epos_logg','epos_rho']
     cols=[[col for col in infodat.index if col not in cols_to_avoid] for infodat in [norminfo,tic_dat,epicdat] if infodat is not None]
-    print(np.unique(np.hstack(cols).ravel()))
     for col in np.unique(np.hstack(cols).ravel()):
         #print(col,tic_dat[col],type(tic_dat[col]))
         if col in ['teff','rad','mass','dist','logg','rho']:
@@ -1144,7 +1142,6 @@ def compileInfos(ID,norminfo,tic_dat,epicdat):
             info[col]=norminfo[col]
         elif epicdat is not None and col in epicdat and epicdat[col] is not None:
             info[col]=epicdat[col]
-    print(info)
     return pd.Series(info,name=ID)
 
 def getStellarInfoFromCsv(ID,mission,k2tab=None,keptabs=None):
