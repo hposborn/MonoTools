@@ -72,19 +72,19 @@ def getK2lc(epic,camp,saveloc=None,pers=None,durs=None,t0s=None,use_ppt=True):
     import everest
     lcs=[]
     try:
-        lcs+=openEverest(epic,int(camp),pers=pers,durs=durs,t0s=t0s,use_ppt=use_ppt)
+        lcs+=openEverest(int(epic),int(camp),pers=pers,durs=durs,t0s=t0s,use_ppt=use_ppt)
     except:
         print("No everest")
     try:
-        lcs+=[openVand(epic,camp,use_ppt=use_ppt)]
+        lcs+=[openVand(int(epic),camp,use_ppt=use_ppt)]
     except:
         print("No vand")
     if len(lcs)==0:
         try:
-            return openPDC(epic,camp,use_ppt=use_ppt)
+            return openPDC(int(epic),int(camp),use_ppt=use_ppt)
             
         except:
-            print("No LCs at all")
+            print("No LCs for "+str(epic)+"at all")
             return None
     elif len(lcs)==1:
         return lcs[0]
