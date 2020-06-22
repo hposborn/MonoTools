@@ -6,6 +6,11 @@ import matplotlib as mpl
 #Here, assuming this is server use, we make sure there's no X-server needed:
 mpl.use('Agg')
 
+#Making this nicer and therefore lower priority:
+import os
+os.nice(4)
+
+
 ##############################
 #  FORCING LOGGING TO FILE:  #
 ##############################
@@ -69,10 +74,7 @@ stderr_logger = logging.getLogger('STDERR')
 sl = StreamToLogger(stderr_logger, logging.ERROR)
 sys.stderr = sl
 
-#Making this nicer and therefore lower priority:
-import os
-os.nice(4)
-
+os.environ["THEANO_FLAGS"] = "device=cpu,floatX=float32,cxxflags = -fbracket-depth=1024,base_compiledir="+theano_dir
 
 ####################################
 #  GETTING ARGUMENTS AND RUNNING:  #
@@ -95,8 +97,13 @@ re_fit=bool(sys.argv[14]) if len(sys.argv)>14 else True
 #Only running if we haven't already created a report:
 if not os.path.exists(os.path.join(x_file_loc,id_dic[mission]+str(ID).zfill(11)+"_report.pdf")) or overwrite is not None:
     from MonoTools import MonoSearch
+    try:
+        
+        outs=MonoSearch.MonoVetting(ID,mission,
+                                    tcen=tcen,tdur=tdur,overwrite=overwrite,do_search=do_search,
+                                    useL2=useL2,PL_ror_thresh=PL_ror_thresh,
+                                    variable_llk_thresh=variable_llk_thresh,file_loc=file_loc,
+                                    plot=plot,do_fit=do_fit,re_vet=re_vet,re_fit=re_fit, use_GP=False)
+    except Exception as e:
+        print(e, ID,mission,"problem",key)
 
-    outs=MonoSearch.MonoVetting(ID,mission,
-                                tcen=tcen,tdur=tdur,overwrite=overwrite,do_search=do_search,
-                                useL2=useL2,PL_ror_thresh=PL_ror_thresh,variable_llk_thresh=variable_llk_thresh,file_loc=file_loc,
-                                plot=plot,do_fit=do_fit,re_vet=re_vet,re_fit=re_fit, use_GP=False)
