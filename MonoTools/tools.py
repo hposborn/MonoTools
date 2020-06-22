@@ -84,7 +84,7 @@ def getK2lc(epic,camp,saveloc=None,pers=None,durs=None,t0s=None,use_ppt=True):
             return openPDC(int(epic),int(camp),use_ppt=use_ppt)
             
         except:
-            print("No LCs for "+str(epic)+"at all")
+            print("No LCs for "+str(epic)+" campaign "+str(camp)+" at all")
             return None
     elif len(lcs)==1:
         return lcs[0]
