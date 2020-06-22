@@ -1212,7 +1212,7 @@ def getStellarInfoFromCsv(ID,mission,k2tab=None,keptabs=None):
             k2tab=None
             epicdat=None
         elif mission.lower()=='k2':
-            MonoData_tablepath = os.path.join(os.path.dirname(os.path.abspath( __file__ )),'data','tables')
+            MonoData_tablepath = os.path.join('/'.join(os.path.dirname( __file__ ).split('/')[:-1]),'data','tables')
             if k2tab is None:
                 if not os.path.isfile(os.path.join(MonoData_tablepath,"k2_table.txt")):
                     print("Downloading K2 Stellar parameters table")
