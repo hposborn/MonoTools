@@ -33,11 +33,11 @@ id_dic={'TESS':'TIC','tess':'TIC','Kepler':'KIC','kepler':'KIC','KEPLER':'KIC',
 
 df=df.loc[df['mission']!='CoRoT']
 if 'pdo6' in socket.gethostname():
-    os.system("rm "+runfileloc+"/*pdo6.sh")
+    os.system("rm "+runfileloc+"*pdo6.sh")
 elif 'pdo1' in socket.gethostname():
-    os.system("rm "+runfileloc+"/*pdo1.sh")
+    os.system("rm "+runfileloc+"*pdo1.sh")
 else:
-    os.system("rm "+runfileloc+"/*.sh")
+    os.system("rm "+runfileloc+"*.sh")
     
 n=0
 for id,row in subset.iterrows():
