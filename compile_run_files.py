@@ -32,16 +32,21 @@ id_dic={'TESS':'TIC','tess':'TIC','Kepler':'KIC','kepler':'KIC','KEPLER':'KIC',
         'K2':'EPIC','k2':'EPIC','CoRoT':'CID','corot':'CID'}
 
 df=df.loc[df['mission']!='CoRoT']
-os.system("rm "+runfileloc+"/*.sh")
-
+if 'pdo6' in socket.gethostname():
+    os.system("rm "+runfileloc+"/*pdo6.sh")
+elif 'pdo1' in socket.gethostname():
+    os.system("rm "+runfileloc+"/*pdo1.sh")
+else:
+    os.system("rm "+runfileloc+"/*.sh")
+    
 n=0
 for id,row in subset.iterrows():
     icid=str(int(float(non_decimal.sub('',row['id']))))
     if 'pdo6' in socket.gethostname():
-        runfile=runfileloc+id_dic[row['mission']]+icid.zfill(11)+"_pdo1_run.sh"
+        runfile=runfileloc+id_dic[row['mission']]+icid.zfill(11)+"_run_pdo1.sh"
         runallfile=runfileloc+"runall_"+str(int(np.ceil(n_runs*n/len(subset))))+"_pdo1.sh"
     elif 'pdo1' in socket.gethostname():
-        runfile=runfileloc+id_dic[row['mission']]+icid.zfill(11)+"_pdo6_run.sh"
+        runfile=runfileloc+id_dic[row['mission']]+icid.zfill(11)+"_run_pdo6.sh"
         runallfile=runfileloc+"runall_"+str(int(np.ceil(n_runs*n/len(subset))))+"_pdo6.sh"
     else:
         runfile=runfileloc+id_dic[row['mission']]+icid.zfill(11)+"_run.sh"
