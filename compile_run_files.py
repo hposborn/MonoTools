@@ -37,16 +37,25 @@ os.system("rm "+runfileloc+"/*.sh")
 n=0
 for id,row in subset.iterrows():
     icid=str(int(float(non_decimal.sub('',row['id']))))
-    with open(runfileloc+id_dic[row['mission']]+icid.zfill(11)+"_run.sh","w") as fo:
+    if 'pdo6' in socket.gethostname():
+        runfile=runfileloc+id_dic[row['mission']]+icid.zfill(11)+"_pdo1_run.sh"
+        runallfile=runfileloc+"runall_"+str(np.floor(n/n_runs))+"_pdo1.sh"
+    elif 'pdo1' in socket.gethostname():
+        runfile=runfileloc+id_dic[row['mission']]+icid.zfill(11)+"_pdo6_run.sh"
+        runallfile=runfileloc+"runall_"+str(np.floor(n/n_runs))+"_pdo6.sh"
+    else:
+        runfile=runfileloc+id_dic[row['mission']]+icid.zfill(11)+"_run.sh"
+        runallfile=runfileloc+"runall_"+str(np.floor(n/n_runs))+".sh"
+    with open(runfile,"w") as fo:
         if 'pdo' in socket.gethostname():
             fo.write("#!/bin/sh\nsource ~.bashrc\ntid_get_mono "+icid+"\nsource ~/anaconda3/etc/profile.d/conda.sh\nconda activate monoenv\ncd ~/MonoTools\npython main.py "+icid+" "+row['mission'].lower()+"\n")
         else:
             fo.write("#!/bin/sh\nsource ~/anaconda3/etc/profile.d/conda.sh\nconda activate monoenv\ncd ~/MonoTools\npython main.py "+icid+" "+row['mission'].lower()+"\n")
-    if not os.path.exists(runfileloc+"runall_"+str(np.floor(n/n_runs))+".sh"):
-        with open(runfileloc+"runall_"+str(np.floor(n/n_runs))+".sh","w") as fo2:
+    if not os.path.exists():
+        with open(runallfile,"w") as fo2:
             fo2.write("#!/bin/sh\n")
-    with open(runfileloc+"runall_"+str(np.floor(n/n_runs))+".sh","a") as fo2:
-        fo2.write("bash "+runfileloc+id_dic[row['mission']]+icid.zfill(11)+"_run.sh\n")
+    with open(runallfile,"a") as fo2:
+        fo2.write("bash "+runfile+"\n")
     n+=1
 
 os.system("chmod +x "+runfileloc+"*.sh")
