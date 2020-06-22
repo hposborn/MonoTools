@@ -53,7 +53,7 @@ for id,row in subset.iterrows():
         runallfile=runfileloc+"runall_"+str(int(np.floor(n_runs*n/len(subset))))+".sh"
     with open(runfile,"w") as fo:
         if 'pdo' in socket.gethostname():
-            fo.write("#!/bin/sh\nsource ~.bashrc\ntid_get_mono "+icid+"\nsource ~/anaconda3/etc/profile.d/conda.sh\nconda activate monoenv\ncd ~/MonoTools\npython main.py "+icid+" "+row['mission'].lower()+"\n")
+            fo.write("#!/bin/sh\nsource ~/.bashrc\ntid_get_mono "+icid+"\nsource ~/anaconda3/etc/profile.d/conda.sh\nconda activate monoenv\ncd ~/MonoTools\npython main.py "+icid+" "+row['mission'].lower()+"\n")
         else:
             fo.write("#!/bin/sh\nsource ~/anaconda3/etc/profile.d/conda.sh\nconda activate monoenv\ncd ~/MonoTools\npython main.py "+icid+" "+row['mission'].lower()+"\n")
     if not os.path.exists(runallfile):
