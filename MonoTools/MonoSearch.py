@@ -2538,7 +2538,7 @@ def MonoVetting(ID, mission, tcen=None, tdur=None, overwrite=None, do_search=Tru
     #opening lightcurve:
     if not os.path.isfile(file_loc+"/"+file_loc.split('/')[-1]+'_lc.pickle') or overwrites['lc']:
         #Gets Lightcurve
-        lc,hdr=tools.openLightCurve(ID,mission,use_ppt=False)
+        lc,hdr=tools.openLightCurve(ID,mission,use_ppt=False,**kwargs)
         pickle.dump(lc,open(file_loc+"/"+file_loc.split('/')[-1]+'_lc.pickle','wb'))
         #lc=lcFlatten(lc,winsize=9*tdur,stepsize=0.1*tdur)
     else:
