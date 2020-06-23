@@ -1189,22 +1189,42 @@ def getStellarInfoFromCsv(ID,mission,k2tab=None,keptabs=None):
                 info=info.drop(['iso_rho','iso_rho_err1','iso_rho_err2'])
             else:
                 print(ID,"not in Gaia-Kepler cat")
-                info = Vizier(catalog='J/ApJ/866/99/table1').query_constraints(KIC=int(ID))[0].to_pandas().iloc[0]
-                info['mission']='Kepler'
+                info = Vizier(catalog='J/ApJ/866/99/table1').query_constraints(KIC=int(ID))
+                if len(info)!=0:
+                    info=info[0].to_pandas().iloc[0]
+                    info['mission']='Kepler'
 
-                info=info.rename(index={'KIC':'ID','Gaia':'GAIA',
-                                         'Dist':'dist','E_Dist':'epos_dist','e_Dist':'eneg_dist',
-                                         'R_':'rad','E_R_':'epos_Rad', 'e_R_':'eneg_Rad',
-                                         '_RA':'ra','_DE':'dec'})
-                info['eneg_Teff']=info['e_Teff']
-                info['epos_Teff']=info['e_Teff']
-                info['e_d']=0.5*(abs(info['epos_dist'])+abs(info['eneg_dist']))
-                info['e_rad']=0.5*(abs(info['eneg_Rad'])+abs(info['epos_Rad']))
+                    info=info.rename(index={'KIC':'ID','Gaia':'GAIA',
+                                             'Dist':'dist','E_Dist':'epos_dist','e_Dist':'eneg_dist',
+                                             'R_':'rad','E_R_':'epos_Rad', 'e_R_':'eneg_Rad',
+                                             '_RA':'ra','_DE':'dec'})
+                    info['eneg_Teff']=info['e_Teff']
+                    info['epos_Teff']=info['e_Teff']
+                    info['e_d']=0.5*(abs(info['epos_dist'])+abs(info['eneg_dist']))
+                    info['e_rad']=0.5*(abs(info['eneg_Rad'])+abs(info['epos_Rad']))
 
-                radec = SkyCoord(info['ra']*u.deg,info['dec']*u.deg)
-                print("K2 info from: https://exoplanetarchive.ipac.caltech.edu/cgi-bin/nstedAPI/nph-nstedAPI?table=q1_q17_dr25_supp_stellar&select=kepid,teff,teff_err1,teff_err2,teff_prov,logg,logg_err1,logg_err2,feh,radius,radius_err1,radius_err2,mass,mass_err1,mass_err2&order=kepid&format=csv&where=kepid=%27"+str(int(ID))+"%27")
-                xtra=pd.read_csv("https://exoplanetarchive.ipac.caltech.edu/cgi-bin/nstedAPI/nph-nstedAPI?table=q1_q17_dr25_supp_stellar&select=kepid,teff,teff_err1,teff_err2,teff_prov,logg,logg_err1,logg_err2,feh,radius,radius_err1,radius_err2,mass,mass_err1,mass_err2&format=csv&where=kepid=%27"+str(int(ID))+"%27").iloc[0]
-                if (xtra['radius']-info['rad'])<(0.5*xtra['radius_err1']):
+                    radec = SkyCoord(info['ra']*u.deg,info['dec']*u.deg)
+
+                else:
+                    info={}
+                
+                #Getting Kepler info from the KIC
+                xtra=pd.read_csv("https://exoplanetarchive.ipac.caltech.edu/cgi-bin/nstedAPI/nph-nstedAPI?table=q1_q17_dr25_supp_stellar&select=kepid,ra,dec,teff,teff_err1,teff_err2,teff_prov,logg,logg_err1,logg_err2,feh,radius,radius_err1,radius_err2,mass,mass_err1,mass_err2&format=csv&where=kepid=%27"+str(int(ID))+"%27")
+                if xtra.shape[0]==0:
+                    xtra=pd.read_csv("https://exoplanetarchive.ipac.caltech.edu/cgi-bin/nstedAPI/nph-nstedAPI?table=q1_q17_dr25_stellar&select=kepid,ra,dec,teff,teff_err1,teff_err2,teff_prov,logg,logg_err1,logg_err2,feh,radius,radius_err1,radius_err2,mass,mass_err1,mass_err2&format=csv&where=kepid=%27"+str(int(ID))+"%27")
+                if xtra.shape[0]==0:
+                    xtra=pd.read_csv("https://exoplanetarchive.ipac.caltech.edu/cgi-bin/nstedAPI/nph-nstedAPI?table=keplerstellar&select=kepid,ra,dec,teff,teff_err1,teff_err2,teff_prov,logg,logg_err1,logg_err2,feh,radius,radius_err1,radius_err2,mass,mass_err1,mass_err2&format=csv&where=kepid=%27"+str(int(ID))+"%27")
+                
+                
+                if info=={} and xtra.shape[0]>0:
+                    info=xtra.iloc[0]
+                    print({col:col.replace('radius','rad') for col in info.index if 'radius' in col})
+                    info=info.rename(index={col:col.replace('radius','rad') for col in info.index if 'radius' in col})
+                    info=info.rename(index={col:'eneg_'+col.replace('_err2','') for col in info.index if '_err2' in col})
+                    info=info.rename(index={col:'epos_'+col.replace('_err1','') for col in info.index if '_err1' in col})
+                    radec=SkyCoord(info['ra']*u.deg,info['dec']*u.deg)
+                elif xtra.shape[0]>0 and (xtra['radius']-info['rad'])<(0.5*xtra['radius_err1']):
+                    xtra=xtra.iloc[0]
                     info['mass']=xtra['mass']
                     info['eneg_mass']=xtra['mass_err1']
                     info['epos_mass']=xtra['mass_err2']
@@ -1213,8 +1233,8 @@ def getStellarInfoFromCsv(ID,mission,k2tab=None,keptabs=None):
                     info['eneg_logg']=xtra['logg_err1']
                     info['epos_logg']=xtra['logg_err2']
                     info['e_logg']=0.5*(abs(info['eneg_logg'])+abs(info['epos_logg']))
-
                     info['feh']=xtra['feh']
+                    
             k2tab=None
             epicdat=None
         elif mission.lower()=='k2':
