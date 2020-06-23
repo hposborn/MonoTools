@@ -334,7 +334,7 @@ def openEverest(epic,camp,pers=None,durs=None,t0s=None,use_ppt=True):
     lcev={}
     for c in camp:
         try:
-            st1=everest.Everest(int(epic),season=c)
+            st1=everest.Everest(int(epic),season=c,show_progress=False)
 
             if pers is not None and durs is not None and t0s is not None:
                 #Recomputing lightcurve given planets
@@ -363,6 +363,7 @@ def openEverest(epic,camp,pers=None,durs=None,t0s=None,use_ppt=True):
             print(len(lcs),lcs[-1])
         except:
             print(c,"not possible to load")
+            return None
         #elif int(camp)>=14:
         #    lcloc='https://archive.stsci.edu/hlsps/everest/v2/c'+str(int(camp))+'/'+str(epic)[:4]+'00000/'+str(epic)[4:]+'/hlsp_everest_k2_llc_'+str(epic)+'-c'+str(int(camp))+'_kepler_v2.0_lc.fits'
         #    lcev=openFits(fits.open(lcloc),lcloc)
@@ -377,14 +378,8 @@ def getK2lc(epic,camp,saveloc=None,pers=None,durs=None,t0s=None,use_ppt=True):
     from urllib.request import urlopen
     import everest
     lcs=[]
-    try:
-        lcs+=[openEverest(int(epic),camp,pers=pers,durs=durs,t0s=t0s,use_ppt=use_ppt)]
-    except:
-        print("No everest")
-    try:
-        lcs+=[openVand(int(epic),camp,use_ppt=use_ppt)]
-    except:
-        print("No vand")
+    lcs+=[openEverest(int(epic),camp,pers=pers,durs=durs,t0s=t0s,use_ppt=use_ppt)]
+    lcs+=[openVand(int(epic),camp,use_ppt=use_ppt)]
     if len(lcs)==0:
         try:
             return [openPDC(int(epic),int(camp),use_ppt=use_ppt)]
