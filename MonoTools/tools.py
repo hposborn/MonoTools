@@ -72,7 +72,7 @@ def getK2lc(epic,camp,saveloc=None,pers=None,durs=None,t0s=None,use_ppt=True):
     import everest
     lcs=[]
     try:
-        lcs+=openEverest(int(epic),int(camp),pers=pers,durs=durs,t0s=t0s,use_ppt=use_ppt)
+        lcs+=[openEverest(int(epic),int(camp),pers=pers,durs=durs,t0s=t0s,use_ppt=use_ppt)]
     except:
         print("No everest")
     try:
