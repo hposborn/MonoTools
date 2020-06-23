@@ -33,7 +33,6 @@ if not os.path.isdir(x_file_loc):
 
 #Functions needed to make this stream logging work:
 sys.stdout.isatty = lambda: False
-sys.stdout.encoding = sys.getdefaultencoding()
 
 class StreamToLogger(object):
     """
