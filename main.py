@@ -19,7 +19,6 @@ if os.environ.get('MONOTOOLSPATH') is None:
     MonoData_savepath = os.path.join(os.path.dirname( __file__ ),'data')
 else:
     MonoData_savepath = os.environ.get('MONOTOOLSPATH')
-
     
 id_dic={'TESS':'TIC','tess':'TIC','Kepler':'KIC','kepler':'KIC','KEPLER':'KIC',
         'K2':'EPIC','k2':'EPIC','CoRoT':'CID','corot':'CID'}
@@ -105,5 +104,6 @@ if not os.path.exists(os.path.join(x_file_loc,id_dic[mission]+str(ID).zfill(11)+
                                     variable_llk_thresh=variable_llk_thresh,file_loc=file_loc,
                                     plot=plot,do_fit=do_fit,re_vet=re_vet,re_fit=re_fit, use_GP=False)
     except Exception as e:
-        print(e, ID,mission,"problem")
+        exc_type, exc_obj, exc_tb = sys.exc_info()
+        print(e, exc_type, os.path.split(exc_tb.tb_frame.f_code.co_filename)[1], exc_tb.tb_lineno, ID,mission,"problem")
 

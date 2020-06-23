@@ -28,7 +28,6 @@ import logging
 logging.getLogger('matplotlib.font_manager').disabled = True
 
 MonoData_tablepath = os.path.join('/'.join(os.path.dirname( __file__ ).split('/')[:-1]),'data','tables')
-print("table path:",MonoData_tablepath)
 if os.environ.get('MONOTOOLSPATH') is None:
     MonoData_savepath = os.path.join('/'.join(os.path.dirname( __file__ ).split('/')[:-1]),'data')
 else:
