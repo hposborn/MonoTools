@@ -401,6 +401,7 @@ def K2_lc(epic,pers=None,durs=None,t0s=None, use_ppt=True):
     lcs=[]
     print("K2 campaigns to search:",str(df['campaign']).split(','))
     for camp in str(df['campaign']).split(','):
+        print(camp,epic)
         lcs+=[getK2lc(epic,camp,pers=pers,durs=durs,t0s=t0s, use_ppt=use_ppt)]
     lcs=lcStack(lcs)
     print(lcs)

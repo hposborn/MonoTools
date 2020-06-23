@@ -62,7 +62,6 @@ class StreamToLogger(object):
             self.logger.log(self.log_level, self.linebuf.rstrip())
         self.linebuf = ''
 
-
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s:%(levelname)s:%(name)s:%(message)s',
@@ -107,7 +106,7 @@ if not os.path.exists(os.path.join(x_file_loc,id_dic[mission]+str(ID).zfill(11)+
                                     variable_llk_thresh=variable_llk_thresh,file_loc=file_loc,
                                     plot=plot, do_fit=do_fit, use_GP=False)
     except Exception as e:
-        traceback.print_exc()
+        #traceback.print_exc()
         exc_type, exc_obj, exc_tb = sys.exc_info()
         print(e, exc_type, os.path.split(exc_tb.tb_frame.f_code.co_filename)[1], exc_tb.tb_lineno, ID,mission,"problem")
         
