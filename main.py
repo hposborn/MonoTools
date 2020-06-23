@@ -1,4 +1,5 @@
 import sys
+
 import logging
 import os
 import traceback
@@ -29,6 +30,10 @@ mission=sys.argv[2]
 x_file_loc=MonoData_savepath+'/'+id_dic[mission]+str(ID).zfill(11)
 if not os.path.isdir(x_file_loc):
     os.mkdir(x_file_loc)
+
+#Functions needed to make this stream logging work:
+sys.stdout.isatty = lambda: False
+sys.stdout.encoding = sys.getdefaultencoding()
 
 class StreamToLogger(object):
     """

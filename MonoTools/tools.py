@@ -277,7 +277,7 @@ def openPDC(epic,camp,use_ppt=True):
     else:
         urlfilename1='https://archive.stsci.edu/missions/k2/lightcurves/c'+str(int(camp))+'/'+str(epic)[:4]+'00000/'+str(epic)[4:6]+'000/ktwo'+str(epic)+'-c'+str(camp).zfill(2)+'_llc.fits'
     if requests.get(urlfilename1, timeout=600).status_code==200:
-        with fits.open(urlfilename1) as hdus:
+        with fits.open(urlfilename1,show_progress=False) as hdus:
             lc=openFits(hdus,urlfilename1,mission='kepler',use_ppt=use_ppt)
         return lc
     else:
@@ -298,11 +298,11 @@ def openVand(epic,camp,v=1,use_ppt=True):
         url1='http://archive.stsci.edu/missions/hlsp/k2sff/c'+str(int(camp))+'1/'+str(epic)[:4]+'00000/'+str(epic)[4:]+'/hlsp_k2sff_k2_lightcurve_'+str(epic)+'-c'+str(int(camp))+'1_kepler_v1_llc.fits'
         print("Vanderburg LC at ",url1)
         if requests.get(url1, timeout=600).status_code==200:
-            with fits.open(url1) as hdus:
+            with fits.open(url1,show_progress=False) as hdus:
                 lcvand+=[openFits(hdus,url1,mission='k2',use_ppt=use_ppt)]
         url2='http://archive.stsci.edu/missions/hlsp/k2sff/c'+str(int(camp))+'2/'+str(epic)[:4]+'00000/'+str(epic)[4:]+'/hlsp_k2sff_k2_lightcurve_'+str(epic)+'-c'+str(int(camp))+'2_kepler_v1_llc.fits'
         if requests.get(url1, timeout=600).status_code==200:
-            with fits.open(url1) as hdus:
+            with fits.open(url1,show_progress=False) as hdus:
                 lcvand+=[openFits(hdus,url2,mission='k2',use_ppt=use_ppt)]
     elif camp=='e':
         print("Engineering data")
@@ -317,7 +317,7 @@ def openVand(epic,camp,v=1,use_ppt=True):
     else:
         urlfitsname='http://archive.stsci.edu/missions/hlsp/k2sff/c'+str(camp)+'/'+str(epic)[:4]+'00000/'+str(epic)[4:]+'/hlsp_k2sff_k2_lightcurve_'+str(epic)+'-c'+str(camp)+'_kepler_v'+str(int(v))+'_llc.fits'.replace(' ','')
         if requests.get(urlfitsname, timeout=600).status_code==200:
-            with fits.open(urlfitsname) as hdus:
+            with fits.open(urlfitsname,show_progress=False) as hdus:
                 lcvand+=[openFits(hdus,urlfitsname,mission='k2',use_ppt=use_ppt)]
             print("Extracted vanderburg LC from ",urlfitsname)
         else:
@@ -446,7 +446,7 @@ def getKeplerLC(kic,cadence='long',use_ppt=True):
             h = httplib2.Http()
             resp = h.request(lcloc, 'HEAD')
             if int(resp[0]['status']) < 400:
-                with fits.open(lcloc) as hdu:
+                with fits.open(lcloc,show_progress=False) as hdu:
                     ilc=openFits(hdu,lcloc,mission='kepler',use_ppt=use_ppt)
                     if ilc is not None:
                         lcs+=[ilc]
@@ -457,7 +457,7 @@ def getKeplerLC(kic,cadence='long',use_ppt=True):
             h = httplib2.Http()
             resp = h.request(lcloc, 'HEAD')
             if int(resp[0]['status']) < 400:
-                with fits.open(lcloc) as hdu:
+                with fits.open(lcloc,show_progress=False) as hdu:
                     ilc=openFits(hdu,lcloc,mission='kepler',use_ppt=use_ppt)
                     if ilc is not None:
                         lcs+=[ilc]
@@ -567,7 +567,7 @@ def TESS_lc(tic,sectors='all',use_ppt=True, coords=None, use_eleanor=True, data_
             h = httplib2.Http()
             resp = h.request(fitsloc, 'HEAD')
             if int(resp[0]['status']) < 400:
-                with fits.open(fitsloc) as hdus:
+                with fits.open(fitsloc,show_progress=False) as hdus:
                     lcs+=[openFits(hdus,fitsloc,mission='tess',use_ppt=use_ppt)]
                     lchdrs+=[hdus[0].header]
             else:
