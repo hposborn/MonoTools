@@ -1,6 +1,7 @@
 import sys
 import logging
 import os
+import traceback
 
 import matplotlib as mpl
 #Here, assuming this is server use, we make sure there's no X-server needed:
@@ -100,8 +101,9 @@ if not os.path.exists(os.path.join(x_file_loc,id_dic[mission]+str(ID).zfill(11)+
                                     tcen=tcen,tdur=tdur,overwrite=overwrite,do_search=do_search,
                                     useL2=useL2,PL_ror_thresh=PL_ror_thresh,
                                     variable_llk_thresh=variable_llk_thresh,file_loc=file_loc,
-                                    plot=plot,do_fit=do_fit, use_GP=False)
+                                    plot=plot, do_fit=do_fit, use_GP=False)
     except Exception as e:
+        traceback.print_exc()
         exc_type, exc_obj, exc_tb = sys.exc_info()
         print(e, exc_type, os.path.split(exc_tb.tb_frame.f_code.co_filename)[1], exc_tb.tb_lineno, ID,mission,"problem")
-
+        
