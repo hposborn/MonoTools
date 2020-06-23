@@ -51,50 +51,6 @@ id_dic={'TESS':'TIC','tess':'TIC','Kepler':'KIC','kepler':'KIC','KEPLER':'KIC',
 
 #goto='/Users/hosborn' if 'Users' in os.path.dirname(os.path.realpath(__file__)).split('/') else '/home/hosborn'
 
-def K2_lc(epic,pers=None,durs=None,t0s=None, use_ppt=True):
-    '''
-    # Opens K2 lc
-    '''
-    df,_=starpars.GetExoFop(epic,"k2")
-    lcs=[]
-    print("K2 campaigns to search:",df['campaign'])
-    for camp in str(df['campaign']).split(','):
-        lcs+=[getK2lc(epic,camp,pers=pers,durs=durs,t0s=t0s, use_ppt=use_ppt)]
-        
-    lcs=lcStack(lcs)
-    return lcs,df
-
-def getK2lc(epic,camp,saveloc=None,pers=None,durs=None,t0s=None,use_ppt=True):
-    '''
-    Gets (or tries to get) all LCs from K2 sources. Order is Everest > Vanderburg > PDC.
-    '''
-    from urllib.request import urlopen
-    import everest
-    lcs=[]
-    try:
-        lcs+=[openEverest(int(epic),int(camp),pers=pers,durs=durs,t0s=t0s,use_ppt=use_ppt)]
-    except:
-        print("No everest")
-    try:
-        lcs+=[openVand(int(epic),camp,use_ppt=use_ppt)]
-    except:
-        print("No vand")
-    if len(lcs)==0:
-        try:
-            return openPDC(int(epic),int(camp),use_ppt=use_ppt)
-            
-        except:
-            print("No LCs for "+str(epic)+" campaign "+str(camp)+" at all")
-            return None
-    elif len(lcs)==1:
-        return lcs[0]
-    elif len(lcs)>1:
-        stds = np.array([np.nanmedian(abs(np.diff(l['flux'][l['mask']]))) for l in lcs])
-        if len(lcs[0]['time'])>1.5*len(lcs[1]['time']) or ((len(lcs[0]['time'])>0.66*len(lcs[1]['time']))&(stds[0]<stds[1])):
-            lc=lcs[0]
-        else:
-            lc=lcs[1]
-        return lc
 
 def openFits(f,fname,mission,cut_all_anom_lim=4.0,use_ppt=True):
     '''
@@ -330,14 +286,14 @@ def openPDC(epic,camp,use_ppt=True):
 def openVand(epic,camp,v=1,use_ppt=True):
     lcvand=[]
     #camp=camp.split(',')[0] if len(camp)>3
-    if camp=='10' or camp==10:
+    if camp=='10' or camp==10 or camp=='10.0':
         camp='102'
-    elif camp=='et' or camp=='E':
+    elif camp=='et' or camp=='E' or camp=='e':
         camp='e'
         #https://www.cfa.harvard.edu/~avanderb/k2/ep60023342alldiagnostics.csv
     else:
-        camp=str(int(camp)).zfill(2)
-    if camp in ['09','11',9,11]:
+        camp=str(int(float(camp))).zfill(2)
+    if camp in ['09','11']:
         #C91: https://archive.stsci.edu/missions/hlsp/k2sff/c91/226200000/35777/hlsp_k2sff_k2_lightcurve_226235777-c91_kepler_v1_llc.fits
         url1='http://archive.stsci.edu/missions/hlsp/k2sff/c'+str(int(camp))+'1/'+str(epic)[:4]+'00000/'+str(epic)[4:]+'/hlsp_k2sff_k2_lightcurve_'+str(epic)+'-c'+str(int(camp))+'1_kepler_v1_llc.fits'
         print("Vanderburg LC at ",url1)
@@ -370,10 +326,10 @@ def openVand(epic,camp,v=1,use_ppt=True):
  
 def openEverest(epic,camp,pers=None,durs=None,t0s=None,use_ppt=True):
     import everest
-    if int(camp) in [10,11]:
-        camp=[int(str(int(camp))+'1'),int(str(int(camp))+'2')]
+    if camp in [10,11,10.0,11.0,'10','11','10.0','11.0']:
+        camp=[int(str(int(float(camp)))+'1'),int(str(int(float(camp)))+'2')]
     else:
-        camp=[int(camp)]
+        camp=[int(float(camp))]
     lcs=[]
     lcev={}
     for c in camp:
@@ -404,14 +360,58 @@ def openEverest(epic,camp,pers=None,durs=None,t0s=None,use_ppt=True):
                       'quality':np.vstack((lcev['quality'],st1.quality))}
             hdr={'cdpp':st1.cdpp,'ID':st1.ID,'Tmag':st1.mag,'mission':'K2','name':st1.name,'campaign':camp,'lcsource':'everest'}
             lcs+=[openFits(lcev,hdr,mission='k2',use_ppt=use_ppt)]
+            print(len(lcs),lcs[-1])
         except:
             print(c,"not possible to load")
         #elif int(camp)>=14:
         #    lcloc='https://archive.stsci.edu/hlsps/everest/v2/c'+str(int(camp))+'/'+str(epic)[:4]+'00000/'+str(epic)[4:]+'/hlsp_everest_k2_llc_'+str(epic)+'-c'+str(int(camp))+'_kepler_v2.0_lc.fits'
         #    lcev=openFits(fits.open(lcloc),lcloc)
     #print(np.unique(lcev['quality']))
-    return lcs
+    return lcStack(lcs)
    
+
+def getK2lc(epic,camp,saveloc=None,pers=None,durs=None,t0s=None,use_ppt=True):
+    '''
+    Gets (or tries to get) all LCs from K2 sources. Order is Everest > Vanderburg > PDC.
+    '''
+    from urllib.request import urlopen
+    import everest
+    lcs=[]
+    try:
+        lcs+=[openEverest(int(epic),camp,pers=pers,durs=durs,t0s=t0s,use_ppt=use_ppt)]
+    except:
+        print("No everest")
+    try:
+        lcs+=[openVand(int(epic),camp,use_ppt=use_ppt)]
+    except:
+        print("No vand")
+    if len(lcs)==0:
+        try:
+            return [openPDC(int(epic),int(camp),use_ppt=use_ppt)]
+        except:
+            print("No LCs for "+str(epic)+" campaign "+str(camp)+" at all")
+            return None
+    elif len(lcs)>1:
+        stds = np.array([np.nanmedian(abs(np.diff(l['flux'][l['mask']]))) for l in lcs])
+        if len(lcs[0]['time'])>1.5*len(lcs[1]['time']) or ((len(lcs[0]['time'])>0.66*len(lcs[1]['time']))&(stds[0]<stds[1])):
+            return lcs[0]
+        else:
+            return lcs[1]
+
+def K2_lc(epic,pers=None,durs=None,t0s=None, use_ppt=True):
+    '''
+    # Opens K2 lc
+    '''
+    df,_=starpars.GetExoFop(epic,"k2")
+    lcs=[]
+    print("K2 campaigns to search:",str(df['campaign']).split(','))
+    for camp in str(df['campaign']).split(','):
+        lcs+=[getK2lc(epic,camp,pers=pers,durs=durs,t0s=t0s, use_ppt=use_ppt)]
+    lcs=lcStack(lcs)
+    print(lcs)
+    return lcs,df
+
+
 def getKeplerLC(kic,cadence='long',use_ppt=True):
     '''
     This module uses the KIC of a planet candidate to download lightcurves
