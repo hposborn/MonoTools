@@ -1039,9 +1039,9 @@ def make_numeric(df):
 
 def MainSequenceFit(dist,V):
     #In the case where we only have distance and an optical magnitude, let's just make a guess with the bolometric magnitude
-    
+    from .tools import MonoData_tablepath
     #Loading fits of absolute V mag versus
-    fits=pickle.load(open(os.path.join(os.path.dirname(os.path.abspath( __file__ )),"BolMag_interpolations.models"),"rb"))
+    fits=pickle.load(open(os.path.join(MonoData_tablepath,"BolMag_interpolations.models"),"rb"))
     
     M_V = V - 5*np.log(dist/10)
     info={'rad':fits[0](M_V),'mass':fits[1](M_V),'teff':fits[2](M_V)}
@@ -1212,7 +1212,6 @@ def getStellarInfoFromCsv(ID,mission,k2tab=None,keptabs=None):
             k2tab=None
             epicdat=None
         elif mission.lower()=='k2':
-            MonoData_tablepath = os.path.join('/'.join(os.path.dirname( __file__ ).split('/')[:-1]),'data','tables')
             if k2tab is None:
                 if not os.path.isfile(os.path.join(MonoData_tablepath,"k2_table.txt")):
                     print("Downloading K2 Stellar parameters table")
