@@ -621,7 +621,6 @@ def TESS_lc(tic,sectors='all',use_ppt=True, coords=None, use_eleanor=True, data_
 def openLightCurve(ID,mission,use_ppt=True,other_data=True,jd_base=2457000,**kwargs):
     #Doing this to get coordinates:
     df,_=starpars.GetExoFop(ID,mission)
-    print(df)
     #Getting coordinates from df in order to search other surveys for ID/data:
     ra,dec=df['ra'],df['dec']
     if type(ra)==str and (ra.find(':')!=-1)|(ra.find('h')!=-1):
