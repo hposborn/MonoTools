@@ -1088,9 +1088,9 @@ def RenameSeries(info):
                 #NO ERRORS PRESENT???
                 info['eneg_'+col]=info[col]*0.33
             elif col not in info or info[col] is None:
-                info[col]=0.0
-                info['eneg_'+col]=0.0
-                info['epos_'+col]=0.0
+                info[col]=np.nan
+                info['eneg_'+col]=np.nan
+                info['epos_'+col]=np.nan
             if ('epos_'+col not in info.index or not np.isfinite(info['epos_'+col]) or info['epos_'+col]==0.0) and col in info and info[col] is not None:
                 info['epos_'+col]=info[col]*0.33
     return info
