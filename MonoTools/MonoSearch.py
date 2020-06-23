@@ -101,7 +101,7 @@ def QuickMonoFit(lc,it0,dur,Rs=None,Ms=None,Teff=None,useL2=False,fit_poly=True,
         lc=tools.lcFlatten(lc,winsize=9*dur,stepsize=0.1*dur,transit_mask=abs(xinit)>dur*0.5)
     if how=='periodic':
         assert np.sum(nearby&mask)>0
-        print(lc[timeindex][nearby])
+        #print(lc[timeindex][nearby])
         
         x = xinit[nearby&mask]+it0 #re-aligning this fake "mono" with the t0 provided
         y = lc[fluxindex][nearby&mask][np.argsort(x)]
@@ -127,7 +127,7 @@ def QuickMonoFit(lc,it0,dur,Rs=None,Ms=None,Teff=None,useL2=False,fit_poly=True,
         else:
             y=lc[fluxindex][nearby&mask]
             y-=np.nanmedian(y)
-            print(np.sum(abs(x-it0)<0.6),it0,np.min(x),np.max(x))
+            #print(np.sum(abs(x-it0)<0.6),it0,np.min(x),np.max(x))
             init_poly=np.polyfit(x[abs(x-it0)<0.6]-it0,y[abs(x-it0)<0.6],polyorder)
             oot_flux=np.nanmedian((y-np.polyval(init_poly,x-it0))[abs(x-it0)>0.65*dur])
             int_flux=np.nanmedian((y-np.polyval(init_poly,x-it0))[abs(x-it0)<0.35*dur])
@@ -564,17 +564,17 @@ def MonoTransitSearch(lc,ID,mission, Rs=None,Ms=None,Teff=None,
             detns[str(nix).zfill(2)]['P_min']       = calc_min_P(uselc[:,0],detn_row['tcen'],detn_row['init_dur'])
             
             #Removing the regions around this detection from our array
-            print(np.sum(abs(outparams['tcen']-detn_row['tcen'])<np.where(outparams['init_dur']<detn_row['init_dur'],
-                                                                0.66*detn_row['init_dur'], 0.66*outparams['init_dur'])))
-            print(np.sum(signfct[abs(outparams['tcen']-detn_row['tcen'])<np.where(outparams['init_dur']<detn_row['init_dur'],
-                                                                0.66*detn_row['init_dur'], 0.66*outparams['init_dur'])]))
+            #print(np.sum(abs(outparams['tcen']-detn_row['tcen'])<np.where(outparams['init_dur']<detn_row['init_dur'],
+            #                                                    0.66*detn_row['init_dur'], 0.66*outparams['init_dur'])))
+            #print(np.sum(signfct[abs(outparams['tcen']-detn_row['tcen'])<np.where(outparams['init_dur']<detn_row['init_dur'],
+            #                                                    0.66*detn_row['init_dur'], 0.66*outparams['init_dur'])]))
             away_from_this_detn=abs(outparams['tcen']-detn_row['tcen'])>np.where(outparams['init_dur']<detn_row['init_dur'],
                                                                 0.66*detn_row['init_dur'], 0.66*outparams['init_dur'])
             signfct=signfct&away_from_this_detn
             n_sigs=np.sum(signfct)
-            print(n_sigs,detns[str(nix).zfill(2)]['poly_DeltaBIC'],np.sum(signfct[abs(outparams['tcen']-detn_row['tcen'])<np.where(outparams['init_dur']<detn_row['init_dur'],0.66*detn_row['init_dur'], 0.66*outparams['init_dur'])]))
+            #print(n_sigs,detns[str(nix).zfill(2)]['poly_DeltaBIC'],np.sum(signfct[abs(outparams['tcen']-detn_row['tcen'])<np.where(outparams['init_dur']<detn_row['init_dur'],0.66*detn_row['init_dur'], 0.66*outparams['init_dur'])]))
             nix+=1
-        print(np.percentile(outparams['poly_DeltaBIC'],[5,16,50,84,95]))
+        #print(np.percentile(outparams['poly_DeltaBIC'],[5,16,50,84,95]))
     else:
         print("n_sigs == 0")
         detns={}
@@ -862,10 +862,8 @@ def PeriodicPlanetSearch(lc, ID, planets, use_binned=False, use_flat=True, binsi
         modx = lc[prefix+'time']-t_zero
         mody = lc[prefix+'flux'+suffix] * lc['flux_unit']+(1.0-np.nanmedian(lc[prefix+'flux'+suffix][anommask])*lc['flux_unit'])
         #print(n_pl,len(mody),len(anommask),np.sum(anommask),len(plmask),np.sum(plmask))
-        print(n_pl,np.sum(plmask),np.sum(anommask))
         if np.sum(plmask)>0:
             mody[plmask] = mody[anommask][np.random.choice(np.sum(anommask),np.sum(plmask))][:]
-            print(n_pl,np.sum(plmask),np.sum(anommask))
         #anommask *= tools.CutAnomDiff(mody)
         #print(n_pl,"norm_mask:",np.sum(lc['mask']),"anoms:",np.sum(anommask),"pl mask",np.sum(plmask),"total len",len(anommask))
         model = transitleastsquares(modx[anommask], mody[anommask])
