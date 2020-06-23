@@ -152,7 +152,7 @@ def TICdata(tics,sect=None,getImageData=False):
     return tess_df
 
 
-def QueryGaiaAndSurveys(sc,CONESIZE=15*u.arcsec,savefile=None,mission='tess'):
+def QueryGaiaAndSurveys(sc,CONESIZE=15*u.arcsec,savefile=None,mission='tess',loop_gaia=False):
     #Getting Gaia DR2 RVs:
     job = Gaia.launch_job_async("SELECT * \
     FROM gaiadr2.gaia_source \
@@ -180,68 +180,17 @@ def QueryGaiaAndSurveys(sc,CONESIZE=15*u.arcsec,savefile=None,mission='tess'):
     
     alldat=pd.DataFrame()
     
-    #Looping through Gaia results to find best match
-    for n,row in enumerate(gaia_res.iterrows()):
-        #Name of series becomes 00_gaiaid (for target) and then 01_gaiaid (for subsequent blends)
-        sername=str(list(np.sort(closeness)).index(closeness[n]))+'_'+str(row[1]['source_id'])
-        alldattemp=pd.Series({'mission':mission},name=sername)
-        #print(alldattemp)
-        alldattemp=alldattemp.append(gaia_res.iloc[n])
-        print("Querying catalogues. "+str(n)+" of "+str(len(gaia_res)))
-        #multiple rows, let's search using the Gaia RA/DECs
-        #newra=row[1]['ra']
-        #newdec=row[1]['dec']
-        #print(row[1]['designation'],"<desig, id>",int(row[1]['source_id']))
-        
-        if APASS is not None:
-            
-            #"closeness algorithm = [dist in arcsec]*exp(0.3*[delta mag])
-            closeness_apass=3600*np.hypot(row[1]['ra']-APASS['RA (deg)'],row[1]['dec']-APASS['Dec (deg)'])*np.exp(0.3*(row[1]['phot_g_mean_mag']-APASS['Sloan g\' (SG)']))
-            if np.min(closeness_apass)<2.5:
-                #Takes best APASS source if there is a source: (within 1 arcsec and deltamag<3) or (<2.5arcsec and deltamag=0.0)
-                #Appending APASS info:
-                nrby_apas=APASS.iloc[np.argmin(closeness_apass)]
-                nrby_apas=nrby_apas.rename(index={col:'ap_'+col for col in nrby_apas.index if col not in gaia_res.columns})
-
-                alldattemp=alldattemp.append(nrby_apas.drop([col for col in gaia_res.columns if col in nrby_apas.index]))
-        
-        dr=int(row[1]['designation'].decode("utf-8")[7])
-        gid=row[1]['source_id']
-        #Now searching the cross-matched cats with the GAIA ID
-        jobs={}
-        jobs['2m'] = Gaia.launch_job_async("SELECT * \
-            FROM gaiadr"+str(dr)+".gaia_source AS g, gaiadr"+str(dr)+".tmass_best_neighbour AS tbest, gaiadr1.tmass_original_valid AS tmass \
-            WHERE g.source_id = tbest.source_id AND tbest.tmass_oid = tmass.tmass_oid \
-            AND g.source_id = "+str(gid), dump_to_file=False,verbose=False)
-        jobs['sd'] = Gaia.launch_job_async("SELECT * \
-            FROM gaiadr"+str(dr)+".gaia_source AS g, gaiadr"+str(dr)+".sdss"+"_"[:(2-dr)]+"dr9_best_neighbour AS sdbest, gaiadr1.sdssdr9_original_valid AS sdss \
-            WHERE g.source_id = sdbest.source_id AND sdbest.sdssdr9_oid = sdss.sdssdr9_oid \
-            AND g.source_id = "+str(gid), dump_to_file=False,verbose=False)
-        jobs['ur'] = Gaia.launch_job_async("SELECT * \
-            FROM gaiadr"+str(dr)+".gaia_source AS g, gaiadr"+str(dr)+".urat1_best_neighbour AS uratbest, gaiadr1.urat1_original_valid AS urat1 \
-            WHERE g.source_id = uratbest.source_id AND uratbest.urat1_oid = urat1.urat1_oid \
-            AND g.source_id = "+str(gid), dump_to_file=False,verbose=False)
-        jobs['wise'] = Gaia.launch_job_async("SELECT * \
-            FROM gaiadr"+str(dr)+".gaia_source AS g, gaiadr"+str(dr)+".allwise_best_neighbour AS wisest, gaiadr1.allwise_original_valid AS wise \
-            WHERE g.source_id = wisest.source_id AND wisest.allwise_oid = wise.allwise_oid \
-            AND g.source_id = "+str(gid), dump_to_file=False,verbose=False)
-        for job in jobs:
-            res=jobs[job].get_results().to_pandas()
-            if res.shape[0]>0:
-                #Making 
-                res=res.rename(columns={col:job+'_'+col for col in res.columns if col not in gaia_res.columns})
-                alldattemp=alldattemp.append(res.iloc[0].drop([col for col in gaia_res.columns if col in res.columns]))
-        alldattemp=alldattemp.drop_duplicates()
-        #print(alldattemp,,job_sd.get_results().to_pandas(),
-        #                      job_ur.get_results().to_pandas(),job_wise.get_results().to_pandas())
-        #alldattemp=pd.concat([alldattemp,job_2m.get_results().to_pandas(),job_sd.get_results().to_pandas(),
-        #                      job_ur.get_results().to_pandas(),job_wise.get_results().to_pandas()],
-        #                     axis=1)
-        alldat=alldat.append(alldattemp.rename(sername))
-        
+    if loop_gaia:
+        #Looping through Gaia results to find best match
+        for n,index in enumerate(gaia_res.index.values):
+            alldat=alldat.append(QueryCats(str(list(np.sort(closeness)).index(closeness[n])),
+                                           gaia_res.loc[index],mission,APASS))
+    else:
+        ser=gaia_res.iloc[np.nanargmin(closeness.values)]
+        alldat=QueryCats("0",ser,mission,APASS)
     
     alldat['dilution_ap']=np.tile(CONESIZE.to(u.arcsec).value,len(alldat))
-    alldat['prop_all_flux']=alldat['phot_g_mean_flux'].values/np.nansum(alldat['phot_g_mean_flux'].values)
+    alldat['prop_all_flux']=alldat['phot_g_mean_flux']/np.nansum(alldat['phot_g_mean_flux'])
     alldat['diluted_by']=1.0-alldat['prop_all_flux']
     if type(alldat)==pd.DataFrame and len(alldat)>1:
         targ=alldat.iloc[np.argmin(closeness)]
@@ -256,6 +205,61 @@ def QueryGaiaAndSurveys(sc,CONESIZE=15*u.arcsec,savefile=None,mission='tess'):
     
     return targ
 
+def QueryCats(n,ser,mission,APASS):
+    #Name of series becomes 00_gaiaid (for target) and then 01_gaiaid (for subsequent blends)
+    sername=str(n)+'_'+str(ser['source_id'])
+    alldattemp=pd.Series({'mission':mission},name=sername)
+    #print(alldattemp)
+    alldattemp=alldattemp.append(ser)
+    #multiple rows, let's search using the Gaia RA/DECs
+    #newra=row[1]['ra']
+    #newdec=row[1]['dec']
+    #print(row[1]['designation'],"<desig, id>",int(ser['source_id']))
+
+    if APASS is not None:
+        #"closeness algorithm = [dist in arcsec]*exp(0.3*[delta mag])
+        closeness_apass=3600*np.hypot(ser['ra']-APASS['RA (deg)'],ser['dec']-APASS['Dec (deg)'])*np.exp(0.3*(ser['phot_g_mean_mag']-APASS['Sloan g\' (SG)']))
+        if np.min(closeness_apass)<2.5:
+            #Takes best APASS source if there is a source: (within 1 arcsec and deltamag<3) or (<2.5arcsec and deltamag=0.0)
+            #Appending APASS info:
+            nrby_apas=APASS.iloc[np.argmin(closeness_apass)]
+            nrby_apas=nrby_apas.rename(index={col:'ap_'+col for col in nrby_apas.index if col not in ser.index})
+
+            alldattemp=alldattemp.append(nrby_apas.drop([col for col in ser.index if col in nrby_apas.index]))
+
+    dr=int(ser['designation'].decode("utf-8")[7])
+    gid=ser['source_id']
+    #Now searching the cross-matched cats with the GAIA ID
+    jobs={}
+    jobs['2m'] = Gaia.launch_job_async("SELECT * \
+        FROM gaiadr"+str(dr)+".gaia_source AS g, gaiadr"+str(dr)+".tmass_best_neighbour AS tbest, gaiadr1.tmass_original_valid AS tmass \
+        WHERE g.source_id = tbest.source_id AND tbest.tmass_oid = tmass.tmass_oid \
+        AND g.source_id = "+str(gid), dump_to_file=False,verbose=False)
+    jobs['sd'] = Gaia.launch_job_async("SELECT * \
+        FROM gaiadr"+str(dr)+".gaia_source AS g, gaiadr"+str(dr)+".sdss"+"_"[:(2-dr)]+"dr9_best_neighbour AS sdbest, gaiadr1.sdssdr9_original_valid AS sdss \
+        WHERE g.source_id = sdbest.source_id AND sdbest.sdssdr9_oid = sdss.sdssdr9_oid \
+        AND g.source_id = "+str(gid), dump_to_file=False,verbose=False)
+    jobs['ur'] = Gaia.launch_job_async("SELECT * \
+        FROM gaiadr"+str(dr)+".gaia_source AS g, gaiadr"+str(dr)+".urat1_best_neighbour AS uratbest, gaiadr1.urat1_original_valid AS urat1 \
+        WHERE g.source_id = uratbest.source_id AND uratbest.urat1_oid = urat1.urat1_oid \
+        AND g.source_id = "+str(gid), dump_to_file=False,verbose=False)
+    jobs['wise'] = Gaia.launch_job_async("SELECT * \
+        FROM gaiadr"+str(dr)+".gaia_source AS g, gaiadr"+str(dr)+".allwise_best_neighbour AS wisest, gaiadr1.allwise_original_valid AS wise \
+        WHERE g.source_id = wisest.source_id AND wisest.allwise_oid = wise.allwise_oid \
+        AND g.source_id = "+str(gid), dump_to_file=False,verbose=False)
+    for job in jobs:
+        res=jobs[job].get_results().to_pandas()
+        if res.shape[0]>0:
+            #Making 
+            res=res.rename(columns={col:job+'_'+col for col in res.columns if col not in ser.index})
+            alldattemp=alldattemp.append(res.iloc[0].drop([col for col in ser.index if col in res.columns]))
+    alldattemp=alldattemp.drop_duplicates()
+    #print(alldattemp,,job_sd.get_results().to_pandas(),
+    #                      job_ur.get_results().to_pandas(),job_wise.get_results().to_pandas())
+    #alldattemp=pd.concat([alldattemp,job_2m.get_results().to_pandas(),job_sd.get_results().to_pandas(),
+    #                      job_ur.get_results().to_pandas(),job_wise.get_results().to_pandas()],
+    #                     axis=1)
+    return alldattemp.rename(sername)
 
 def GetKICinfo(kic):
     #Getting Kepler stellar info from end-of-Kepler Q1-Q17 data table:
@@ -518,8 +522,10 @@ def LoadModel():
 
 def LoadDust(sc,plx,dust='allsky'):
     import mwdust
+    from ..stellar.isoclassify import pipeline
     av=mwdust.SFD()(sc.galactic.l.deg,sc.galactic.b.deg,1000.0/plx)
     #sfdmap(sc.ra.deg.to_string(),sc.dec.deg.to_string())
+    ext={}
     if dust == 'allsky':
         dustmodel = pipeline.query_dustmodel_coords_allsky(sc.ra.deg,sc.dec.deg)
         ext = pipeline.extinction('cardelli')
@@ -615,7 +621,8 @@ def QueryNearbyGaia(sc,CONESIZE,file=None):
 
 
 def CheckSpecCsv(radec,icid,thresh=20*u.arcsec):
-    specs=pd.read_csv(os.path.join(os.path.dirname(os.path.abspath( __file__ )),"spectra_all.csv"))
+    from .tools import MonoData_tablepath
+    specs=pd.read_csv(os.path.join(MonoData_tablepath,"spectra_all.csv"))
     spec_coords=SkyCoord(specs['ra']*u.deg,specs['dec']*u.deg)
     seps=radec.separation(spec_coords)
     
@@ -636,7 +643,7 @@ def CheckSpecCsv(radec,icid,thresh=20*u.arcsec):
 def Assemble_and_run_isoclassify(icid,sc,mission,survey_dat,exofop_dat,errboost=0.2,spec_dat=None,
                                  useGaiaLum=True,useGaiaBR=True,useBV=True,useGaiaSpec=True,
                                  use2mass=True,useGriz=True,useGaiaAg=True):
-    from stellar.isoclassify import classify, pipeline
+    from ..stellar.isoclassify import classify, pipeline
     ############################################
     #    Building isoclassify input data:      #
     ############################################
@@ -771,11 +778,11 @@ def Assemble_and_run_isoclassify(icid,sc,mission,survey_dat,exofop_dat,errboost=
     ############################################
     print("Isoclassifying")
     mod=LoadModel()
-    try:
-        dustmodel,ext = LoadDust(sc,survey_dat.parallax/1000.,dust='allsky')
-        paras = classify.classify(input=x, model=mod, dustmodel=dustmodel, useav=av, ext=ext, plot=0)
-    except:
-        paras = classify.classify(input=x, model=mod)
+    dustmodel,ext = LoadDust(sc,survey_dat.parallax/1000.,dust='allsky')
+    paras = classify.classify(input=x, model=mod, dustmodel=dustmodel, useav=av, ext=ext, plot=0)
+    #except:
+    #    print("excepted")
+    #    paras = classify.classify(input=x, model=mod)
 
     ############################################
     #       Assembling all output data:        #
@@ -1154,7 +1161,7 @@ def getStellarInfoFromCsv(ID,mission,k2tab=None,keptabs=None):
     
     if mission.lower()=='tess':
         info = TICdata(int(ID)).iloc[0]
-        print("TESS object",ID,info.name)
+        print("TESS object",ID,info.name,info)
         k2tab = None
         keptabs = None
         epicdat=None
@@ -1280,6 +1287,7 @@ def getStellarInfoFromCsv(ID,mission,k2tab=None,keptabs=None):
             
     #Switching all e_, E_, etc to uniform column names:
     info=RenameSeries(info)
+    print(info[['rad','logg','teff','mass']])
     if tic_dat is not None:
         tic_dat=RenameSeries(deepcopy(tic_dat))
     if epicdat is not None:
