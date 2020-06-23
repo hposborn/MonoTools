@@ -442,7 +442,8 @@ def MonoTransitSearch(lc,ID,mission, Rs=None,Ms=None,Teff=None,
         logmodeldep=np.log(abs(interpmodels[n](0.0)))
 
         for n_mod,x2s in enumerate(search_xrange):
-            bar.next()
+            
+            #bar.next()
             #minimise single params - depth
             round_tr=abs(uselc[:,0]-x2s)<(transit_zoom*tdur)
             #Centering x array on epoch to search
@@ -513,7 +514,7 @@ def MonoTransitSearch(lc,ID,mission, Rs=None,Ms=None,Teff=None,
                     #outdic.update({'sin_poly_'+str(n):res_sin.x[1+n] for n in range(poly_order)})
                 outparams=outparams.append(pd.Series(outdic,name=len(outparams)))
         #print(n,len(outparams))
-    bar.finish()
+    #bar.finish()
     outparams=outparams.sort_values('tcen')
     #Transit model has to be better than the sin model AND the DeltaBIC w.r.t to the polynomial must be <-10.
     # transit depth must be <0.0,
@@ -788,7 +789,6 @@ def PeriodicPlanetSearch(lc, ID, planets, use_binned=False, use_flat=True, binsi
                          multi_FAP_thresh=0.00125, multi_SNR_thresh=7.0,
                          plot=False, plot_loc=None, mask_prev_planets=True, **kwargs):
     #Searches an LC (ideally masked for the monotransiting planet) for other *periodic* planets.
-    import batman
     from transitleastsquares import transitleastsquares
     print("Using TLS on ID="+str(ID)+" to search for multi-transiting planets")
     

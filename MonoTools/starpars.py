@@ -577,7 +577,6 @@ def QueryNearbyGaia(sc,CONESIZE,file=None):
         CIRCLE('ICRS',"+str(sc.ra.deg)+","+str(sc.dec.deg)+","+str(CONESIZE/3600.0)+"))=1;" \
         , dump_to_file=True,output_file=file)
     '''
-    print(np.shape(df))
     if np.shape(df)[0]>1:
         print(df.shape[0],"stars with mags:",df.phot_g_mean_mag.values,'and teffs:',df.teff_val.values)
         #Taking brightest star as target
