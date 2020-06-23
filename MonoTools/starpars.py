@@ -1127,7 +1127,7 @@ def compileInfos(ID,norminfo,tic_dat,epicdat):
                 info[col]=tic_dat[col]
                 info['epos_'+col]=0.33*tic_dat[col]
                 info['eneg_'+col]=0.33*tic_dat[col]
-            elif norminfo is not None and col in norminfo and norminfo[col] is not None and (type(norminfo[col])==str or np.isfinite(float(col_errs['norm'][0]))):
+            elif norminfo is not None and col in norminfo and norminfo[col] is not None and (type(norminfo[col])==str or np.isfinite(float(norminfo[col]))):
                 info[col]=float(norminfo[col])
                 info['epos_'+col]=0.33*float(norminfo[col])
                 info['eneg_'+col]=0.33*float(norminfo[col])
