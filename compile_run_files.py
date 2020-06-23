@@ -43,11 +43,11 @@ n=0
 for id,row in subset.iterrows():
     icid=str(int(float(non_decimal.sub('',row['id']))))
     if 'pdo6' in socket.gethostname():
-        runfile=runfileloc+id_dic[row['mission']]+icid.zfill(11)+"_run_pdo1.sh"
-        runallfile=runfileloc+"runall_"+str(int(np.floor(n_runs*n/len(subset))))+"_pdo1.sh"
-    elif 'pdo1' in socket.gethostname():
         runfile=runfileloc+id_dic[row['mission']]+icid.zfill(11)+"_run_pdo6.sh"
         runallfile=runfileloc+"runall_"+str(int(np.floor(n_runs*n/len(subset))))+"_pdo6.sh"
+    elif 'pdo1' in socket.gethostname():
+        runfile=runfileloc+id_dic[row['mission']]+icid.zfill(11)+"_run_pdo1.sh"
+        runallfile=runfileloc+"runall_"+str(int(np.floor(n_runs*n/len(subset))))+"_pdo1.sh"
     else:
         runfile=runfileloc+id_dic[row['mission']]+icid.zfill(11)+"_run.sh"
         runallfile=runfileloc+"runall_"+str(int(np.floor(n_runs*n/len(subset))))+".sh"
