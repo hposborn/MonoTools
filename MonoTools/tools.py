@@ -132,8 +132,6 @@ def openFits(f,fname,mission,cut_all_anom_lim=4.0,use_ppt=True):
         #    'flux_err':magerr2flux(f['LightCurve']['AperturePhotometry']['Aperture_002']['RawMagnitudeError'][:],
         #                           f['LightCurve']['AperturePhotometry']['Aperture_002']['RawMagnitude'][:]),
         lc['flux_err']=np.tile(np.nanmedian(abs(np.diff(lc['raw_flux']))),len(lc['time']))
-        lc['flux']=np.tile(np.nanmedian(abs(np.diff(lc['raw_flux']))),len(lc['time']))
-        lc['flux_err']=np.tile(np.nanmedian(abs(np.diff(lc['raw_flux']))),len(lc['time']))
     elif type(f)==eleanor.targetdata.TargetData:
         #Eleanor TESS object
         lc={'time':f.time,'flux':f.corr_flux,'flux_err':f.flux_err,'raw_flux':f.raw_flux,

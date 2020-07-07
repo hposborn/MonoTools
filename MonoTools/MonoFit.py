@@ -1055,8 +1055,8 @@ class monoModel():
                         pm.Potential("match_input_potential_mono_"+str(mono),mono_logrors[mono] - self.force_match_input * \
                                      (tt.exp((tt.log(mono_tdurs[mono])-tt.log(self.planets[mono]['tdur']))**2)))
 
-                    mono_gap_info[mono]['logpriors'] = tt.log(monoorbit.dcosidb) - 2*tt.log(per_meds[mono]) + \
-                                                       tt.log(self.planets[pl]['per_gaps'][:,2])
+                    mono_gap_info[mono]['logpriors'] = tt.log(monoorbit.dcosidb) - 2*tt.log(per_meds[mono])
+                                                       #+ tt.log(self.planets[mono]['per_gaps'][:,2])
                     #Including in logprior the gap width
                     # - if a gap is 2.7 times larger, then a sample from that gap is 2.7x more probable (i.e. logprob + 1)
                     mono_gap_info[mono]['lcs'] = gen_lc(monoorbit, tt.tile(tt.exp(mono_logrors[mono]),n_gaps),
@@ -1871,7 +1871,7 @@ class monoModel():
         gap_lens=[]
         for ng in range(len(x_gaps)-1):
             self.lc['limits']+=[[x_gaps[ng],x_gaps[ng+1]]]
-            gap_lens+=[self.lc['time'][limits[-1][1]-1]-self.lc['time'][self.lc['limits'][-1][0]]]
+            gap_lens+=[self.lc['time'][self.lc['limits'][-1][1]-1]-self.lc['time'][self.lc['limits'][-1][0]]]
             self.lc['binlimits']+=[[np.argmin(abs(self.lc['bin_time']-self.lc['time'][x_gaps[ng]])),
                          np.argmin(abs(self.lc['bin_time']-self.lc['time'][x_gaps[ng+1]-1]))+1]]
             if len(lc['time'])!=len(self.lc['time']):
@@ -2264,7 +2264,7 @@ class monoModel():
                     f_alls[n].fill_between(self.lc['time'][self.lc['limits'][n][0]:self.lc['limits'][n][1]],
                                self.gp_to_plot['gp_pred'][self.lc['limits'][n][0]:self.lc['limits'][n][1]] + raw_plot_offset - \
                                2*self.gp_to_plot['gp_sd'][self.lc['limits'][n][0]:self.lc['limits'][n][1]],
-                               self.gp_to_plot['gp_pred'][self.lc['limits'][n][0]:limits[n][1]] + raw_plot_offset + \
+                               self.gp_to_plot['gp_pred'][self.lc['limits'][n][0]:self.lc['limits'][n][1]] + raw_plot_offset + \
                                2*self.gp_to_plot['gp_sd'][self.lc['limits'][n][0]:self.lc['limits'][n][1]], rasterized=raster,
                                color="C3", alpha=0.2,zorder=10)
                     f_alls[n].fill_between(self.lc['time'][self.lc['limits'][n][0]:self.lc['limits'][n][1]],
