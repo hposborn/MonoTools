@@ -60,7 +60,8 @@ for id,row in subset.iterrows():
         with open(runallfile,"w") as fo2:
             fo2.write("#!/bin/sh\n")
     with open(runallfile,"a") as fo2:
-        fo2.write("bash "+runfile+"\n")
+        #Adding > to save output to file:
+        fo2.write("bash "+runfile+" > "+runfile.replace(".sh","_output.txt")+"\n")
     n+=1
 
 os.system("chmod +x "+runfileloc+"*.sh")

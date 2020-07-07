@@ -72,45 +72,88 @@ theano.config.exception_verbosity='high'
 class monoModel():
     #The default monoModel class. This is what we will use to build a Pymc3 model
     
-    def __init__(self, ID, mission, lc, planets=None, LoadFromFile=False, overwrite=False, savefileloc=None):
-        #Initalising MonoModel
-                    
-        if 'mask' not in lc:
-            lc['mask']=np.tile(True,len(x))
-            
-        if (np.sort(lc['time'])!=lc['time']).all():
-            print("#SORTING")
-            for key in [k for key in lc if type(k)==np.ndarray and k!='time']:
-                if len(lc[key])==len(lc['time']):
-                    lc[key]=lc[key][np.argsort(lc['time'])][:]
-            lc['time']=np.sort(lc['time'])
-        self.ID=ID
-        self.lc=lc
-        self.planets={}
-        self.multis=[];self.monos=[];self.duos=[]
-
-        if planets is not None:
-            for pl in planets:
-                if planets[pl]['orbit_flag']=='multi':
-                    self.add_multi(planets[pl])
-                elif planets[pl]['orbit_flag']=='duo':
-                    self.add_duo(planets[pl])
-                elif planets[pl]['orbit_flag']=='mono':
-                    self.add_mono(planets[pl])
-        self.mission=mission
+    def __init__(self, ID=None, mission=None, lc=None, planets=None, LoadFromFile=False, overwrite=False, savefileloc=None):
         
-        self.savefileloc=savefileloc
-        self.overwrite=overwrite
-        
-        #self.
         self.id_dic={'TESS':'TIC','tess':'TIC','Kepler':'KIC','kepler':'KIC','KEPLER':'KIC',
                      'K2':'EPIC','k2':'EPIC','CoRoT':'CID','corot':'CID'}
 
-        if not LoadFromFile:
-            self.GetSavename(how='save')
+        #Initalising MonoModel
+        if LoadFromFile and not overwrite:
+            if savefileloc is None:
+                self.LoadModelFromFile(savefileloc)
+            else:
+                self.GetSavename(how='load')
+                self.LoadModelFromFile(self.savenames[0]+'_model.pickle')
         else:
-            self.GetSavename(how='load')
+            assert ID is not None and mission is not None and lc is not None
+
+            if 'mask' not in lc:
+                lc['mask']=np.tile(True,len(x))
+
+            if (np.sort(lc['time'])!=lc['time']).all():
+                print("#SORTING")
+                for key in [k for key in lc if type(k)==np.ndarray and k!='time']:
+                    if len(lc[key])==len(lc['time']):
+                        lc[key]=lc[key][np.argsort(lc['time'])][:]
+                lc['time']=np.sort(lc['time'])
+
+            self.ID=ID
+            self.lc=lc
+            self.planets={}
+            self.multis=[];self.monos=[];self.duos=[]
+
+            if planets is not None:
+                for pl in planets:
+                    if planets[pl]['orbit_flag']=='multi':
+                        self.add_multi(planets[pl])
+                    elif planets[pl]['orbit_flag']=='duo':
+                        self.add_duo(planets[pl])
+                    elif planets[pl]['orbit_flag']=='mono':
+                        self.add_mono(planets[pl])
+            self.mission=mission
+
+            self.savefileloc=savefileloc
+            self.overwrite=overwrite
+
+            #self.
     
+    def LoadModelFromFile(self, loadfile=None):
+        if loadfile is None:
+            self.GetSavename(how='load')
+            loadfile=self.savenames[0]+'_model.pickle'
+        #Loading from pickled dictionary
+        pick=pickle.load(open(loadfile,'rb'))
+        for key in pick:
+            setattr(self,key,pick[key])
+    
+    def SaveModelToFile(self, savefile=None, limit_size=True):
+        if savefile is None:
+            self.GetSavename(how='save')
+            savefile=self.savenames[0]+'_model.pickle'
+        #Loading from pickled dictionary
+        saving={}
+        if limit_size and hasattr(self,'trace'):
+            #We cannot afford to store full arrays of GP predictions - let's turn the predicted arrays into percentiles now
+            if self.use_GP:
+                self.init_gp_to_plot(n_samp=19)
+            self.init_trans_to_plot(n_samp=333)
+            
+            #And let's clip gp and lightcurves and pseudo-variables from the trace:
+            medvars=[var for var in self.trace.varnames if 'gp_' not in var and '_gp' not in var and 'light_curve' not in var and '__' not in var]
+        elif hasattr(self,'trace'):
+            medvars=[var for var in self.trace.varnames]
+        n_bytes = 2**31
+        max_bytes = 2**31 - 1
+        
+        #bytes_out = pickle.dumps({key:get_attr(self,key) for key in self.__dict__.keys() if key is not 'trace' else self.trace[medvars]})
+        bytes_out = pickle.dumps(self)
+        with open(savefile, 'wb') as f_out:
+            for idx in range(0, len(bytes_out), max_bytes):
+                f_out.write(bytes_out[idx:idx+max_bytes])
+
+        
+        pick=pickle.dump(self.__dict__,open(loadfile,'wb'))
+        
     def drop_planet(self, name):
         if not hasattr(self,'deleted'):
             self.deleted={}
@@ -263,7 +306,7 @@ class monoModel():
         self.logg=np.array(logg)
         self.FeH=FeH
     
-    def GetSavename(self, how='load', suffix='mcmc.pickle',overwrite=True):
+    def GetSavename(self, how='load',overwrite=True):
         '''
         # Get unique savename (defaults to MCMC suffic) with format:
         # [savefileloc]/[T/K]IC[11-number ID]_[20YY-MM-DD]_[n]_mcmc.pickle
@@ -272,7 +315,6 @@ class monoModel():
         # - ID
         # - mission - (TESS/K2/Kepler)
         # - how : 'load' or 'save'
-        # - suffix : final part of file string. default is _mcmc.pickle
         # - overwrite : if 'save', whether to overwrite past save or not.
         # - savefileloc : file location of files to save (default: 'MonoTools/[T/K]ID[11-number ID]/
         #
@@ -283,11 +325,12 @@ class monoModel():
             self.savefileloc=os.path.join(MonoData_savepath,self.id_dic[self.mission]+str(self.ID).zfill(11))
         if not os.path.isdir(self.savefileloc):
             os.system('mkdir '+self.savefileloc)
-        pickles=glob.glob(os.path.join(self.savefileloc,self.id_dic[self.mission]+str(self.ID).zfill(11)+"*"+suffix))
+        pickles=glob.glob(os.path.join(self.savefileloc,self.id_dic[self.mission]+str(self.ID).zfill(11)+"*.pickle"))
+        pickles=[p for p in pickles if len(p.split('/')[-1].split('_'))==3]
         if how == 'load' and len(pickles)>1:
             #finding most recent pickle:
             date=np.max([datetime.strptime(pick.split('_')[1],"%Y-%m-%d") for pick in pickles]).strftime("%Y-%m-%d")
-            datepickles=glob.glob(os.path.join(self.savefileloc,self.id_dic[self.mission]+str(self.ID).zfill(11)+"_"+date+"_*_"+suffix))
+            datepickles=glob.glob(os.path.join(self.savefileloc,self.id_dic[self.mission]+str(self.ID).zfill(11)+"_"+date+"_*pickle"))
             if len(datepickles)>1:
                 nsim=np.max([int(nmdp.split('_')[2]) for nmdp in datepickles])
             elif len(datepickles)==1:
@@ -301,7 +344,7 @@ class monoModel():
             #Either pickles is empty (no file to load) or we want to save a fresh file:
             #Finding unique
             date=datetime.now().strftime("%Y-%m-%d")
-            datepickles=glob.glob(os.path.join(self.savefileloc,self.id_dic[self.mission]+str(self.ID).zfill(11)+"_"+date+"_*_"+suffix))
+            datepickles=glob.glob(os.path.join(self.savefileloc,self.id_dic[self.mission]+str(self.ID).zfill(11)+"_"+date+"_*"))
             if len(datepickles)==0:
                 nsim=0
             elif self.overwrite:
@@ -309,8 +352,7 @@ class monoModel():
             else:
                 #Finding next unused number with this date:
                 nsim=1+np.max([int(nmdp.split('_')[2]) for nmdp in datepickles])
-
-        self.savenames=[os.path.join(self.savefileloc,self.id_dic[self.mission]+str(self.ID).zfill(11)+"_"+date+"_"+str(int(nsim))+"_"+suffix), os.path.join(self.savefileloc,self.id_dic[self.mission]+str(self.ID).zfill(11)+'_'+suffix)]
+        self.savenames=[os.path.join(self.savefileloc,self.id_dic[self.mission]+str(self.ID).zfill(11)+"_"+date+"_"+str(int(nsim))), os.path.join(self.savefileloc,self.id_dic[self.mission]+str(self.ID).zfill(11))]
 
     def init_model(self,assume_circ=False,overwrite=False,
                    use_GP=True,train_GP=True,constrain_LD=True,ld_mult=3,useL2=True,
@@ -396,7 +438,7 @@ class monoModel():
                 for key in oot_binlc:
                     lckey = key.replace("bin_","") if 'bin_' in key else key
                     lckey = 'flux_err' if lckey=='flux_flat_err' else lckey
-                    print(key,lckey,oot_binlc[key],self.lc[lckey])
+                    #print(key,lckey,oot_binlc[key],self.lc[lckey])
                     self.pseudo_binlc[lckey]=np.hstack((oot_binlc[key],self.lc[lckey][self.lc['near_trans']]))
                 for key in [key for key in self.pseudo_binlc.keys() if key!='time']:
                     if 'bin_' in key:
@@ -482,8 +524,6 @@ class monoModel():
             print(self.log_flux_std)
             print(np.sum(self.lc['no_trans_mask']),len(self.lc['no_trans_mask']))
             print(np.unique(self.lc['cadence'][self.lc['no_trans_mask']]))
-            print(np.nanstd(self.lc['flux'][self.lc['cadence']==self.cads[0]]),
-                  np.nanstd(self.lc['flux'][self.lc['cadence']==self.cads[1]]))
             print(self.cads,np.unique(self.lc['cadence']),self.lc['time'][self.lc['cadence']=='t'],
                   self.log_flux_std,np.sum(self.lc['no_trans_mask']))
 
@@ -1073,8 +1113,9 @@ class monoModel():
                     lccheckstack=tt.stack([lc['flux'][lc['mask']],new_yerr_sq],axis=1)
 
                 #NOT marginalising over all models simultaneously, but doing them individually:
-                resids={}
-                log_prob_margs={}
+                resids         = {}
+                log_prob_margs = {}
+                log_probs =      {}
                 for pl in iter_models:
                     resids[pl]={}
                     iter_models[pl]['logprob']={}
@@ -1094,12 +1135,16 @@ class monoModel():
                         # We then compute a marginalised lightcurve from the weighted sum of each model lightcurve:
                         logliks = pm.Deterministic(iter_models[pl]['type']+'_liks_'+str(iter_models[pl]['name']),tt.stack([iter_models[pl]['logliks'][n] for n in range(iter_models[pl]['len'])]))
                         iter_models[pl]['logprob'] = logliks + iter_models[pl]['logpriors']
-                        iter_models[pl]['logprob_marg'] = pm.math.logsumexp(iter_models[pl]['logprob'])
-                        log_prob_margs[pl] = pm.Deterministic('logprob_marg_'+str(iter_models[pl]['name']), iter_models[pl]['logprob'] - iter_models[pl]['logprob_marg'])
-                        pm.Deterministic('period_marg_'+str(iter_models[pl]['name']), tt.sum(iter_models[pl]['pers']*tt.exp(log_prob_margs[pl])))
-                        pm.Deterministic('tdur_marg_'+str(iter_models[pl]['name']), tt.sum(iter_models[pl]['durs']*tt.exp(log_prob_margs[pl])))
+                        iter_models[pl]['logprob_marg_sum'] = pm.Deterministic('logprob_marg_sum_'+str(iter_models[pl]['name']),
+                                                                           pm.math.logsumexp(iter_models[pl]['logprob']))
+                        log_prob_margs[pl] = pm.Deterministic('logprob_marg_'+str(iter_models[pl]['name']), 
+                                                              iter_models[pl]['logprob'] - iter_models[pl]['logprob_marg_sum'])
+                        pm.Deterministic('period_marg_'+str(iter_models[pl]['name']), 
+                                         tt.sum(iter_models[pl]['pers']*tt.exp(log_prob_margs[pl])))
+                        pm.Deterministic('tdur_marg_'+str(iter_models[pl]['name']), 
+                                         tt.sum(iter_models[pl]['durs']*tt.exp(log_prob_margs[pl])))
                         iter_models[pl]['marg_lc'] = pm.Deterministic('marg_light_curve_'+str(iter_models[pl]['name']),
-                                                                      tt.sum(iter_models[pl]['lcs']*tt.exp(iter_models[pl]['logprob']-iter_models[pl]['logprob_marg']).dimshuffle('x',0),axis=1))
+                                         tt.sum(iter_models[pl]['lcs'] * tt.exp(log_prob_margs[pl]).dimshuffle('x',0),axis=1))
                     else:
                         iter_models[pl]['marg_lc'] = pm.Deterministic('marg_light_curve_'+str(iter_models[pl]['name']),
                                                                       iter_models[pl]['lcs'])
@@ -1201,7 +1246,8 @@ class monoModel():
             print("LOADED MCMC")
 
         if not hasattr(self,'trace') or overwrite:
-            assert hasattr(self,'init_soln')
+            if not hasattr(self,'init_soln'):
+                self.init_model()
             #Running sampler:
             np.random.seed(int(self.ID))
             with self.model:
@@ -1213,12 +1259,12 @@ class monoModel():
             self.SavePickle()
         
     def Table(self):
-        if LoadFromFile and not self.overwrite and os.path.exists(self.savenames[0].replace('mcmc.pickle','results.txt')):
-            with open(self.savenames[0].replace('mcmc.pickle','results.txt'), 'r', encoding='UTF-8') as file:
+        if LoadFromFile and not self.overwrite and os.path.exists(self.savenames[0]+'_results.txt'):
+            with open(self.savenames[0]+'_results.txt', 'r', encoding='UTF-8') as file:
                 restable = file.read()
         else:
             restable=self.ToLatexTable(trace, ID, mission=mission, varnames=None,order='columns',
-                                       savename=self.savenames[0].replace('mcmc.pickle','results.txt'), overwrite=False,
+                                       savename=self.savenames[0]+'_results.txt', overwrite=False,
                                        savefileloc=None, tracemask=tracemask)
     def run_multinest(self, ld_mult=2.5, verbose=False,max_iter=1500,**kwargs):
         import pymultinest
@@ -1226,12 +1272,12 @@ class monoModel():
         if not hasattr(self,'savenames'):
             self.GetSavename(how='save')
         
-        if os.path.exists(self.savenames[0].replace('_mcmc.pickle','mnest_out')):
+        if os.path.exists(self.savenames[0]+'_mnest_out'):
             if not self.overwrite:
-                os.system('rm '+self.savenames[0].replace('_mcmc.pickle','mnest_out')+'/*')
+                os.system('rm '+self.savenames[0]+'_mnest_out'+'/*')
         else:
-            os.mkdir(self.savenames[0].replace('_mcmc.pickle','mnest_out'))
-            out_mnest_folder = self.savenames[0].replace('_mcmc.pickle','mnest_out')
+            os.mkdir(self.savenames[0]+'_mnest_out')
+            out_mnest_folder = self.savenames[0]+'_mnest_out'
 
 
         #Setting up necessary sampling functions:
@@ -1605,10 +1651,162 @@ class monoModel():
             return loglik
 
             pymultinest.run(loglike, prior, len(self.cube_indeces), max_iter=max_iter,
-                        outputfiles_basename=self.savenames[0].replace('_mcmc.pickle','mnest_out/'), 
+                        outputfiles_basename=self.savenames[0]+'_mnest_out/', 
                         **kwargs)
     
-    
+    def init_gp_to_plot(self,n_samp,max_gp_len):
+        import celerite
+        from celerite import terms
+        gp_pred=[]
+        gp_sd=[]
+        self.gp_to_plot={'n_samp':n_samp}
+        if hasattr(self,'trace'):
+            #Using the output of the model trace
+            medvars=[var for var in self.trace.varnames if 'gp_' not in var and '_gp' not in var and 'light_curve' not in var]
+            self.meds={}
+            for mv in medvars:
+                if len(self.trace[mv].shape)>1:
+                    self.meds[mv]=np.median(self.trace[mv],axis=0)
+                elif len(self.trace[mv].shape)==1:
+                    self.meds[mv]=np.median(self.trace[mv])  
+        else:
+            self.meds=self.init_soln
+
+        limit_mask_bool={}
+
+        # TBD HERE
+
+        if n_samp==1:
+            #Creating the median model:
+
+            for n in np.arange(len(gap_lens)):
+
+                #Only creating out-of-transit GP for the binned (e.g. 30min) data
+                cutBools = tools.cutLc(self.lc['time'][self.lc['limits'][n][0]:self.lc['limits'][n][1]],max_gp_len,
+                                       transit_mask=self.lc['no_trans_mask'][self.lc['limits'][n][0]:self.lc['limits'][n][1]])
+
+                limit_mask_bool[n]={}
+                for nc,c in enumerate(cutBools):
+                    limit_mask_bool[n][nc]=np.tile(False,len(self.lc['time']))
+                    limit_mask_bool[n][nc][self.lc['limits'][n][0]:self.lc['limits'][n][1]][c]=limit_mask[n][self.lc['limits'][n][0]:self.lc['limits'][n][1]][c]
+                    i_kernel = terms.SHOTerm(log_S0=np.log(self.meds['S0']), log_omega0=np.log(self.meds['w0']), log_Q=np.log(1/np.sqrt(2)))
+                    i_gp = celerite.GP(i_kernel,mean=self.meds['mean'],fit_mean=False)
+
+                    i_gp.compute(self.lc['time'][limit_mask_bool[n][nc]].astype(np.float32),
+                                 np.sqrt(self.lc['flux_err'][limit_mask_bool[n][nc]]**2 + \
+                                 np.dot(self.lc['flux_err_index'][limit_mask_bool[n][nc]],np.exp(self.meds['logs2']))))
+                    #llk=i_gp.log_likelihood(mod.lc['flux'][mod.lc['mask']][self.lc['limits'][n][0]:self.lc['limits'][n][1]][c]-mod.trans_to_plot['all']['med'][mod.lc['mask']][self.lc['limits'][n][0]:self.lc['limits'][n][1]][c]-mod.meds['mean'])
+                    #print(llk.eval())
+                    i_gp_pred, i_gp_var= i_gp.predict(self.lc['flux'][limit_mask_bool[n][nc]] - \
+                                        self.trans_to_plot['all']['med'][limit_mask_bool[n][nc]],
+                                        t=self.lc['time'][self.lc['limits'][n][0]:self.lc['limits'][n][1]][c].astype(np.float32),
+                                        return_var=True,return_cov=False)
+                    gp_pred+=[i_gp_pred]
+                    gp_sd+=[np.sqrt(i_gp_var)]
+            ''''
+            gp_pred=[];gp_sd=[]
+            for n in np.arange(len(gap_lens)):
+                with self.model:
+                    pred,var=xo.eval_in_model(self.gp['use'].predict(self.lc['time'][self.lc['limits'][n][0]:self.lc['limits'][n][1]],
+                                                            return_var=True,return_cov=False),self.meds)                    
+                gp_pred+=[pred]
+                gp_sd+=[np.sqrt(var)]
+                print(n,len(self.lc['time'][self.lc['limits'][n][0]:self.lc['limits'][n][1]]),'->',len(gp_sd[-1]),len(gp_pred[-1]))
+            '''
+            self.gp_to_plot['gp_pred']=np.hstack(gp_pred)
+            self.gp_to_plot['gp_sd']=np.hstack(gp_sd)
+            '''
+            with self.model:
+                pred,var=xo.eval_in_model(self.gp['use'].predict(self.lc['time'].astype(np.float32),
+                                                                 return_var=True,return_cov=False),self.meds)                    
+            self.gp_to_plot['gp_pred']=pred
+            self.gp_to_plot['gp_sd']=np.sqrt(var)
+            '''
+        elif n_samp>1:
+            assert hasattr(self,'trace')
+            #Doing multiple samples and making percentiles:
+            for n in np.arange(len(gap_lens)):
+                #Need to break up the lightcurve even further to avoid GP burning memory:
+                cutBools = tools.cutLc(self.lc['time'][self.lc['limits'][n][0]:self.lc['limits'][n][1]],max_gp_len,
+                                       transit_mask=self.lc['no_trans_mask'][self.lc['limits'][n][0]:self.lc['limits'][n][1]])
+                i_kernel = terms.SHOTerm(log_S0=np.log(self.meds['S0']), log_omega0=np.log(self.meds['w0']), log_Q=np.log(1/np.sqrt(2)))
+                i_gp = celerite.GP(i_kernel,mean=self.meds['mean'],fit_mean=False)
+                limit_mask_bool[n]={}
+                for nc,c in enumerate(cutBools):
+                    limit_mask_bool[n][nc]=np.tile(False,len(self.lc['time']))
+                    limit_mask_bool[n][nc][self.lc['limits'][n][0]:self.lc['limits'][n][1]][c]=limit_mask[n][self.lc['limits'][n][0]:self.lc['limits'][n][1]][c]
+                    i_gp_pred=[]
+                    i_gp_var=[]
+                    for i, sample in enumerate(xo.get_samples_from_trace(self.trace, size=n_samp)):
+                        #print(np.exp(sample['logs2']))
+                        i_gp.set_parameter('kernel:log_S0',np.log(sample['S0']))
+                        i_gp.set_parameter('kernel:log_omega0',np.log(sample['w0']))
+                        i_gp.set_parameter('mean:value',sample['mean'])
+                        i_gp.compute(self.lc['time'][limit_mask_bool[n][nc]],
+                                     np.sqrt(self.lc['flux_err'][limit_mask_bool[n][nc]]**2 + \
+                                      np.dot(self.lc['flux_err_index'][limit_mask_bool[n][nc]], np.exp(sample['logs2']))))
+                        marg_lc=np.tile(0.0,len(self.lc['time']))
+                        marg_lc[self.lc['near_trans']]=sample['marg_all_light_curve'][lc['near_trans']]
+                        ii_gp_pred, ii_gp_var= i_gp.predict(self.lc['flux'][limit_mask_bool[n][nc]] - marg_lc[limit_mask_bool[n][nc]],
+                                        t=self.lc['time'][self.lc['limits'][n][0]:self.lc['limits'][n][1]][c].astype(np.float32),
+                                        return_var=True,return_cov=False)
+
+                        i_gp_pred+=[ii_gp_pred]
+                        i_gp_var+=[ii_gp_var]
+                    av, std = tools.weighted_avg_and_std(np.vstack(i_gp_pred),np.sqrt(np.vstack(i_gp_var)),axis=0)
+                    gp_pred+=[av]
+                    gp_sd+=[std]
+            self.gp_to_plot['gp_pred']=np.hstack(gp_pred)
+            self.gp_to_plot['gp_sd']=np.hstack(gp_sd)
+
+    def init_trans_to_plot(self,n_samp):
+        self.init_trans_to_plot={}
+        self.init_trans_to_plot['all']={}
+        if hasattr(self,'trace') and 'marg_all_light_curve' in self.trace.varnames:
+            prcnt=np.percentile(self.trace['marg_all_light_curve'],(5,1,50,84,95),axis=0)
+            nms=['-2sig','-1sig','med','+1sig','+2sig']
+            self.init_trans_to_plot['all']={nms[n]:prcnt[n] for n in range(5)}
+        elif 'marg_all_light_curve' in self.init_soln:
+            self.init_trans_to_plot['all']['med']=self.init_soln['marg_all_light_curve']
+        else:
+            print("marg_all_light_curve not in any optimised models")
+        for pl in self.planets:
+            self.init_trans_to_plot[pl]={}
+            if pl in self.multis:
+                if hasattr(self,'trace') and 'multi_mask_light_curves' in self.trace.varnames:
+                    if len(self.trace['multi_mask_light_curves'].shape)>2:
+                        prcnt = np.percentile(self.trace['multi_mask_light_curves'][:,:,self.multis.index(pl)],
+                                                  (5,16,50,84,95),axis=0)
+                    else:
+                        prcnt = np.percentile(self.trace['multi_mask_light_curves'], (5,16,50,84,95), axis=0)
+
+                    nms=['-2sig','-1sig','med','+1sig','+2sig']
+                    self.init_trans_to_plot[pl] = {nms[n]:prcnt[n] for n in range(5)}
+                elif 'multi_mask_light_curves' in self.init_soln:
+                    if len(self.init_soln['multi_mask_light_curves'].shape)==1:
+                        self.init_trans_to_plot[pl]['med'] = self.init_soln['multi_mask_light_curves']
+                    else:    
+                        self.init_trans_to_plot[pl]['med'] = self.init_soln['multi_mask_light_curves'][:,self.multis.index(pl)]
+                else:
+                    print('multi_mask_light_curves not in any optimised models')
+            elif pl in self.duos or self.monos:
+                if hasattr(self,'trace') and 'marg_light_curve_'+pl in self.trace.varnames:
+                    prcnt=np.percentile(self.trace['marg_light_curve_'+pl],(5,16,50,84,95),axis=0)
+                    nms=['-2sig','-1sig','med','+1sig','+2sig']
+                    self.init_trans_to_plot[pl] = {nms[n]:prcnt[n] for n in range(5)}
+                elif 'marg_light_curve_'+pl in self.init_soln:
+                    self.init_trans_to_plot[pl]['med'] = self.init_soln['marg_light_curve_'+pl]
+                else:
+                    print('marg_light_curve_'+pl+' not in any optimised models')
+        self.trans_to_plot={'n_samp':n_samp}
+
+        #Adding zeros to other regions where we dont have transits (not in the out of transit mask):
+        for key1 in self.init_trans_to_plot:
+            self.trans_to_plot[key1]={}
+            for key2 in self.init_trans_to_plot[key1]:
+                self.trans_to_plot[key1][key2]=np.zeros(len(self.lc['time']))
+                self.trans_to_plot[key1][key2][self.lc['near_trans']]=self.init_trans_to_plot[key1][key2][lc['near_trans']]
+
     def Plot(self, interactive=False, n_samp=35, overwrite=False,return_fig=False,max_gp_len=20000, bin_gp=True, plot_loc=None):
         ################################################################
         #       Varied plotting function for MonoTransit model
@@ -1644,7 +1842,7 @@ class monoModel():
             if plot_loc is None:
                 if not hasattr(self,'savenames'):
                     self.GetSavename(how='save')
-                savename=self.savenames[0].replace('_mcmc.pickle','_transit_fit.html')
+                savename=self.savenames[0]+'_transit_fit.html'
             else:
                 savename=plot_loc
             
@@ -1666,21 +1864,21 @@ class monoModel():
         #Finding if there's a single enormous gap in the lightcurve, and creating time splits for each region
         x_gaps=np.hstack((0, np.where(np.diff(self.lc['time'])>10)[0]+1, len(self.lc['time'])))
         print(x_gaps)
-        limits=[]
-        binlimits=[]
+        self.lc['limits']=[]
+        self.lc['binlimits']=[]
         if len(lc['time'])!=len(self.lc['time']):
             modlclims=[]
         gap_lens=[]
         for ng in range(len(x_gaps)-1):
-            limits+=[[x_gaps[ng],x_gaps[ng+1]]]
-            gap_lens+=[self.lc['time'][limits[-1][1]-1]-self.lc['time'][limits[-1][0]]]
-            binlimits+=[[np.argmin(abs(self.lc['bin_time']-self.lc['time'][x_gaps[ng]])),
+            self.lc['limits']+=[[x_gaps[ng],x_gaps[ng+1]]]
+            gap_lens+=[self.lc['time'][limits[-1][1]-1]-self.lc['time'][self.lc['limits'][-1][0]]]
+            self.lc['binlimits']+=[[np.argmin(abs(self.lc['bin_time']-self.lc['time'][x_gaps[ng]])),
                          np.argmin(abs(self.lc['bin_time']-self.lc['time'][x_gaps[ng+1]-1]))+1]]
             if len(lc['time'])!=len(self.lc['time']):
                 modlclims+=[[np.argmin(abs(lc['time']-self.lc['time'][x_gaps[ng]])),
                              np.argmin(abs(lc['time']-self.lc['time'][x_gaps[ng+1]-1]))+1]]
         if len(lc['time'])==len(self.lc['time']):
-            modlclims=limits
+            modlclims=self.lc['limits']
 
         gap_lens=np.array(gap_lens)
         all_lens=np.sum(gap_lens)
@@ -1690,7 +1888,7 @@ class monoModel():
             modlclim_mask[n]=np.tile(False,len(lc['time']))
             modlclim_mask[n][modlclims[n][0]:modlclims[n][1]][lc['mask'][modlclims[n][0]:modlclims[n][1]]]=True
             limit_mask[n]=np.tile(False,len(self.lc['time']))
-            limit_mask[n][limits[n][0]:limits[n][1]][self.lc['mask'][limits[n][0]:limits[n][1]]]=True
+            limit_mask[n][self.lc['limits'][n][0]:self.lc['limits'][n][1]][self.lc['mask'][self.lc['limits'][n][0]:self.lc['limits'][n][1]]]=True
         masks=[]
         
         #####################################
@@ -1747,190 +1945,43 @@ class monoModel():
         #    Initialising Transit model
         #####################################        
         if not hasattr(self, 'trans_to_plot') or self.trans_to_plot['n_samp']!=n_samp or 'all' not in self.trans_to_plot or overwrite:
-            self.init_trans_to_plot={}
-            self.init_trans_to_plot['all']={}
-            if hasattr(self,'trace') and 'marg_all_light_curve' in self.trace.varnames:
-                prcnt=np.percentile(self.trace['marg_all_light_curve'],(5,1,50,84,95),axis=0)
-                nms=['-2sig','-1sig','med','+1sig','+2sig']
-                self.init_trans_to_plot['all']={nms[n]:prcnt[n] for n in range(5)}
-            elif 'marg_all_light_curve' in self.init_soln:
-                self.init_trans_to_plot['all']['med']=self.init_soln['marg_all_light_curve']
-            else:
-                print("marg_all_light_curve not in any optimised models")
-            for pl in self.planets:
-                self.init_trans_to_plot[pl]={}
-                if pl in self.multis:
-                    if hasattr(self,'trace') and 'multi_mask_light_curves' in self.trace.varnames:
-                        if len(self.trace['multi_mask_light_curves'].shape)>2:
-                            prcnt = np.percentile(self.trace['multi_mask_light_curves'][:,:,self.multis.index(pl)],
-                                                      (5,16,50,84,95),axis=0)
-                        else:
-                            prcnt = np.percentile(self.trace['multi_mask_light_curves'], (5,16,50,84,95), axis=0)
-
-                        nms=['-2sig','-1sig','med','+1sig','+2sig']
-                        self.init_trans_to_plot[pl] = {nms[n]:prcnt[n] for n in range(5)}
-                    elif 'multi_mask_light_curves' in self.init_soln:
-                        if len(self.init_soln['multi_mask_light_curves'].shape)==1:
-                            self.init_trans_to_plot[pl]['med'] = self.init_soln['multi_mask_light_curves']
-                        else:    
-                            self.init_trans_to_plot[pl]['med'] = self.init_soln['multi_mask_light_curves'][:,self.multis.index(pl)]
-                    else:
-                        print('multi_mask_light_curves not in any optimised models')
-                elif pl in self.duos or self.monos:
-                    if hasattr(self,'trace') and 'marg_light_curve_'+pl in self.trace.varnames:
-                        prcnt=np.percentile(self.trace['marg_light_curve_'+pl],(5,16,50,84,95),axis=0)
-                        nms=['-2sig','-1sig','med','+1sig','+2sig']
-                        self.init_trans_to_plot[pl] = {nms[n]:prcnt[n] for n in range(5)}
-                    elif 'marg_light_curve_'+pl in self.init_soln:
-                        self.init_trans_to_plot[pl]['med'] = self.init_soln['marg_light_curve_'+pl]
-                    else:
-                        print('marg_light_curve_'+pl+' not in any optimised models')
-            self.trans_to_plot={'n_samp':n_samp}
-            
-            #Adding zeros to other regions where we dont have transits (not in the out of transit mask):
-            for key1 in self.init_trans_to_plot:
-                self.trans_to_plot[key1]={}
-                for key2 in self.init_trans_to_plot[key1]:
-                    self.trans_to_plot[key1][key2]=np.zeros(len(self.lc['time']))
-                    self.trans_to_plot[key1][key2][self.lc['near_trans']]=self.init_trans_to_plot[key1][key2][lc['near_trans']]
-
+            self.init_trans_to_plot(n_samp)
         #####################################
         #       Initialising GP model
         #####################################
-        import celerite
-        from celerite import terms
-        gp_pred=[]
-        gp_sd=[]
         if self.use_GP and (not hasattr(self, 'gp_to_plot') or self.gp_to_plot['n_samp']!=n_samp or 'gp_pred' not in self.gp_to_plot or overwrite):
-            self.gp_to_plot={'n_samp':n_samp}
-            if hasattr(self,'trace'):
-                #Using the output of the model trace
-                medvars=[var for var in self.trace.varnames if 'gp_' not in var and '_gp' not in var and 'light_curve' not in var]
-                self.meds={}
-                for mv in medvars:
-                    if len(self.trace[mv].shape)>1:
-                        self.meds[mv]=np.median(self.trace[mv],axis=0)
-                    elif len(self.trace[mv].shape)==1:
-                        self.meds[mv]=np.median(self.trace[mv])  
-            else:
-                self.meds=self.init_soln
-            
-            limit_mask_bool={}
-            
-            # TBD HERE
-            
-            if n_samp==1:
-                #Creating the median model:
-                
-                for n in np.arange(len(gap_lens)):
-
-                    #Only creating out-of-transit GP for the binned (e.g. 30min) data
-                    cutBools = tools.cutLc(self.lc['time'][limits[n][0]:limits[n][1]],max_gp_len,
-                                           transit_mask=self.lc['no_trans_mask'][limits[n][0]:limits[n][1]])
-
-                    limit_mask_bool[n]={}
-                    for nc,c in enumerate(cutBools):
-                        limit_mask_bool[n][nc]=np.tile(False,len(self.lc['time']))
-                        limit_mask_bool[n][nc][limits[n][0]:limits[n][1]][c]=limit_mask[n][limits[n][0]:limits[n][1]][c]
-                        i_kernel = terms.SHOTerm(log_S0=np.log(self.meds['S0']), log_omega0=np.log(self.meds['w0']), log_Q=np.log(1/np.sqrt(2)))
-                        i_gp = celerite.GP(i_kernel,mean=self.meds['mean'],fit_mean=False)
-
-                        i_gp.compute(self.lc['time'][limit_mask_bool[n][nc]].astype(np.float32),
-                                     np.sqrt(self.lc['flux_err'][limit_mask_bool[n][nc]]**2 + \
-                                     np.dot(self.lc['flux_err_index'][limit_mask_bool[n][nc]],np.exp(self.meds['logs2']))))
-                        #llk=i_gp.log_likelihood(mod.lc['flux'][mod.lc['mask']][limits[n][0]:limits[n][1]][c]-mod.trans_to_plot['all']['med'][mod.lc['mask']][limits[n][0]:limits[n][1]][c]-mod.meds['mean'])
-                        #print(llk.eval())
-                        i_gp_pred, i_gp_var= i_gp.predict(self.lc['flux'][limit_mask_bool[n][nc]] - \
-                                            self.trans_to_plot['all']['med'][limit_mask_bool[n][nc]],
-                                            t=self.lc['time'][limits[n][0]:limits[n][1]][c].astype(np.float32),
-                                            return_var=True,return_cov=False)
-                        gp_pred+=[i_gp_pred]
-                        gp_sd+=[np.sqrt(i_gp_var)]
-                ''''
-                gp_pred=[];gp_sd=[]
-                for n in np.arange(len(gap_lens)):
-                    with self.model:
-                        pred,var=xo.eval_in_model(self.gp['use'].predict(self.lc['time'][limits[n][0]:limits[n][1]],
-                                                                return_var=True,return_cov=False),self.meds)                    
-                    gp_pred+=[pred]
-                    gp_sd+=[np.sqrt(var)]
-                    print(n,len(self.lc['time'][limits[n][0]:limits[n][1]]),'->',len(gp_sd[-1]),len(gp_pred[-1]))
-                '''
-                self.gp_to_plot['gp_pred']=np.hstack(gp_pred)
-                self.gp_to_plot['gp_sd']=np.hstack(gp_sd)
-                '''
+            self.init_gp_to_plot(n_samp,max_gp_len)
+        
+        '''
+        assert hasattr(self,'trace')
+        i_gp_pred=[]
+        i_gp_var=[]
+        print(limits,gap_lens,range(len(gap_lens)),np.arange(len(gap_lens)))
+        for n in np.arange(len(gap_lens)):
+            for i, sample in enumerate(xo.get_samples_from_trace(self.trace, size=n_samp)):
                 with self.model:
-                    pred,var=xo.eval_in_model(self.gp['use'].predict(self.lc['time'].astype(np.float32),
-                                                                     return_var=True,return_cov=False),self.meds)                    
-                self.gp_to_plot['gp_pred']=pred
-                self.gp_to_plot['gp_sd']=np.sqrt(var)
-                '''
-            elif n_samp>1:
-                assert hasattr(self,'trace')
-                #Doing multiple samples and making percentiles:
-                for n in np.arange(len(gap_lens)):
-                    #Need to break up the lightcurve even further to avoid GP burning memory:
-                    cutBools = tools.cutLc(self.lc['time'][limits[n][0]:limits[n][1]],max_gp_len,
-                                           transit_mask=self.lc['no_trans_mask'][limits[n][0]:limits[n][1]])
-                    i_kernel = terms.SHOTerm(log_S0=np.log(self.meds['S0']), log_omega0=np.log(self.meds['w0']), log_Q=np.log(1/np.sqrt(2)))
-                    i_gp = celerite.GP(i_kernel,mean=self.meds['mean'],fit_mean=False)
-                    limit_mask_bool[n]={}
-                    for nc,c in enumerate(cutBools):
-                        limit_mask_bool[n][nc]=np.tile(False,len(self.lc['time']))
-                        limit_mask_bool[n][nc][limits[n][0]:limits[n][1]][c]=limit_mask[n][limits[n][0]:limits[n][1]][c]
-                        i_gp_pred=[]
-                        i_gp_var=[]
-                        for i, sample in enumerate(xo.get_samples_from_trace(self.trace, size=n_samp)):
-                            #print(np.exp(sample['logs2']))
-                            i_gp.set_parameter('kernel:log_S0',np.log(sample['S0']))
-                            i_gp.set_parameter('kernel:log_omega0',np.log(sample['w0']))
-                            i_gp.set_parameter('mean:value',sample['mean'])
-                            i_gp.compute(self.lc['time'][limit_mask_bool[n][nc]],
-                                         np.sqrt(self.lc['flux_err'][limit_mask_bool[n][nc]]**2 + \
-                                          np.dot(self.lc['flux_err_index'][limit_mask_bool[n][nc]], np.exp(sample['logs2']))))
-                            marg_lc=np.tile(0.0,len(self.lc['time']))
-                            marg_lc[self.lc['near_trans']]=sample['marg_all_light_curve'][lc['near_trans']]
-                            ii_gp_pred, ii_gp_var= i_gp.predict(self.lc['flux'][limit_mask_bool[n][nc]] - marg_lc[limit_mask_bool[n][nc]],
-                                            t=self.lc['time'][limits[n][0]:limits[n][1]][c].astype(np.float32),
-                                            return_var=True,return_cov=False)
+                    ii_gp_pred, ii_gp_var = xo.eval_in_model(self.gp['use'].predict(self.lc['time'][limits[n][0]:limits[n][1]],
+                                                                                return_var=True,return_cov=False),sample)
+                i_gp_pred+=[ii_gp_pred]
+                i_gp_var+=[ii_gp_var]
+            av, std = tools.weighted_avg_and_std(np.vstack(i_gp_pred),np.sqrt(np.vstack(i_gp_var)),axis=0)
+            gp_pred+=[av]
+            gp_sd+=[std]
 
-                            i_gp_pred+=[ii_gp_pred]
-                            i_gp_var+=[ii_gp_var]
-                        av, std = tools.weighted_avg_and_std(np.vstack(i_gp_pred),np.sqrt(np.vstack(i_gp_var)),axis=0)
-                        gp_pred+=[av]
-                        gp_sd+=[std]
-                self.gp_to_plot['gp_pred']=np.hstack(gp_pred)
-                self.gp_to_plot['gp_sd']=np.hstack(gp_sd)
-                '''
-                assert hasattr(self,'trace')
-                i_gp_pred=[]
-                i_gp_var=[]
-                print(limits,gap_lens,range(len(gap_lens)),np.arange(len(gap_lens)))
-                for n in np.arange(len(gap_lens)):
-                    for i, sample in enumerate(xo.get_samples_from_trace(self.trace, size=n_samp)):
-                        with self.model:
-                            ii_gp_pred, ii_gp_var = xo.eval_in_model(self.gp['use'].predict(self.lc['time'][limits[n][0]:limits[n][1]],
-                                                                                        return_var=True,return_cov=False),sample)
-                        i_gp_pred+=[ii_gp_pred]
-                        i_gp_var+=[ii_gp_var]
-                    av, std = tools.weighted_avg_and_std(np.vstack(i_gp_pred),np.sqrt(np.vstack(i_gp_var)),axis=0)
-                    gp_pred+=[av]
-                    gp_sd+=[std]
-                
-                self.gp_to_plot['gp_pred']=np.hstack(gp_pred)
-                self.gp_to_plot['gp_sd']=np.hstack(gp_sd)
-                '''
-                '''
-                with self.model:
-                    for i, sample in enumerate(xo.get_samples_from_trace(self.trace, size=n_samp)):
-                        ii_gp_pred, ii_gp_var = xo.eval_in_model(self.gp['use'].predict(self.lc['time'].astype(np.float32),
-                                                                                        return_var=True,return_cov=False),sample)
-                        i_gp_pred+=[ii_gp_pred]
-                        i_gp_var+=[ii_gp_var]
-                    av, std = tools.weighted_avg_and_std(np.vstack(i_gp_pred),np.sqrt(np.vstack(i_gp_var)),axis=0)
-                self.gp_to_plot['gp_pred'] = av
-                self.gp_to_plot['gp_sd'] = std
-                '''
+        self.gp_to_plot['gp_pred']=np.hstack(gp_pred)
+        self.gp_to_plot['gp_sd']=np.hstack(gp_sd)
+        '''
+        '''
+        with self.model:
+            for i, sample in enumerate(xo.get_samples_from_trace(self.trace, size=n_samp)):
+                ii_gp_pred, ii_gp_var = xo.eval_in_model(self.gp['use'].predict(self.lc['time'].astype(np.float32),
+                                                                                return_var=True,return_cov=False),sample)
+                i_gp_pred+=[ii_gp_pred]
+                i_gp_var+=[ii_gp_var]
+            av, std = tools.weighted_avg_and_std(np.vstack(i_gp_pred),np.sqrt(np.vstack(i_gp_var)),axis=0)
+        self.gp_to_plot['gp_pred'] = av
+        self.gp_to_plot['gp_sd'] = std
+        '''
 
         self.min_trans=abs(np.nanmin(self.trans_to_plot['all']['med']))
 
@@ -1946,8 +1997,8 @@ class monoModel():
                                                                      abs(np.min(self.gp_to_plot['gp_pred'][self.lc['mask']]))
 
         for n in np.arange(len(gap_lens)):
-            low_lim = self.lc['time'][limits[n][0]]
-            upp_lim = self.lc['time'][limits[n][1]-1]
+            low_lim = self.lc['time'][self.lc['limits'][n][0]]
+            upp_lim = self.lc['time'][self.lc['limits'][n][1]-1]
             unmasked_lim_bool = (self.lc['time']>=(low_lim-0.5))&(self.lc['time']<(upp_lim+0.5))
             
             if self.use_GP:
@@ -1982,14 +2033,15 @@ class monoModel():
                         f_alls[n].circle(self.lc['time'][limit_mask[n]],
                                          self.lc['flux'][limit_mask[n]]+raw_plot_offset,
                                          alpha=0.5,size=0.75,color='black')
-                        f_alls[n].circle(self.lc['bin_time'][binlimits[n][0]:binlimits[n][1]],
-                                         self.lc['bin_flux'][binlimits[n][0]:binlimits[n][1]] + raw_plot_offset,
+                        f_alls[n].circle(self.lc['bin_time'][self.lc['binlimits'][n][0]:self.lc['binlimits'][n][1]],
+                                         self.lc['bin_flux'][self.lc['binlimits'][n][0]:self.lc['binlimits'][n][1]] + raw_plot_offset,
                                          alpha=0.65,size=3.5,legend="raw")
-                        errors = ColumnDataSource(data=dict(base=self.lc['bin_time'][binlimits[n][0]:binlimits[n][1]],
-                                                     lower=self.lc['bin_flux'][binlimits[n][0]:binlimits[n][1]] + \
-                                                     raw_plot_offset - self.lc['bin_flux_err'][binlimits[n][0]:binlimits[n][1]],
-                                                     upper=self.lc['bin_flux'][binlimits[n][0]:binlimits[n][1]] + \
-                                                     raw_plot_offset + self.lc['bin_flux_err'][binlimits[n][0]:binlimits[n][1]]))
+                        errors = ColumnDataSource(data=
+                         dict(base=self.lc['bin_time'][self.lc['binlimits'][n][0]:self.lc['binlimits'][n][1]],
+                              lower=self.lc['bin_flux'][self.lc['binlimits'][n][0]:self.lc['binlimits'][n][1]] + \
+                              raw_plot_offset - self.lc['bin_flux_err'][self.lc['binlimits'][n][0]:self.lc['binlimits'][n][1]],
+                              upper=self.lc['bin_flux'][self.lc['binlimits'][n][0]:self.lc['binlimits'][n][1]] + \
+                              raw_plot_offset + self.lc['bin_flux_err'][self.lc['binlimits'][n][0]:self.lc['binlimits'][n][1]]))
 
                         f_alls[n].add_layout(Whisker(source=errors, base='base', upper='upper',lower='lower',
                                                      line_color='#dddddd', line_alpha=0.5,
@@ -2036,15 +2088,15 @@ class monoModel():
                         f_alls[n].circle(self.lc['time'][limit_mask[n]],
                                          self.lc['flux_flat'][limit_mask[n]]+raw_plot_offset, ".k",
                                          alpha=0.5,size=0.75)
-                        f_alls[n].circle(self.lc['bin_time'][binlimits[n][0]:binlimits[n][1]],
-                                         self.lc['bin_flux'][binlimits[n][0]:binlimits[n][1]],
+                        f_alls[n].circle(self.lc['bin_time'][self.lc['binlimits'][n][0]:self.lc['binlimits'][n][1]],
+                                         self.lc['bin_flux'][self.lc['binlimits'][n][0]:self.lc['binlimits'][n][1]],
                                          legend="detrended",alpha=0.65,size=3.5)
                         
-                        errors = ColumnDataSource(data=dict(base=self.lc['bin_time'][binlimits[n][0]:binlimits[n][1]],
-                                                     lower=self.lc['bin_flux'][binlimits[n][0]:binlimits[n][1]] - \
-                                                     self.lc['bin_flux_err'][binlimits[n][0]:binlimits[n][1]],
-                                                     upper=self.lc['bin_flux'][binlimits[n][0]:binlimits[n][1]] + \
-                                                     self.lc['bin_flux_err'][binlimits[n][0]:binlimits[n][1]]))
+                        errors = ColumnDataSource(data=dict(base=self.lc['bin_time'][self.lc['binlimits'][n][0]:self.lc['binlimits'][n][1]],
+                                     lower=self.lc['bin_flux'][self.lc['binlimits'][n][0]:self.lc['binlimits'][n][1]] - \
+                                     self.lc['bin_flux_err'][self.lc['binlimits'][n][0]:self.lc['binlimits'][n][1]],
+                                     upper=self.lc['bin_flux'][self.lc['binlimits'][n][0]:self.lc['binlimits'][n][1]] + \
+                                     self.lc['bin_flux_err'][self.lc['binlimits'][n][0]:self.lc['binlimits'][n][1]]))
                         f_alls[n].add_layout(Whisker(source=errors, base='base', upper='upper',lower='lower',
                                                      line_color='#dddddd', line_alpha=0.5,
                                                      upper_head=TeeHead(line_color='#dddddd',line_alpha=0.5),
@@ -2054,14 +2106,15 @@ class monoModel():
                         f_alls[n].circle(self.lc['time'][limit_mask[n]],
                                          self.lc['flux_flat'][limit_mask[n]]+raw_plot_offset, ".k",
                                          alpha=0.5,size=0.75)
-                        f_alls[n].circle(self.lc['bin_time'][binlimits[n][0]:binlimits[n][1]],
-                                         self.lc['bin_flux_flat'][binlimits[n][0]:binlimits[n][1]],
+                        f_alls[n].circle(self.lc['bin_time'][self.lc['binlimits'][n][0]:self.lc['binlimits'][n][1]],
+                                         self.lc['bin_flux_flat'][self.lc['binlimits'][n][0]:self.lc['binlimits'][n][1]],
                                          legend="detrended",alpha=0.65,size=3.5)
-                        errors = ColumnDataSource(data=dict(base=self.lc['bin_time'][binlimits[n][0]:binlimits[n][1]],
-                                                     lower=self.lc['bin_flux_flat'][binlimits[n][0]:binlimits[n][1]] - \
-                                                     self.lc['bin_flux_err'][binlimits[n][0]:binlimits[n][1]],
-                                                     upper=self.lc['bin_flux_flat'][binlimits[n][0]:binlimits[n][1]] + \
-                                                     self.lc['bin_flux_err'][binlimits[n][0]:binlimits[n][1]]))
+                        errors = ColumnDataSource(
+                                  data=dict(base=self.lc['bin_time'][self.lc['binlimits'][n][0]:self.lc['binlimits'][n][1]],
+                                     lower=self.lc['bin_flux_flat'][self.lc['binlimits'][n][0]:self.lc['binlimits'][n][1]] - \
+                                     self.lc['bin_flux_err'][self.lc['binlimits'][n][0]:self.lc['binlimits'][n][1]],
+                                     upper=self.lc['bin_flux_flat'][self.lc['binlimits'][n][0]:self.lc['binlimits'][n][1]] + \
+                                     self.lc['bin_flux_err'][self.lc['binlimits'][n][0]:self.lc['binlimits'][n][1]]))
                         f_alls[n].add_layout(Whisker(source=errors, base='base', upper='upper',lower='lower',
                                                      line_color='#dddddd', line_alpha=0.5,
                                                      upper_head=TeeHead(line_color='#dddddd',line_alpha=0.5),
@@ -2169,13 +2222,13 @@ class monoModel():
                 if np.nanmedian(np.diff(self.lc['time'][limit_mask[n]]))<1/72:
                     f_alls[n].plot(self.lc['time'][limit_mask[n]], self.lc['flux'][limit_mask[n]] + raw_plot_offset,
                                    ".k", alpha=0.5,markersize=0.75, rasterized=raster)
-                    f_alls[n].errorbar(self.lc['bin_time'][binlimits[n][0]:binlimits[n][1]],
-                                       self.lc['bin_flux'][binlimits[n][0]:binlimits[n][1]] + raw_plot_offset, 
-                                       yerr=self.lc['bin_flux_err'][binlimits[n][0]:binlimits[n][1]],color='C1',
+                    f_alls[n].errorbar(self.lc['bin_time'][self.lc['binlimits'][n][0]:self.lc['binlimits'][n][1]],
+                                       self.lc['bin_flux'][self.lc['binlimits'][n][0]:self.lc['binlimits'][n][1]] + raw_plot_offset, 
+                                       yerr=self.lc['bin_flux_err'][self.lc['binlimits'][n][0]:self.lc['binlimits'][n][1]],color='C1',
                                        fmt=".", label="raw", ecolor='#dddddd', alpha=0.5,markersize=3.5, rasterized=raster)
                 else:
                     f_alls[n].errorbar(self.lc['time'][limit_mask[n]], self.lc['flux'][limit_mask[n]] + raw_plot_offset, 
-                                       yerr=self.lc['flux_err'][binlimits[n][0]:binlimits[n][1]],color='C1',
+                                       yerr=self.lc['flux_err'][self.lc['binlimits'][n][0]:self.lc['binlimits'][n][1]],color='C1',
                                        fmt=".", label="raw", ecolor='#dddddd', 
                                        alpha=0.5,markersize=3.5, rasterized=raster)
 
@@ -2208,17 +2261,17 @@ class monoModel():
                                                  yerr=self.lc['flux_err'][limit_mask[n]], fmt=".", rasterized=raster,
                                                  ecolor='#dddddd',label="residuals", alpha=0.5,markersize=0.75)
                     #Plotting GP region and subtracted flux
-                    f_alls[n].fill_between(self.lc['time'][limits[n][0]:limits[n][1]],
-                                           self.gp_to_plot['gp_pred'][limits[n][0]:limits[n][1]] + raw_plot_offset - \
-                                           2*self.gp_to_plot['gp_sd'][limits[n][0]:limits[n][1]],
-                                           self.gp_to_plot['gp_pred'][limits[n][0]:limits[n][1]] + raw_plot_offset + \
-                                           2*self.gp_to_plot['gp_sd'][limits[n][0]:limits[n][1]], rasterized=raster,
-                                           color="C3", alpha=0.2,zorder=10)
-                    f_alls[n].fill_between(self.lc['time'][limits[n][0]:limits[n][1]],
-                                           self.gp_to_plot['gp_pred'][limits[n][0]:limits[n][1]] + raw_plot_offset - \
-                                           self.gp_to_plot['gp_sd'][limits[n][0]:limits[n][1]],
-                                           self.gp_to_plot['gp_pred'][limits[n][0]:limits[n][1]] + raw_plot_offset + \
-                                           self.gp_to_plot['gp_sd'][limits[n][0]:limits[n][1]], rasterized=raster,
+                    f_alls[n].fill_between(self.lc['time'][self.lc['limits'][n][0]:self.lc['limits'][n][1]],
+                               self.gp_to_plot['gp_pred'][self.lc['limits'][n][0]:self.lc['limits'][n][1]] + raw_plot_offset - \
+                               2*self.gp_to_plot['gp_sd'][self.lc['limits'][n][0]:self.lc['limits'][n][1]],
+                               self.gp_to_plot['gp_pred'][self.lc['limits'][n][0]:limits[n][1]] + raw_plot_offset + \
+                               2*self.gp_to_plot['gp_sd'][self.lc['limits'][n][0]:self.lc['limits'][n][1]], rasterized=raster,
+                               color="C3", alpha=0.2,zorder=10)
+                    f_alls[n].fill_between(self.lc['time'][self.lc['limits'][n][0]:self.lc['limits'][n][1]],
+                               self.gp_to_plot['gp_pred'][self.lc['limits'][n][0]:self.lc['limits'][n][1]] + raw_plot_offset - \
+                               self.gp_to_plot['gp_sd'][self.lc['limits'][n][0]:self.lc['limits'][n][1]],
+                               self.gp_to_plot['gp_pred'][self.lc['limits'][n][0]:self.lc['limits'][n][1]] + raw_plot_offset + \
+                               self.gp_to_plot['gp_sd'][self.lc['limits'][n][0]:self.lc['limits'][n][1]], rasterized=raster,
                                            color="C3", label="GP fit",alpha=0.3,zorder=11)
 
 
@@ -2228,9 +2281,9 @@ class monoModel():
                         #Plotting flat flux only
                         f_alls[n].plot(self.lc['time'][limit_mask[n]], self.lc['flux_flat'][limit_mask[n]],
                                        ".k",alpha=0.5,markersize=0.75, rasterized=raster)
-                        f_alls[n].errorbar(self.lc['bin_time'][binlimits[n][0]:binlimits[n][1]],
-                                           self.lc['bin_flux_flat'][binlimits[n][0]:binlimits[n][1]],
-                                           yerr= self.lc['bin_flux_err'][binlimits[n][0]:binlimits[n][1]], rasterized=raster, 
+                        f_alls[n].errorbar(self.lc['bin_time'][self.lc['binlimits'][n][0]:self.lc['binlimits'][n][1]],
+                                           self.lc['bin_flux_flat'][self.lc['binlimits'][n][0]:self.lc['binlimits'][n][1]],
+                                           yerr= self.lc['bin_flux_err'][self.lc['binlimits'][n][0]:self.lc['binlimits'][n][1]], rasterized=raster, 
                                            color='C2',fmt=".",label="detrended", ecolor='#dddddd', alpha=0.5,markersize=3.5)
                         #Plotting residuals:
                         f_all_resids[n].plot(self.lc['time'][limit_mask[n]],
@@ -2273,7 +2326,7 @@ class monoModel():
                     plt.setp(f_all_resids[n].get_yticklabels(), visible=False) 
                 
                 f_all_resids[n].set_xlabel = 'Time [BJD-'+str(int(self.lc['jd_base']))+']' #<- x-axis label
-                f_all_resids[n].set_xlim(self.lc['time'][limits[n][0]]-0.5,self.lc['time'][limits[n][1]-1]+0.5)
+                f_all_resids[n].set_xlim(self.lc['time'][self.lc['limits'][n][0]]-0.5,self.lc['time'][self.lc['limits'][n][1]-1]+0.5)
                 if gap_lens[n]==np.max(gap_lens):
                     f_alls[n].legend()
                     
@@ -2319,11 +2372,11 @@ class monoModel():
                     per=self.init_soln['multi_periods'][self.multis.index(pl)]
                 #phase-folding onto t0
                 self.lc['phase'][pl]=phase=(self.lc['time']-t0-0.5*per)%per-0.5*per
-                for ns in range(len(limits)):
-                    n_p_sta=np.ceil((t0-self.lc['time'][limits[ns][0]])/per)
-                    n_p_end=(t0-self.lc['time'][limits[ns][1]-1])/per
+                for ns in range(len(self.lc['limits'])):
+                    n_p_sta=np.ceil((t0-self.lc['time'][self.lc['limits'][ns][0]])/per)
+                    n_p_end=(t0-self.lc['time'][self.lc['limits'][ns][1]-1])/per
                     
-                    if (t0>limits[ns][0])&(t0<limits[ns][0]):
+                    if (t0>self.lc['limits'][ns][0])&(t0<self.lc['limits'][ns][0]):
                         #Adding ticks for the position of each planet below the data:
                         f_alls[ns].scatter(t0+np.arange(n_p_sta,n_p_end,1.0)*per,
                                            np.tile(-1*self.min_trans-0.8*resid_sd-(resid_sd*n/len(self.planets)),
@@ -2340,8 +2393,8 @@ class monoModel():
                     per=2e3#per=self.init_soln['mono_periods_'+pl][-1]
                 #phase-folding onto t0
                 self.lc['phase'][pl]=phase=(self.lc['time']-t0-0.5*per)%per-0.5*per
-                for ns in range(len(limits)):
-                    if (t0>limits[ns][0])&(t0<limits[ns][0]):
+                for ns in range(len(self.lc['limits'])):
+                    if (t0>self.lc['limits'][ns][0])&(t0<self.lc['limits'][ns][0]):
                         if interactive:
                             f_alls[ns].scatter([t0],[-1*self.min_trans-0.8*resid_sd-(resid_sd*n/len(self.planets))],
                                                marker="triangle", size=12.5, fill_color=pal[n+2], alpha=0.85)
@@ -2360,8 +2413,8 @@ class monoModel():
                     per=abs(t0_2-t0)
                 #phase-folding onto t0
                 self.lc['phase'][pl]=(self.lc['time']-t0-0.5*per)%per-0.5*per
-                for ns in range(len(limits)):
-                    if (t0>limits[ns][0])&(t0<limits[ns][0]):
+                for ns in range(len(self.lc['limits'])):
+                    if (t0>self.lc['limits'][ns][0])&(t0<self.lc['limits'][ns][0]):
                         if interactive:
                             f_alls[ns].scatter([t0],[-1*self.min_trans-0.8*resid_sd-(resid_sd*n/len(self.planets))],
                                            marker="triangle", size=12.5, fill_color=pal[2+n], alpha=0.85)
@@ -2369,7 +2422,7 @@ class monoModel():
                             f_alls[ns].scatter([t0],[-1*self.min_trans-0.8*resid_sd-(resid_sd*n/len(self.planets))],
                                            "^", markersize=12.5, color=pal[2+n], alpha=0.85, rasterized=raster)
 
-                    if (t0_2>limits[ns][0])&(t0_2<limits[ns][0]):
+                    if (t0_2>self.lc['limits'][ns][0])&(t0_2<self.lc['limits'][0]):
                         if interactive:
                             f_alls[ns].scatter([t0_2],[-1*self.min_trans-0.8*resid_sd-(resid_sd*n/len(self.planets))],
                                            marker="triangle", size=12.5, fill_color=pal[2+n], alpha=0.85)
@@ -2490,14 +2543,15 @@ class monoModel():
             
         else:
             if plot_loc is None:
-                plt.savefig(self.savenames[0].replace('_mcmc.pickle','_period_dists.pdf'))
+                plt.savefig(self.savenames[0]+'_period_dists.pdf')
             else:
                 plt.savefig(plot_loc)
 
-    def PlotPeriods(self, plot_loc=None,log=True,nbins=50):
+    def PlotPeriods(self, plot_loc=None,log=True,nbins=25,pmax=None):
         assert hasattr(self,'trace')
         import seaborn as sns
         plot_pers=self.duos+self.monos
+        
         if len(plot_pers)>0:
             plt.figure(figsize=(8.5,4.2))
             for npl, pl in enumerate(plot_pers):
@@ -2514,47 +2568,50 @@ class monoModel():
                     plt.ylabel("$\log_{10}{p}$")
                     plt.xlabel("Period [d]")
                 elif pl in self.monos:
-                    plt.title("Mono - "+str(pl))
-                    if 'logprob_marg_'+pl in self.trace.varnames:
-                        #Checking seaborn version:
+                    from scipy.special import logsumexp
+                    if 'logprob_marg_sum_'+pl in self.trace.varnames:
+                        total_prob=logsumexp((self.trace['logprob_marg_'+pl]+self.trace['logprob_marg_sum_'+pl]).ravel())
+                    else:
+                        total_prob=logsumexp(self.trace['logprob_marg_'+pl].ravel())
+                    pmax = np.nanmax(self.trace['mono_periods_'+pl].ravel()) if pmax is None else pmax
+                    for ngap in np.arange(len(self.planets[pl]['per_gaps'])):
+                        bins=np.linspace(self.planets[pl]['per_gaps'][ngap,0],self.planets[pl]['per_gaps'][ngap,1],nbins)
+                        weights = np.exp(self.trace['logprob_marg_'+pl][:,ngap]-total_prob) if 'logprob_marg_'+pl in self.trace.varnames else None
+                        plt.hist(self.trace['mono_periods_'+pl][:,ngap], bins=bins, edgecolor=sns.color_palette()[0],
+                                 weights=weights, color=sns.color_palette()[0], histtype="stepfilled")
+                        '''
                         if log and float('.'.join(sns.__version__.split('.')[:2]))>=0.11:
-                            sns.distplot(self.trace['mono_periods_'+pl].ravel(), hist=True, kde=True, bins=nbins, norm_hist=True,
+                            sns.distplot(self.trace['mono_periods_'+pl][:,ngap], hist=True, kde=True, 
+                                         bins=bins, norm_hist=False,
                                          hist_kws={'edgecolor':'None','log':log,
-                                                   'weights':probs},
-                                         kde_kws={'linewidth': 2,'weights':np.exp(self.trace['logprob_marg_'+pl].ravel())})
+                                                   'weights':weights,'color':sns.color_palette()[0]},
+                                         kde_kws={'linewidth':2,'weights':weights,'bw':self.planets[pl]['per_gaps'][ngap,2]*0.1,
+                                                  'clip':self.planets[pl]['per_gaps'][ngap,:2],'color':sns.color_palette()[1]})
+                            
                         else:
-                            sns.distplot(self.trace['mono_periods_'+pl].ravel(), hist=True, kde=False, bins=nbins, norm_hist=True,
+                            sns.distplot(self.trace['mono_periods_'+pl][:,ngap], hist=True, kde=False, 
+                                         bins=bins, norm_hist=False,
                                          hist_kws={'edgecolor':'None','log':log,
-                                                   'weights':np.exp(self.trace['logprob_marg_'+pl].ravel())},
-                                         kde_kws={'linewidth': 2})
+                                                   'weights':weights,'color':sns.color_palette()[0]},
+                                         kde_kws={'linewidth': 2,'clip':self.planets[pl]['per_gaps'][ngap,:2],
+                                                  'bw':self.planets[pl]['per_gaps'][ngap,2]*0.1,'color':sns.color_palette()[1]})
+                        '''
+                    plt.title("Mono - "+str(pl))
 
-                        #plt.hist(self.trace['mono_periods_'+pl].ravel(),bins=50,edgecolor='None',
-                        #         weights=np.exp(self.trace['logprob_marg_'+pl].ravel()),density=True)
-                    else:
-                        sns.distplot(self.trace['mono_periods_'+pl].ravel(), hist=True, kde=True, bins=nbins, norm_hist=True,
-                                     hist_kws={'edgecolor':'None','log':log},
-                                     kde_kws={'linewidth': 3})
-                        #plt.hist(self.trace['mono_periods_'+pl].ravel(),bins=50,edgecolor='None',
-                        #         density=True)
                     if log:
-                        #plt.yscale('log')
-                        plt.ylabel("$\log_{10}{\\rm prob. density}$")
-                        if 'logprob_marg_'+pl in self.trace.varnames:
-                            bins = np.histogram(self.trace['mono_periods_'+pl].ravel(),
-                                                weights=np.exp(self.trace['logprob_marg_'+pl].ravel()),bins=nbins,density=True)
-                        else:
-                            bins = np.histogram(self.trace['mono_periods_'+pl].ravel(),bins=nbins,density=True)
-
-                        bin_mins=np.nanmin((bins[0]/np.nanmedian(np.diff(bins[1])))[bins[0]>0])
-                        print(bin_mins)
-                        plt.ylim(np.clip(0.01*bin_mins,1e-50,1.0),1.0)
+                        plt.yscale('log')
+                        plt.ylabel("$\log_{10}{\\rm prob}$")
                     else:
-                        plt.ylabel("prob. density")
+                        plt.ylabel("prob")
+                    plt.xlim(0,pmax)
+                    #plt.xlim(60,80)
+                    plt.ylim(1e-12,1.0)
                     plt.xlabel("Period [d]")
             if plot_loc is None:
-                plt.savefig(self.savenames[0].replace('_mcmc.pickle','_period_dists.pdf'))
+                plt.savefig(self.savenames[0]+'_period_dists.pdf')
             else:
                 plt.savefig(plot_loc)
+    
     def PlotTable(self,plot_loc=None):
         new_df=True
         assert hasattr(self,'trace')
@@ -2588,7 +2645,7 @@ class monoModel():
 
         fig.tight_layout()
         if plot_loc is None:
-            fig.savefig(self.savenames[0].replace('_mcmc.pickle','_table.pdf'))
+            fig.savefig(self.savenames[0]+'_table.pdf')
         else:
             plt.savefig(plot_loc)
     
@@ -2622,53 +2679,56 @@ class monoModel():
         else:
             fig = corner.corner(self.samples)
 
-        fig.savefig(self.savenames[0].replace('_mcmc.pickle','_corner.png'),dpi=250)
+        fig.savefig(self.savenames[0]+'_corner.png',dpi=250)
 
         if returnfig:
             return fig
         
-    def LoadPickle(self,loadname=None):
+    def LoadPickle(self, loadname=None):
         #Pickle file style: folder/TIC[11-number ID]_[20YY-MM-DD]_[n]_mcmc.pickle
         if loadname is not None:
-            print(self.savenames[0],"exists - loading")
+            print(self.savenames[0]+'_mcmc.pickle',"exists - loading")
             n_bytes = 2**31
             max_bytes = 2**31 - 1
 
             ## read
             bytes_in = bytearray(0)
             input_size = os.path.getsize(loadname)
-            with open(self.savenames[0], 'rb') as f_in:
+            with open(self.savenames[0]+'_mcmc.pickle', 'rb') as f_in:
                 for _ in range(0, input_size, max_bytes):
                     bytes_in += f_in.read(max_bytes)
-            self.trace = pickle.loads(bytes_in)
-
-        if not hasattr(self, 'savenames'):
-            self.savenames=self.GetSavename(how='load')
-        print(self.savenames[0],os.path.exists(self.savenames[0]))
-        if os.path.exists(self.savenames[0]):
-            print(self.savenames[0],"exists - loading")
+            loaded = pickle.loads(bytes_in)
+            if type(loaded)==dict:
+                for key in loaded:
+                    setattr(self,key,loaded[key])
+            else:
+                self.trace=loaded
+        if not hasattr(self, 'savenames') or self.savenames is None:
+            self.GetSavename(how='load')
+        print(self.savenames, self.savenames is None)
+        #[0]+'_mcmc.pickle',os.path.exists(self.savenames[0]+'_mcmc.pickle'))
+        if os.path.exists(self.savenames[0]+'_mcmc.pickle'):
+            print(self.savenames[0]+'_mcmc.pickle',"exists - loading")
             n_bytes = 2**31
             max_bytes = 2**31 - 1
 
             ## read
             bytes_in = bytearray(0)
-            input_size = os.path.getsize(self.savenames[0])
-            with open(self.savenames[0], 'rb') as f_in:
+            input_size = os.path.getsize(self.savenames[0]+'_mcmc.pickle')
+            with open(self.savenames[0]+'_mcmc.pickle', 'rb') as f_in:
                 for _ in range(0, input_size, max_bytes):
                     bytes_in += f_in.read(max_bytes)
-            self.trace = pickle.loads(bytes_in)
+            loaded = pickle.loads(bytes_in)
+            if type(loaded)==dict:
+                for key in loaded:
+                    setattr(self,key,loaded[key])
+            else:
+                self.trace=loaded
 
-    def SavePickle(self):
+    def SavePickle(self,limit_size=True):
         if not hasattr(self,'savenames'):
             self.savenames=GetSavename(how='save')
-        n_bytes = 2**31
-        max_bytes = 2**31 - 1
-
-        ## write
-        bytes_out = pickle.dumps(self.trace)
-        with open(self.savenames[0], 'wb') as f_out:
-            for idx in range(0, len(bytes_out), max_bytes):
-                f_out.write(bytes_out[idx:idx+max_bytes])
+        
 
     def getLDs(self,n_samples,mission='tess',how='2'):
         Teff_samples = np.random.normal(self.Teff[0],np.average(abs(self.Teff[1:])),n_samples)
@@ -2685,7 +2745,7 @@ class monoModel():
             if self.FeH!=0.0:
                 #Finding nearest by FeH:
                 unq_FeHs=pd.unique(TessLDs['FeH'])
-                TessLDs=TessLDs.loc[unq_FeHs['FeH']==unq_FeHs[np.argmin(self.FeH-unq_FeHs.astype(float))]]
+                TessLDs=TessLDs.loc[unq_FeHs['FeH']==unq_FeHs[np.argmin(abs(self.FeH-unq_FeHs.astype(float)))]]
                 
             a_interp=ct2d(np.column_stack((TessLDs.Teff.values.astype(float),
                                            TessLDs.logg.values.astype(float))),
@@ -2738,7 +2798,7 @@ class monoModel():
         #Plotting corner of the parameters to see correlations
         print("MakingLatexTable")
         if not hasattr(self,'savenames'):
-            self.savenames=self.GetSavename(how='save', suffix='mcmc.pickle')
+            self.GetSavename(how='save')
         if self.tracemask is None:
             self.tracemask=np.tile(True,len(self.trace['Rs']))
         if varnames is None or varnames == 'all':
@@ -2771,7 +2831,7 @@ class monoModel():
                     outstring+="\n"+row+' ['+units[fact[0]]+']'+" & "+vals_to_latex(np.percentile(facts[fact[0]]*self.samples[row],[16,50,84]))
                 else:
                     outstring+="\n"+row+" & "+vals_to_latex(np.percentile(self.samples[row],[16,50,84]))
-        with open(self.savenames[0].replace('_mcmc.pickle','_table.txt'),'w') as file_to_write:
+        with open(self.savenames[0]+'_table.txt','w') as file_to_write:
             file_to_write.write(outstring)
         #print("appending to file,",savename,"not yet supported")
         return outstring
@@ -2809,21 +2869,21 @@ def Run(ID, initdepth, initt0, mission='TESS', stellardict=None,n_draws=1200,
         savenames=GetSavename(ID, mission, how='load', overwrite=overwrite, savefileloc=savefileloc)
     print(savenames)
     
-    if os.path.exists(savenames[1].replace('_mcmc.pickle','.lc')) and os.path.exists(savenames[1].replace('_mcmc.pickle','_hdr.pickle')) and not overwrite:
-        print("loading from",savenames[1].replace('_mcmc.pickle','.lc'))
+    if os.path.exists(savenames[1]+'.lc') and os.path.exists(savenames[1]+'_hdr.pickle') and not overwrite:
+        print("loading from",savenames[1]+'.lc')
         #Loading lc from file
-        df=pd.read_csv(savenames[1].replace('_mcmc.pickle','.lc'))
+        df=pd.read_csv(savenames[1]+'.lc')
         lc={col.replace('# ',''):df[col].values for col in df.columns}
-        hdr=pickle.load(open(savenames[1].replace('_mcmc.pickle','_hdr.pickle'),'rb'))
+        hdr=pickle.load(open(savenames[1]+'_hdr.pickle','rb'))
     else:
         lc,hdr = openLightCurve(ID,mission,**kwargs)
         print([len(lc[key]) for key in list(lc.keys())])
-        pd.DataFrame({key:lc[key] for key in list(lc.keys())}).to_csv(savenames[1].replace('_mcmc.pickle','.lc'))
-        pickle.dump(hdr, open(savenames[1].replace('_mcmc.pickle','_hdr.pickle'),'wb'))
+        pd.DataFrame({key:lc[key] for key in list(lc.keys())}).to_csv(savenames[1]+'.lc')
+        pickle.dump(hdr, open(savenames[1]+'_hdr.pickle','wb'))
 
     if stellardict is None:
         Rstar, rhostar, Teff, logg, src = starpars.getStellarInfo(ID, hdr, mission, overwrite=overwrite,
-                                                             fileloc=savenames[1].replace('_mcmc.pickle','_starpars.csv'),
+                                                             fileloc=savenames[1]+'_starpars.csv',
                                                              savedf=True)
     else:
         if type(stellardict['Rs_err'])==tuple:
@@ -2854,7 +2914,7 @@ def Run(ID, initdepth, initt0, mission='TESS', stellardict=None,n_draws=1200,
 
     #try:
     if LoadFromFile and not overwrite:
-        self.LoadPickle(ID, mission, savenames[0])
+        self.LoadPickle(ID, mission, savenames[0]+'_mcmc.pickle')
     else:
         self.trace=None
    
@@ -2889,15 +2949,15 @@ def Run(ID, initdepth, initt0, mission='TESS', stellardict=None,n_draws=1200,
         tracemask=None
     if doplots:
         print("plotting")
-        PlotLC(lc, trace, ID, mission=mission, savename=savenames[0].replace('mcmc.pickle','TransitFit.png'), lcmask=lcmask,tracemask=tracemask)
-        PlotCorner(trace, ID, mission=mission, savename=savenames[0].replace('mcmc.pickle','corner.png'),tracemask=tracemask)
+        PlotLC(lc, trace, ID, mission=mission, savename=savenames[0]+'_TransitFit.png', lcmask=lcmask,tracemask=tracemask)
+        PlotCorner(trace, ID, mission=mission, savename=savenames[0]+'_corner.png',tracemask=tracemask)
     
-    if LoadFromFile and not overwrite and os.path.exists(savenames[0].replace('mcmc.pickle','results.txt')):
-        with open(savenames[0].replace('mcmc.pickle','results.txt'), 'r', encoding='UTF-8') as file:
+    if LoadFromFile and not overwrite and os.path.exists(savenames[0]+'_results.txt'):
+        with open(savenames[0]+'_results.txt', 'r', encoding='UTF-8') as file:
             restable = file.read()
     else:
         restable=ToLatexTable(trace, ID, mission=mission, varnames=None,order='columns',
-                              savename=savenames[0].replace('mcmc.pickle','results.txt'), overwrite=False,
+                              savename=savenames[0]+'_results.txt', overwrite=False,
                               savefileloc=None, tracemask=tracemask)
     return {'model':model, 'trace':trace, 'light_curve':lc, 'lcmask':lcmask, 'P_gap_cuts':P_gap_cuts, 'tracemask':tracemask,'restable':restable}
 
@@ -2914,7 +2974,7 @@ def RunFromScratch(ID, mission, tcen, tdur, ra=None, dec=None,
     
     #Gets stellar info
     Rstar, rhostar, Teff, logg, src = starpars.getStellarInfo(ID, hdr, mission, overwrite=overwrite,
-                                                             fileloc=savenames[1].replace('_mcmc.pickle','_starpars.csv'),
+                                                             fileloc=savenames[1]+'_starpars.csv',
                                                              savedf=True)
     
     #Gets Lightcurve
@@ -2983,7 +3043,7 @@ def PlotCorner(trace, ID, mission='TESS', varnames=["b", "ecc", "period", "r_pl"
     print("varnames = ",varnames)
     
     if savename is None:
-        savename=GetSavename(ID, mission, how='save', suffix='_corner.png', 
+        savename=GetSavename(ID, mission, how='save', 
                              overwrite=overwrite, savefileloc=savefileloc)[0]
     
     if tracemask is None:

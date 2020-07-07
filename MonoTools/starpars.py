@@ -149,6 +149,7 @@ def TICdata(tics,sect=None,getImageData=False):
                 tess_df.loc[int(row['ID']),'rowPix']=outRowPix[sectloc]
             except:
                 print(sect," not in observed sectors, ",outSec)
+    
     return tess_df
 
 
@@ -539,8 +540,8 @@ def LoadDust(sc,plx,dust='allsky'):
 
 def dens2(logg,loggerr1,loggerr2,rad,raderr1,raderr2,mass,masserr1,masserr2,nd=6000,returnpost=False):
     #Returns a density as the weighted average of that from logg and mass
-    dens1 = lambda logg,rad: (np.power(10,logg-2)/(1.33333*np.pi*6.67e-11*rad*695500000))/1410.0
-    dens2 = lambda mass,rad: ((mass*1.96e30)/(4/3.0*np.pi*(rad*695500000)**3))/1410.0
+    dens1 = lambda logg,rad: (np.power(10,logg-4.43)/rad)
+    dens2 = lambda mass,rad: (mass/rad**3)
 
     loggs= np.random.normal(logg,0.5*(loggerr1+loggerr2),nd)
     rads= np.random.normal(rad,0.5*(raderr1+raderr2),nd)
@@ -892,9 +893,9 @@ def starpars(icid,mission,errboost=0.1,return_best=True,
         #Getting Density from R, M and logg:
         rhos=[];rhoems=[];rhoeps=[];rhoes=[]
         if 'mass' in exofop_dat.index:
-            rhos+=[1.411*exofop_dat['mass']/exofop_dat['rad']**3]
-            rhoeps+=[1.411*(exofop_dat['mass']+exofop_dat['massep'])/((exofop_dat['rad']-exofop_dat['radem'])**3)-rhos[-1]]
-            rhoems+=[rhos[-1] - 1.411*(exofop_dat['mass']-exofop_dat['massem'])/((exofop_dat['rad']+exofop_dat['radep'])**3)]
+            rhos+=[exofop_dat['mass']/exofop_dat['rad']**3]
+            rhoeps+=[(exofop_dat['mass']+exofop_dat['massep'])/((exofop_dat['rad']-exofop_dat['radem'])**3)-rhos[-1]]
+            rhoems+=[rhos[-1] - (exofop_dat['mass']-exofop_dat['massem'])/((exofop_dat['rad']+exofop_dat['radep'])**3)]
             rhoes+=[0.5*(abs(rhoeps[-1])+abs(rhoems[-1]))]
         if 'logg' in exofop_dat.index:
             rhos+=[np.power(10,exofop_dat['logg']-4.4377)/exofop_dat['rad']]
@@ -903,14 +904,14 @@ def starpars(icid,mission,errboost=0.1,return_best=True,
             rhoes+=[0.5*(abs(rhoeps[-1])+abs(rhpems[-1]))]
         rhos=np.array(rhos)
         rhoes=np.array(rhoes)
-        exofop_dat['rho_gcm3']=rhos[np.argmin(rhoes)]
-        exofop_dat['rho_gcm3e']=np.min(rhoes)
-        exofop_dat['rho_gcm3em']=rhoems[np.argmin(rhoes)]
-        exofop_dat['rho_gcm3ep']=rhoeps[np.min(rhoes)]
-        exofop_dat['rho']=exofop_dat['rho_gcm3']/1.411
-        exofop_dat['rhoe']=exofop_dat['rho_gcm3e']/1.411
-        exofop_dat['rhoem']=exofop_dat['rho_gcm3em']/1.411
-        exofop_dat['rhoep']=exofop_dat['rho_gcm3ep']/1.411
+        exofop_dat['rho']=rhos[np.argmin(rhoes)]
+        exofop_dat['rhoe']=np.min(rhoes)
+        exofop_dat['rhoem']=rhoems[np.argmin(rhoes)]
+        exofop_dat['rhoep']=rhoeps[np.min(rhoes)]
+        exofop_dat['rho_gcm3']=exofop_dat['rho']*1.411
+        exofop_dat['rho_gcm3e']=exofop_dat['rhoe']*1.411
+        exofop_dat['rho_gcm3em']=exofop_dat['rhoem']*1.411
+        exofop_dat['rho_gcm3ep']=exofop_dat['rhoep']*1.411
     elif 'rho' in exofop_dat.index and 'rho_gcm3' not in exofop_dat.index:
         exofop_dat['rho_gcm3']=exofop_dat['rho']*1.411
         exofop_dat['rho_gcm3e']=0.5*(abs(exofop_dat['rhoep'])+abs(exofop_dat['rhoem']))*1.411
@@ -1023,7 +1024,7 @@ def getStellarDensity(ID,mission,errboost=0.1):
     if not pd.isnull(exofop_dat['rho']) and exofop_dat['rho']!=0.0:
         rhos=np.array([exofop_dat['rho'],exofop_dat['rhoem'],exofop_dat['rhoep']])
     elif not np.isnan(exofop_dat[['logg','rad','mass']]).all():
-        rhos=namaste.dens2(*exofop_dat[['logg','loggem','loggep','rad','radem','radep','mass','massem','massep']])
+        rhos=dens2(*exofop_dat[['logg','loggem','loggep','rad','radem','radep','mass','massem','massep']])
     else:
         rhos=None
         
@@ -1160,6 +1161,7 @@ def getStellarInfoFromCsv(ID,mission,k2tab=None,keptabs=None):
     
     if mission.lower()=='tess':
         info = TICdata(int(ID)).iloc[0]
+        info['src']='TIC'
         print("TESS object",ID,info.name,info)
         k2tab = None
         keptabs = None
@@ -1365,9 +1367,9 @@ def getStellarInfoFromCsv(ID,mission,k2tab=None,keptabs=None):
     #Problem here - need rho. Derive from Teff and Rs, plus Dist vs. mag?
     allrhos={}
     if 'mass' in info.index and 'rad' in info.index:
-        MR={'rho':1.411*(info['mass']/info['rad']**3)}
-        MR['eneg_rho']=MR['rho']-1.411*((info['mass']-abs(info['eneg_mass']))/(info['rad']+info['epos_rad'])**3)
-        MR['epos_rho']=1.411*((info['mass']+info['epos_mass'])/(info['rad']-abs(info['eneg_rad']))**3)-MR['rho']
+        MR={'rho':(info['mass']/info['rad']**3)}
+        MR['eneg_rho']=MR['rho']-((info['mass']-abs(info['eneg_mass']))/(info['rad']+info['epos_rad'])**3)
+        MR['epos_rho']=((info['mass']+info['epos_mass'])/(info['rad']-abs(info['eneg_rad']))**3)-MR['rho']
         allrhos['MR']= MR
     if 'logg' in info.index and 'eneg_logg' in info.index and not np.isnan(info['eneg_logg']) and info['eneg_logg']!=0.0:
         logg={'rho':np.power(10,info['logg']-4.43)/info['rad']}
@@ -1472,6 +1474,6 @@ def getStellarInfo(ID,hdr,mission,overwrite=False,fileloc=None,savedf=True,use_s
     if not pd.isnull(best_stardf['rho']) and best_stardf['rho']!=0.0:
         rhos=np.array([best_stardf['rho'],best_stardf['rhoem'],best_stardf['rhoep']])
     else:
-        rhos=namaste.dens2(*best_stardf[['logg','loggem','loggep','rad','radem','radep','mass','massem','massep']])
+        rhos=dens2(*best_stardf[['logg','loggem','loggep','rad','radem','radep','mass','massem','massep']])
     
     return Rstar, rhos, Teff, logg, best_stardf['source']

@@ -294,7 +294,7 @@ def QuickMonoFit(lc,it0,dur,Rs=None,Ms=None,Teff=None,useL2=False,fit_poly=True,
         oot_mask=mask&(abs(lc[timeindex]-best_fit['tcen'])>0.5)&(abs(lc[timeindex]-best_fit['tcen'])<25)
         binlc=tools.bin_lc_segment(np.column_stack((lc[timeindex][oot_mask],lc[fluxindex][oot_mask],
                                                     lc[fluxerrindex][oot_mask])),best_fit['tdur'])
-        best_fit['cdpp'] = np.nanstd(binlc[:,1])
+        best_fit['cdpp'] = np.nanstd(binlc[:,1])#np.nanmedian(abs(np.diff(binlc[:,1])))#np.nanstd(binlc[:,1])
         best_fit['Ntrans']=1
     else:
         phase=(abs(lc['time']-best_fit['tcen']+0.5*best_fit['tdur'])%init_period)
@@ -846,7 +846,8 @@ def PeriodicPlanetSearch(lc, ID, planets, use_binned=False, use_flat=True, binsi
     else:
         anommask=~np.isnan(lc[prefix+'flux'+suffix][:])
     plmask=np.tile(False,len(anommask))
-    t_zero=np.min(lc['time'])
+    t_zero=np.nanmin(lc['time'])
+    assert t_zero>0
     SNR_last_planet=100;init_n_pl=len(planets);n_pl=len(planets);results=[]
     while SNR_last_planet>multi_SNR_thresh and n_pl<(n_search_loops+init_n_pl):
         if len(planets)>1:
@@ -1757,7 +1758,6 @@ def CheckPeriodConfusedPlanets(lc,all_dets,mono_mono=True,multi_multi=True,mono_
 
     mono_detns=[pl for pl in all_dets if (all_dets[pl]['orbit_flag']=='mono')&(all_dets[pl]['flag'] not in ['asteroid','EB','instrumental','lowSNR','variability','step'])]
     perdc_detns=[pl for pl in all_dets if (all_dets[pl]['orbit_flag'] in ['periodic','duo'])&(all_dets[pl]['orbit_flag']!='variability')]
-
     return all_dets, mono_detns, perdc_detns
     
 def CheckMonoPairs(lc_time, all_pls,prox_thresh=3.5, **kwargs):
@@ -2551,7 +2551,7 @@ def MonoVetting(ID, mission, tcen=None, tdur=None, overwrite=None, do_search=Tru
             both_dic, monosearchparams, monofig = MonoTransitSearch(deepcopy(lc),ID,mission,
                                                                     Rs=Rstar[0],Ms=Ms,Teff=Teff[0],
                                                                     plot_loc=file_loc+"/", plot=plot,**kwargs)
-            pickle.dump(monosearchparams,open(file_loc+"/"+file_loc.split('/')[-1]+'_mono_searchpars.pickle','wb'))
+            pickle.dump(monosearchparams,open(file_loc+"/"+file_loc.split('/')[-1]+'_monosearchpars.pickle','wb'))
             
             if plot:
                 figs['mono']=monofig

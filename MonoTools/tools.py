@@ -132,6 +132,8 @@ def openFits(f,fname,mission,cut_all_anom_lim=4.0,use_ppt=True):
         #    'flux_err':magerr2flux(f['LightCurve']['AperturePhotometry']['Aperture_002']['RawMagnitudeError'][:],
         #                           f['LightCurve']['AperturePhotometry']['Aperture_002']['RawMagnitude'][:]),
         lc['flux_err']=np.tile(np.nanmedian(abs(np.diff(lc['raw_flux']))),len(lc['time']))
+        lc['flux']=np.tile(np.nanmedian(abs(np.diff(lc['raw_flux']))),len(lc['time']))
+        lc['flux_err']=np.tile(np.nanmedian(abs(np.diff(lc['raw_flux']))),len(lc['time']))
     elif type(f)==eleanor.targetdata.TargetData:
         #Eleanor TESS object
         lc={'time':f.time,'flux':f.corr_flux,'flux_err':f.flux_err,'raw_flux':f.raw_flux,
@@ -226,7 +228,6 @@ def maskLc(lc,fhead,cut_all_anom_lim=5.0,use_ppt=False,end_of_orbit=True,use_bin
                 #ISLAND! NEED TO MASK
                 xmask[jumps[j,0]:(jumps[j,1]+1)]=False
         mask[mask]*=xmask
-                
     
     #End-of-orbit cut
     # Arbritrarily looking at the first/last 15 points and calculating STD of first/last 300 pts.
