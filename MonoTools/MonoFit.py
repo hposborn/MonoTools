@@ -767,8 +767,8 @@ class monoModel():
                 multi_bs = xo.distributions.ImpactParameter("multi_bs",ror=tt.exp(multi_logrors),shape=len(self.multis),
                                                             testval=np.array([self.planets[pls]['b'] for pls in self.multis]))
                 if not self.assume_circ:
-                    if len(self.planets)==0:
-                        multi_eccs = BoundedBeta("multi_eccs", alpha=0.867,beta=3.03,testval=0.05,shape=len(self.multis))
+                    if len(self.planets)==1:
+                        multi_eccs = BoundedBeta("multi_eccs", alpha=0.867,beta=3.03,testval=0.05)
                     elif len(self.planets)>1:
                         # The eccentricity prior distribution from Van Eylen for multiplanets (lower-e than single planets)
                         multi_eccs = pm.Bound(pm.Weibull, lower=1e-5, upper=1-1e-5)("multi_eccs", alpha= 0.049,beta=2,
