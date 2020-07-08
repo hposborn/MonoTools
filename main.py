@@ -77,7 +77,7 @@ if log:
     sl = StreamToLogger(stderr_logger, logging.ERROR)
     sys.stderr = sl
 
-os.environ["THEANO_FLAGS"] = "device=cpu,floatX=float32,cxxflags = -fbracket-depth=1024,base_compiledir="+x_file_loc
+os.environ["THEANO_FLAGS"] = "base_compiledir="+x_file_loc
 
 ####################################
 #  GETTING ARGUMENTS AND RUNNING:  #
@@ -98,15 +98,14 @@ do_fit=bool(sys.argv[12]) if len(sys.argv)>12 else True
 #Only running if we haven't already created a report:
 if not os.path.exists(os.path.join(x_file_loc,id_dic[mission]+str(ID).zfill(11)+"_report.pdf")) or overwrite is not None:
     from MonoTools import MonoSearch
-    try:
-        
-        outs=MonoSearch.MonoVetting(ID,mission,
-                                    tcen=tcen,tdur=tdur,overwrite=overwrite,do_search=do_search,
-                                    useL2=useL2,PL_ror_thresh=PL_ror_thresh,
-                                    variable_llk_thresh=variable_llk_thresh,file_loc=file_loc,
-                                    plot=plot, do_fit=do_fit, use_GP=False)
-    except Exception as e:
-        #traceback.print_exc()
-        exc_type, exc_obj, exc_tb = sys.exc_info()
-        print(e, exc_type, os.path.split(exc_tb.tb_frame.f_code.co_filename)[1], exc_tb.tb_lineno, ID,mission,"problem")
+    #try:
+    outs=MonoSearch.MonoVetting(ID,mission,
+                                tcen=tcen,tdur=tdur,overwrite=overwrite,do_search=do_search,
+                                useL2=useL2,PL_ror_thresh=PL_ror_thresh,
+                                variable_llk_thresh=variable_llk_thresh,file_loc=file_loc,
+                                plot=plot, do_fit=do_fit, use_GP=False)
+    #except Exception as e:
+    #    #traceback.print_exc()
+    #    exc_type, exc_obj, exc_tb = sys.exc_info()
+    #    print(e, exc_type, os.path.split(exc_tb.tb_frame.f_code.co_filename)[1], exc_tb.tb_lineno, ID,mission,"problem")
         

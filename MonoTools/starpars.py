@@ -1380,6 +1380,7 @@ def getStellarInfoFromCsv(ID,mission,k2tab=None,keptabs=None):
     if 'rho' in info.index and info['rho']>0.0:
         rhos={'rho':info['rho'], 'epos_rho':info['epos_rho'], 'eneg_rho':info['eneg_rho']}
         allrhos['rho']=rhos
+    assert not np.all([np.isnan(allrhos[rho]['rho']) for rho in allrhos])
     av1, neg_std = weighted_avg_and_std(np.array([allrhos[rho]['rho'] for rho in allrhos]),
                                        np.array([allrhos[rho]['eneg_rho'] for rho in allrhos]))
     av2, pos_std = weighted_avg_and_std(np.array([allrhos[rho]['rho'] for rho in allrhos]),

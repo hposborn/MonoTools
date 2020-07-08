@@ -42,10 +42,11 @@ theano_dir=MonoData_savepath+'/.theano_dir_'+str(np.random.randint(8))
 
 if not os.path.isdir(theano_dir):
     os.mkdir(theano_dir)
-if MonoData_savepath=="/Users/hosborn/python/MonoToolsData":
-    os.environ["THEANO_FLAGS"] = "device=cpu,floatX=float32,cxx=/usr/local/Cellar/gcc/9.3.0_1/bin/g++-9,cxxflags = -fbracket-depth=1024,base_compiledir="+theano_dir
+if MonoData_savepath=="/Users/hosborn/python/MonoToolsData" or MonoData_savepath=="/Volumes/LUVOIR/MonoToolsData":
+    os.environ["THEANO_FLAGS"] = "device=cpu,floatX=float32,cxx=/usr/local/Cellar/gcc/9.3.0_1/bin/g++-9,base_compiledir=" + \
+                                 theano_dir+", gcc.cxxflags = -fbracket-depth=1024"
 else:
-    os.environ["THEANO_FLAGS"] = "device=cpu,floatX=float32,cxxflags = -fbracket-depth=1024,base_compiledir="+theano_dir
+    os.environ["THEANO_FLAGS"] = "device=cpu,floatX=float32,base_compiledir="+theano_dir+",gcc.cxxflags = fbracket-depth=1024"
 
 import theano.tensor as tt
 import pymc3 as pm

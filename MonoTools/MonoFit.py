@@ -56,10 +56,15 @@ theano_dir=MonoData_savepath+'/.theano_dir_'+str(np.random.randint(8))
 if not os.path.isdir(theano_dir):
     os.mkdir(theano_dir)
 
-if MonoData_savepath=="/Users/hosborn/python/MonoToolsData":
-    os.environ["THEANO_FLAGS"] = "device=cpu,floatX=float32,cxx=/usr/local/Cellar/gcc/9.3.0_1/bin/g++-9,cxxflags = -fbracket-depth=1024,base_compiledir="+theano_dir
-else:
-    os.environ["THEANO_FLAGS"] = "device=cpu,floatX=float32,cxxflags = -fbracket-depth=1024,base_compiledir="+theano_dir
+theano_pars={'device':'cpu','floatX':'float32',
+             'base_compiledir':theano_dir,"gcc.cxxflags":"-fbracket-depth=1024"}
+if MonoData_savepath=="/Users/hosborn/python/MonoToolsData" or MonoData_savepath=="/Volumes/LUVOIR/MonoToolsData":
+    theano_pars['cxx']='/usr/local/Cellar/gcc/9.3.0_1/bin/g++-9'
+if os.environ.get('MONOTOOLSPATH') is None:
+    os.environ["THEANO_FLAGS"]=''
+for key in theano_pars:
+    if key not in os.environ["THEANO_FLAGS"]:
+        os.environ["THEANO_FLAGS"] = os.environ["THEANO_FLAGS"]+key+theano_pars[key]+","
 
 import theano.tensor as tt
 import pymc3 as pm
@@ -768,7 +773,7 @@ class monoModel():
                                                             testval=np.array([self.planets[pls]['b'] for pls in self.multis]))
                 if not self.assume_circ:
                     if len(self.planets)==1:
-                        multi_eccs = BoundedBeta("multi_eccs", alpha=0.867,beta=3.03,testval=0.05)
+                        multi_eccs = BoundedBeta("multi_eccs", alpha=0.867,beta=3.03,testval=0.05,shape=len(self.multis))
                     elif len(self.planets)>1:
                         # The eccentricity prior distribution from Van Eylen for multiplanets (lower-e than single planets)
                         multi_eccs = pm.Bound(pm.Weibull, lower=1e-5, upper=1-1e-5)("multi_eccs", alpha= 0.049,beta=2,
@@ -1115,7 +1120,6 @@ class monoModel():
                 #NOT marginalising over all models simultaneously, but doing them individually:
                 resids         = {}
                 log_prob_margs = {}
-                log_probs =      {}
                 for pl in iter_models:
                     resids[pl]={}
                     iter_models[pl]['logprob']={}
@@ -1130,11 +1134,12 @@ class monoModel():
                             if self.use_GP:
                                 iter_models[pl]['logliks'][n]=self.gp['use'].log_likelihood(y=resids[pl][n])
                             else:
-                                iter_models[pl]['logliks'][n] = sum_log_new_yerr - tt.sum(-0.5*(resids[pl][n])**2/(2*new_yerr_sq.dimshuffle(0,'x')),axis=0)
+                                iter_models[pl]['logliks'][n] = sum_log_new_yerr - tt.sum(-0.5*(resids[pl][n])**2/(2*new_yerr_sq))
 
                         # We then compute a marginalised lightcurve from the weighted sum of each model lightcurve:
-                        logliks = pm.Deterministic(iter_models[pl]['type']+'_liks_'+str(iter_models[pl]['name']),tt.stack([iter_models[pl]['logliks'][n] for n in range(iter_models[pl]['len'])]))
-                        iter_models[pl]['logprob'] = logliks + iter_models[pl]['logpriors']
+                        iter_models[pl]['loglik'] = pm.Deterministic('logliks_'+str(iter_models[pl]['name']),
+                                         tt.stack([iter_models[pl]['logliks'][n] for n in range(iter_models[pl]['len'])]))
+                        iter_models[pl]['logprob'] = iter_models[pl]['loglik'] + iter_models[pl]['logpriors']
                         iter_models[pl]['logprob_marg_sum'] = pm.Deterministic('logprob_marg_sum_'+str(iter_models[pl]['name']),
                                                                            pm.math.logsumexp(iter_models[pl]['logprob']))
                         log_prob_margs[pl] = pm.Deterministic('logprob_marg_'+str(iter_models[pl]['name']), 
@@ -1240,7 +1245,7 @@ class monoModel():
             self.model = model
             self.init_soln = map_soln
     
-    def RunMcmc(self, n_draws=1200, plot=True, do_per_gap_cuts=True, overwrite=False,**kwargs):
+    def RunMcmc(self, n_draws=600, plot=True, do_per_gap_cuts=True, overwrite=False,**kwargs):
         if not overwrite:
             self.LoadPickle()
             print("LOADED MCMC")
@@ -1253,7 +1258,7 @@ class monoModel():
             with self.model:
                 print(type(self.init_soln))
                 print(self.init_soln.keys())
-                self.trace = pm.sample(tune=int(n_draws*0.66), draws=n_draws, start=self.init_soln, chains=4,
+                self.trace = pm.sample(tune=np.clip(int(n_draws*0.66),600,5000), draws=n_draws, start=self.init_soln, chains=4,
                                        step=xo.get_dense_nuts_step(target_accept=0.9),compute_convergence_checks=False)
 
             self.SavePickle()
@@ -2616,8 +2621,8 @@ class monoModel():
         new_df=True
         assert hasattr(self,'trace')
         cols_to_remove=['gp_', '_gp', 'light_curve','__','mono_uniform_index',
-                        'mono_period','mono_tdurs','mono_priors','mono_liks',
-                        'duo_period','duo_tdurs','duo_priors','duo_liks',
+                        'mono_period','mono_tdurs','mono_priors','logliks',
+                        'duo_period','duo_tdurs','duo_priors',
                         'logprob_marg','mean', 'logrho_S']
         medvars=[var for var in self.trace.varnames if not np.any([icol in var for icol in cols_to_remove])]
 
