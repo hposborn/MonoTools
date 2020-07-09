@@ -58,9 +58,12 @@ if not os.path.isdir(theano_dir):
 
 theano_pars={'device':'cpu','floatX':'float32',
              'base_compiledir':theano_dir,"gcc.cxxflags":"-fbracket-depth=1024"}
-if MonoData_savepath=="/Users/hosborn/python/MonoToolsData" or MonoData_savepath=="/Volumes/LUVOIR/MonoToolsData":
+'''if MonoData_savepath=="/Users/hosborn/python/MonoToolsData" or MonoData_savepath=="/Volumes/LUVOIR/MonoToolsData":
     theano_pars['cxx']='/usr/local/Cellar/gcc/9.3.0_1/bin/g++-9'
-if os.environ.get('MONOTOOLSPATH') is None:
+'''
+if MonoData_savepath=="/Users/hosborn/python/MonoToolsData" or MonoData_savepath=="/Volumes/LUVOIR/MonoToolsData":
+    theano_pars['cxx']='cxx=/Library/Developer/CommandLineTools/usr/bin/g++'
+if os.environ.get('THEANO_FLAGS') is None:
     os.environ["THEANO_FLAGS"]=''
 for key in theano_pars:
     if key not in os.environ["THEANO_FLAGS"]:
@@ -481,7 +484,6 @@ class monoModel():
         else:
             self.lc_near_trans['flux_err_index']=self.lc['flux_err_index'][self.lc['near_trans']]
 
-        
         if not hasattr(self.lc,'tele_index'):
             #Here we're making an index for which telescope (kepler vs tess) did the observations,
             # then we multiply the output n_time array by the n_time x 2 index and sum along the 2nd axis
@@ -1810,7 +1812,7 @@ class monoModel():
             self.trans_to_plot[key1]={}
             for key2 in self.init_trans_to_plot[key1]:
                 self.trans_to_plot[key1][key2]=np.zeros(len(self.lc['time']))
-                self.trans_to_plot[key1][key2][self.lc['near_trans']]=self.init_trans_to_plot[key1][key2][lc['near_trans']]
+                self.trans_to_plot[key1][key2][self.lc['near_trans']]=self.init_trans_to_plot[key1][key2][self.lc['near_trans']]
 
     def Plot(self, interactive=False, n_samp=35, overwrite=False,return_fig=False,max_gp_len=20000, bin_gp=True, plot_loc=None):
         ################################################################
