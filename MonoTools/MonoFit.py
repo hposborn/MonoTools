@@ -131,6 +131,8 @@ class monoModel():
             loadfile=self.savenames[0]+'_model.pickle'
         #Loading from pickled dictionary
         pick=pickle.load(open(loadfile,'rb'))
+        assert not isinstance(pick, monoModel)
+        #print(In this case, unpickle your object separately)
         for key in pick:
             setattr(self,key,pick[key])
     
@@ -141,27 +143,33 @@ class monoModel():
         #Loading from pickled dictionary
         saving={}
         if limit_size and hasattr(self,'trace'):
-            #We cannot afford to store full arrays of GP predictions - let's turn the predicted arrays into percentiles now
+            #We cannot afford to store full arrays of GP predictions and transit models - let's turn the predicted arrays into percentiles now
             if self.use_GP:
-                self.init_gp_to_plot(n_samp=19)
+                self.init_gp_to_plot(n_samp=25)
             self.init_trans_to_plot(n_samp=333)
             
             #And let's clip gp and lightcurves and pseudo-variables from the trace:
-            medvars=[var for var in self.trace.varnames if 'gp_' not in var and '_gp' not in var and 'light_curve' not in var and '__' not in var]
+            #medvars=[var for var in self.trace.varnames if 'gp_' not in var and '_gp' not in var and 'light_curve' not in var and '__' not in var]
+            medvars=[var for var in self.trace.varnames if 'gp_' not in var and '_gp' not in var and 'light_curve' not in var]
         elif hasattr(self,'trace'):
             medvars=[var for var in self.trace.varnames]
         n_bytes = 2**31
         max_bytes = 2**31 - 1
         
-        #bytes_out = pickle.dumps({key:get_attr(self,key) for key in self.__dict__.keys() if key is not 'trace' else self.trace[medvars]})
-        bytes_out = pickle.dumps(self)
+        for key in self.__dict__.keys():
+            if key=='trace':
+                saving['trace']=trace[medvars]
+            else:
+                saving[key]=get_attr(self,key)
+        bytes_out = pickle.dumps(saving)
+        
+        #bytes_out = pickle.dumps(self)
         with open(savefile, 'wb') as f_out:
             for idx in range(0, len(bytes_out), max_bytes):
                 f_out.write(bytes_out[idx:idx+max_bytes])
-
-        
-        pick=pickle.dump(self.__dict__,open(loadfile,'wb'))
-        
+        del saving
+        #pick=pickle.dump(self.__dict__,open(loadfile,'wb'))
+            
     def drop_planet(self, name):
         if not hasattr(self,'deleted'):
             self.deleted={}

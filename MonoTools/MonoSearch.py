@@ -857,8 +857,7 @@ def PeriodicPlanetSearch(lc, ID, planets, use_binned=False, use_flat=True, binsi
     else:
         anommask=~np.isnan(lc[prefix+'flux'+suffix][:])
     plmask=np.tile(False,len(anommask))
-    t_zero=np.nanmin(lc['time'][lc['time']>0])
-    assert t_zero>0
+    t_zero=np.nanmin(lc['time'])
     SNR_last_planet=100;init_n_pl=len(planets);n_pl=len(planets);results=[]
     while SNR_last_planet>multi_SNR_thresh and n_pl<(n_search_loops+init_n_pl):
         if len(planets)>1:
@@ -2811,30 +2810,35 @@ def MonoVetting(ID, mission, tcen=None, tdur=None, overwrite=None, do_search=Tru
                             #split by gap duo case:
                             mod.add_duo(deepcopy(both_dic[obj]),obj)
                 mod.init_starpars(Rstar=Rstar,rhostar=rhostar,Teff=Teff,logg=logg)
-                pickle.dump(mod,open(file_loc+"/"+file_loc.split('/')[-1]+'_model.pickle','wb'))
+                mod.SaveModelToFile()
+                #pickle.dump(mod,open(file_loc+"/"+file_loc.split('/')[-1]+'_model.pickle','wb'))
                 mod.init_model(useL2=useL2,FeH=FeH,**kwargs)
-                pickle.dump(mod,open(file_loc+"/"+file_loc.split('/')[-1]+'_model.pickle','wb'))
+                mod.SaveModelToFile()
+                #pickle.dump(mod,open(file_loc+"/"+file_loc.split('/')[-1]+'_model.pickle','wb'))
             elif os.path.isfile(file_loc+"/"+file_loc.split('/')[-1]+'_model.pickle'):
-                mod = pickle.load(open(file_loc+"/"+file_loc.split('/')[-1]+'_model.pickle','rb'))
+                mod = MonoFit.monoModel(LoadFromFile=True)
             else:
                 mod=None
             if mod is not None and do_fit and not overwrites['fit']:
                 #Attempting to load past MCMC file
-                mod.LoadPickle()
+                mod.LoadModelFromFile()
             if mod is not None and do_fit and (not hasattr(mod,'trace') or overwrites['fit']):
                 mod.RunMcmc()
-                pickle.dump(mod,open(file_loc+"/"+file_loc.split('/')[-1]+'_model.pickle','wb'))
+                mod.SaveModelToFile()
+                #pickle.dump(mod,open(file_loc+"/"+file_loc.split('/')[-1]+'_model.pickle','wb'))
 
             if mod is not None and plot:
                 print("Gathering plots, overwrite:",overwrites['model_plots'])
                 #Gathering plots if they exist:
                 if not os.path.exists(file_loc+"/"+str(ID).zfill(11)+'_model_plot.pdf') or overwrites['model_plots']:
                     mod.Plot(n_samp=1,plot_loc=file_loc+"/"+str(ID).zfill(11)+'_model_plot.pdf',interactive=False)
-                    pickle.dump(mod,open(file_loc+"/"+file_loc.split('/')[-1]+'_model.pickle','wb'))
+                    mod.SaveModelToFile()
+                    #pickle.dump(mod,open(file_loc+"/"+file_loc.split('/')[-1]+'_model.pickle','wb'))
                 figs['mcmc_mod']=file_loc+"/"+str(ID).zfill(11)+'_model_plot.pdf'
                 if not os.path.exists(file_loc+"/"+str(ID).zfill(11)+'_model_plot.html') or overwrites['model_plots']:
                     mod.Plot(n_samp=1,plot_loc=file_loc+"/"+str(ID).zfill(11)+'_model_plot.html',interactive=True)
-                    pickle.dump(mod,open(file_loc+"/"+file_loc.split('/')[-1]+'_model.pickle','wb'))
+                    mod.SaveModelToFile()
+                    #pickle.dump(mod,open(file_loc+"/"+file_loc.split('/')[-1]+'_model.pickle','wb'))
                 if hasattr(mod, 'trace'):
                     if not os.path.exists(file_loc+"/"+str(ID).zfill(11)+'_model_periods.pdf') or overwrites['model_plots']:
                         mod.PlotPeriods(plot_loc=file_loc+"/"+str(ID).zfill(11)+'_model_periods.pdf')
@@ -2842,7 +2846,8 @@ def MonoVetting(ID, mission, tcen=None, tdur=None, overwrite=None, do_search=Tru
                     if not os.path.exists(file_loc+"/"+str(ID).zfill(11)+'_model_table.pdf') or overwrites['model_plots']: 
                         mod.PlotTable(plot_loc=file_loc+"/"+str(ID).zfill(11)+'_model_table.pdf')
                     figs['mcmc_tab']=file_loc+"/"+str(ID).zfill(11)+'_model_table.pdf'
-                    pickle.dump(mod,open(file_loc+"/"+file_loc.split('/')[-1]+'_model.pickle','wb'))
+                    mod.SaveModelToFile()
+                    #pickle.dump(mod,open(file_loc+"/"+file_loc.split('/')[-1]+'_model.pickle','wb'))
 
         else:
             #NO EB OR PC candidates - likely low-SNR or FP.
