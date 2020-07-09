@@ -119,7 +119,7 @@ def QuickMonoFit(lc,it0,dur,Rs=None,Ms=None,Teff=None,useL2=False,fit_poly=True,
         int_flux=np.nanmedian(y[(abs(x-it0)<0.35*dur)])
         #print(it0,dur,oot_flux,int_flux,abs(oot_flux-int_flux)/lc['flux_unit'],x,y,yerr)
         fit_poly=False
-        
+        init_poly=None
     else:
         #Mono case:
         x=lc[timeindex][nearby&mask].astype(np.float32)
