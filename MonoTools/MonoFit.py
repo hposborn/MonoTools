@@ -1669,7 +1669,7 @@ class monoModel():
                         outputfiles_basename=self.savenames[0]+'_mnest_out/', 
                         **kwargs)
     
-    def init_gp_to_plot(self,n_samp,max_gp_len):
+    def init_gp_to_plot(self,n_samp,max_gp_len=12000):
         import celerite
         from celerite import terms
         gp_pred=[]
