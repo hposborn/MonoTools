@@ -30,6 +30,8 @@ mission=sys.argv[2]
 x_file_loc=MonoData_savepath+'/'+id_dic[mission]+str(ID).zfill(11)
 if not os.path.isdir(x_file_loc):
     os.mkdir(x_file_loc)
+
+    
 if log:
     #Functions needed to make this stream logging work:
     sys.stdout.isatty = lambda: False
@@ -77,7 +79,10 @@ if log:
     sl = StreamToLogger(stderr_logger, logging.ERROR)
     sys.stderr = sl
 
-os.environ["THEANO_FLAGS"] = "base_compiledir="+x_file_loc
+if "THEANO_FLAGS" in os.environ:
+    os.environ["THEANO_FLAGS"]+=", base_compiledir="+x_file_loc
+else:
+    os.environ["THEANO_FLAGS"]="base_compiledir="+x_file_loc
 
 ####################################
 #  GETTING ARGUMENTS AND RUNNING:  #

@@ -140,7 +140,7 @@ def QuickMonoFit(lc,it0,dur,Rs=None,Ms=None,Teff=None,useL2=False,fit_poly=True,
             int_flux=np.nanmedian((y-np.polyval(init_poly,x-it0))[abs(x-it0)<0.35*dur])
     dep=abs(oot_flux-int_flux)*lc['flux_unit']
     
-    print(dep,dur,it0,x,y,init_poly)
+    #print(dep,dur,it0,x,y,init_poly)
     
     with pm.Model() as model:
         # Parameters for the stellar properties
@@ -224,7 +224,7 @@ def QuickMonoFit(lc,it0,dur,Rs=None,Ms=None,Teff=None,useL2=False,fit_poly=True,
         pm.Deterministic("light_curve", light_curve)
 
         pm.Normal("obs", mu=light_curve, sd=yerr, observed=y)
-        print(model.check_test_point())
+        #print(model.check_test_point())
         if fit_poly:
             map_soln = xo.optimize(start=model.test_point,vars=[trend],verbose=False)
             map_soln = xo.optimize(start=map_soln,vars=[trend,log_ror,log_per,tcen],verbose=False)
@@ -259,7 +259,7 @@ def QuickMonoFit(lc,it0,dur,Rs=None,Ms=None,Teff=None,useL2=False,fit_poly=True,
                     t=interpt
                 )/(1+map_soln['third_light'])
         '''
-    print(func)
+    #print(func)
     interpt=np.linspace(map_soln['tcen']-winsize,map_soln['tcen']+winsize,600)
     if 'third_light' not in map_soln:
         map_soln['third_light']=np.array(0.0)
