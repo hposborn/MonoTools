@@ -160,7 +160,7 @@ class monoModel():
             if key=='trace':
                 saving['trace']=trace[medvars]
             else:
-                saving[key]=get_attr(self,key)
+                saving[key]=getattr(self,key)
         bytes_out = pickle.dumps(saving)
         
         #bytes_out = pickle.dumps(self)
