@@ -606,7 +606,6 @@ class monoModel():
         
 
     def init_pymc3(self,ld_mult=1.5,):
-        
         if self.bin_oot:
             lc=self.pseudo_binlc
         elif self.cutDistance>0:
@@ -1766,6 +1765,14 @@ class monoModel():
                                      np.sqrt(self.lc['flux_err'][limit_mask_bool[n][nc]]**2 + \
                                       np.dot(self.lc['flux_err_index'][limit_mask_bool[n][nc]], np.exp(sample['logs2']))))
                         marg_lc=np.tile(0.0,len(self.lc['time']))
+                        if self.hasattr('pseudo_binlc') and len(self.init_trans_to_plot[pl]['med'])==len(self.pseudo_binlc['time']):
+                            marg_lc[self.lc['near_trans']]=sample['marg_all_light_curve'][self.pseudo_binlc['near_trans']]
+                        elif self.hasattr('lc_near_trans') and len(self.init_trans_to_plot[pl]['med'])==len(self.lc_near_trans['time']):
+                            marg_lc[self.lc['near_trans']]=sample['marg_all_light_curve'][key1][key2]
+                        elif len(self.init_trans_to_plot[pl]['med'])==len(self.lc['time']):
+                            marg_lc[self.lc['near_trans']]=sample['marg_all_light_curve'][key1][key2][self.lc['near_trans']]
+
+                        
                         marg_lc[self.lc['near_trans']]=sample['marg_all_light_curve'][self.lc['near_trans']]
                         ii_gp_pred, ii_gp_var= i_gp.predict(self.lc['flux'][limit_mask_bool[n][nc]] - marg_lc[limit_mask_bool[n][nc]],
                                         t=self.lc['time'][self.lc['limits'][n][0]:self.lc['limits'][n][1]][c].astype(np.float32),
@@ -1779,7 +1786,9 @@ class monoModel():
             self.gp_to_plot['gp_pred']=np.hstack(gp_pred)
             self.gp_to_plot['gp_sd']=np.hstack(gp_sd)
 
-    def init_trans_to_plot(self,n_samp):
+    def init_trans_to_plot(self,n_samp=None):
+        
+        n_samp=len(self.trace['mean']) if n_samp is None else n_samp
         if not hasattr(self,'gap_lens'):
             self.init_plot()
         self.init_trans_to_plot={}
@@ -1822,12 +1831,18 @@ class monoModel():
                     print('marg_light_curve_'+pl+' not in any optimised models')
         self.trans_to_plot={'n_samp':n_samp}
 
+        
         #Adding zeros to other regions where we dont have transits (not in the out of transit mask):
         for key1 in self.init_trans_to_plot:
             self.trans_to_plot[key1]={}
             for key2 in self.init_trans_to_plot[key1]:
                 self.trans_to_plot[key1][key2]=np.zeros(len(self.lc['time']))
-                self.trans_to_plot[key1][key2][self.lc['near_trans']]=self.init_trans_to_plot[key1][key2][self.lc['near_trans']]
+                if self.hasattr('pseudo_binlc') and len(self.init_trans_to_plot[pl]['med'])==len(self.pseudo_binlc['time']):
+                    self.trans_to_plot[key1][key2][self.lc['near_trans']]=self.init_trans_to_plot[key1][key2][self.pseudo_binlc['near_trans']]
+                elif self.hasattr('lc_near_trans') and len(self.init_trans_to_plot[pl]['med'])==len(self.lc_near_trans['time']):
+                    self.trans_to_plot[key1][key2][self.lc['near_trans']]=self.init_trans_to_plot[key1][key2]
+                elif len(self.init_trans_to_plot[pl]['med'])==len(self.lc['time']):
+                    self.trans_to_plot[key1][key2][self.lc['near_trans']]=self.init_trans_to_plot[key1][key2][self.lc['near_trans']]
 
     def init_plot(self,gap_thresh=10):
 
