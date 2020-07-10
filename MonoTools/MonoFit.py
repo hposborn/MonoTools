@@ -2239,7 +2239,7 @@ class monoModel():
                 f_alls[n].xaxis.minor_tick_line_color = None  # turn off x-axis minor ticks
                 f_alls[n].xaxis.major_label_text_font_size = '0pt'  # preferred method for removing tick labels
 
-                else:
+            else:
                 #Matplotlib plot:
                 if np.nanmedian(np.diff(self.lc['time'][self.lc['limit_mask'][n]]))<1/72:
                     f_alls[n].plot(self.lc['time'][self.lc['limit_mask'][n]], self.lc['flux'][self.lc['limit_mask'][n]] + raw_plot_offset,
