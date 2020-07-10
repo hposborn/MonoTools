@@ -80,10 +80,12 @@ theano.config.exception_verbosity='high'
 class monoModel():
     #The default monoModel class. This is what we will use to build a Pymc3 model
     
-    def __init__(self, ID=None, mission=None, lc=None, planets=None, LoadFromFile=False, overwrite=False, savefileloc=None):
+    def __init__(self, ID, mission, lc=None, planets=None, LoadFromFile=False, overwrite=False, savefileloc=None):
         
         self.id_dic={'TESS':'TIC','tess':'TIC','Kepler':'KIC','kepler':'KIC','KEPLER':'KIC',
                      'K2':'EPIC','k2':'EPIC','CoRoT':'CID','corot':'CID'}
+        self.ID=ID
+        self.mission=mission
 
         #Initalising MonoModel
         if LoadFromFile and not overwrite:
@@ -105,7 +107,6 @@ class monoModel():
                         lc[key]=lc[key][np.argsort(lc['time'])][:]
                 lc['time']=np.sort(lc['time'])
 
-            self.ID=ID
             self.lc=lc
             self.planets={}
             self.multis=[];self.monos=[];self.duos=[]
@@ -118,7 +119,6 @@ class monoModel():
                         self.add_duo(planets[pl])
                     elif planets[pl]['orbit_flag']=='mono':
                         self.add_mono(planets[pl])
-            self.mission=mission
 
             self.savefileloc=savefileloc
             self.overwrite=overwrite
@@ -128,7 +128,7 @@ class monoModel():
     def LoadModelFromFile(self, loadfile=None):
         if loadfile is None:
             self.GetSavename(how='load')
-            loadfile=self.savenames[0]+'_model.pickle'
+            loadfile=self.savenames[1]+'_model.pickle'
         #Loading from pickled dictionary
         pick=pickle.load(open(loadfile,'rb'))
         assert not isinstance(pick, monoModel)
@@ -337,7 +337,7 @@ class monoModel():
         # OUTPUTS:
         # - filepath
         '''
-        if self.savefileloc is None or overwrite:
+        if not hasattr(self,'savefileloc') or self.savefileloc is None or overwrite:
             self.savefileloc=os.path.join(MonoData_savepath,self.id_dic[self.mission]+str(self.ID).zfill(11))
         if not os.path.isdir(self.savefileloc):
             os.system('mkdir '+self.savefileloc)
@@ -1255,7 +1255,7 @@ class monoModel():
             self.model = model
             self.init_soln = map_soln
     
-    def RunMcmc(self, n_draws=600, plot=True, do_per_gap_cuts=True, overwrite=False,**kwargs):
+    def RunMcmc(self, n_draws=350, plot=True, do_per_gap_cuts=True, overwrite=False,**kwargs):
         if not overwrite:
             self.LoadPickle()
             print("LOADED MCMC")
@@ -1694,7 +1694,7 @@ class monoModel():
         if n_samp==1:
             #Creating the median model:
 
-            for n in np.arange(len(gap_lens)):
+            for n in np.arange(len(self.lc['limits'])):
 
                 #Only creating out-of-transit GP for the binned (e.g. 30min) data
                 cutBools = tools.cutLc(self.lc['time'][self.lc['limits'][n][0]:self.lc['limits'][n][1]],max_gp_len,
@@ -1720,7 +1720,7 @@ class monoModel():
                     gp_sd+=[np.sqrt(i_gp_var)]
             ''''
             gp_pred=[];gp_sd=[]
-            for n in np.arange(len(gap_lens)):
+            for n in np.arange(len(self.lc['limits'])):
                 with self.model:
                     pred,var=xo.eval_in_model(self.gp['use'].predict(self.lc['time'][self.lc['limits'][n][0]:self.lc['limits'][n][1]],
                                                             return_var=True,return_cov=False),self.meds)                    
@@ -1740,7 +1740,7 @@ class monoModel():
         elif n_samp>1:
             assert hasattr(self,'trace')
             #Doing multiple samples and making percentiles:
-            for n in np.arange(len(gap_lens)):
+            for n in np.arange(len(self.lc['limits'])):
                 #Need to break up the lightcurve even further to avoid GP burning memory:
                 cutBools = tools.cutLc(self.lc['time'][self.lc['limits'][n][0]:self.lc['limits'][n][1]],max_gp_len,
                                        transit_mask=self.lc['no_trans_mask'][self.lc['limits'][n][0]:self.lc['limits'][n][1]])

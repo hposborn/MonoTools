@@ -2816,7 +2816,7 @@ def MonoVetting(ID, mission, tcen=None, tdur=None, overwrite=None, do_search=Tru
                 mod.SaveModelToFile()
                 #pickle.dump(mod,open(file_loc+"/"+file_loc.split('/')[-1]+'_model.pickle','wb'))
             elif os.path.isfile(file_loc+"/"+file_loc.split('/')[-1]+'_model.pickle'):
-                mod = MonoFit.monoModel(LoadFromFile=True)
+                mod = MonoFit.monoModel(ID, mission, LoadFromFile=True)
             else:
                 mod=None
             if mod is not None and do_fit and not overwrites['fit']:
