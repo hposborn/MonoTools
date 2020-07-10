@@ -91,10 +91,8 @@ class monoModel():
         #Initalising MonoModel
         if LoadFromFile and not overwrite:
             #Catching the case where the file doesnt exist:
-            try:
-                self.LoadModelFromFile(loadfile=savefileloc)
-            except:
-                LoadFromFile=False
+            success = self.LoadModelFromFile(loadfile=savefileloc)
+            LoadFromFile = success
         if not LoadFromFile or overwrite:
             assert ID is not None and mission is not None and lc is not None
 
@@ -130,13 +128,16 @@ class monoModel():
         if loadfile is None:
             self.GetSavename(how='load')
             loadfile=self.savenames[1]+'_model.pickle'
-        assert os.path.exists(loadfile)
-        #Loading from pickled dictionary
-        pick=pickle.load(open(loadfile,'rb'))
-        assert not isinstance(pick, monoModel)
-        #print(In this case, unpickle your object separately)
-        for key in pick:
-            setattr(self,key,pick[key])
+        if os.path.exists(loadfile):
+            #Loading from pickled dictionary
+            pick=pickle.load(open(loadfile,'rb'))
+            assert not isinstance(pick, monoModel)
+            #print(In this case, unpickle your object separately)
+            for key in pick:
+                setattr(self,key,pick[key])
+            return True
+        else:
+            return False
     
     def SaveModelToFile(self, savefile=None, limit_size=True):
         if savefile is None:
@@ -1765,7 +1766,7 @@ class monoModel():
                                      np.sqrt(self.lc['flux_err'][limit_mask_bool[n][nc]]**2 + \
                                       np.dot(self.lc['flux_err_index'][limit_mask_bool[n][nc]], np.exp(sample['logs2']))))
                         marg_lc=np.tile(0.0,len(self.lc['time']))
-                        marg_lc[self.lc['near_trans']]=sample['marg_all_light_curve'][lc['near_trans']]
+                        marg_lc[self.lc['near_trans']]=sample['marg_all_light_curve'][self.lc['near_trans']]
                         ii_gp_pred, ii_gp_var= i_gp.predict(self.lc['flux'][limit_mask_bool[n][nc]] - marg_lc[limit_mask_bool[n][nc]],
                                         t=self.lc['time'][self.lc['limits'][n][0]:self.lc['limits'][n][1]][c].astype(np.float32),
                                         return_var=True,return_cov=False)
@@ -1829,6 +1830,7 @@ class monoModel():
                 self.trans_to_plot[key1][key2][self.lc['near_trans']]=self.init_trans_to_plot[key1][key2][self.lc['near_trans']]
 
     def init_plot(self,gap_thresh=10):
+
         #Making sure lc is binned to 30mins
         self.lc=tools.lcBin(self.lc,binsize=1/48.0)
         
@@ -1836,26 +1838,18 @@ class monoModel():
         x_gaps=np.hstack((0, np.where(np.diff(self.lc['time'])>gap_thresh)[0]+1, len(self.lc['time'])))
         self.lc['limits']=[]
         self.lc['binlimits']=[]
-        if len(lc['time'])!=len(self.lc['time']):
-            modlclims=[]
         gap_lens=[]
         for ng in range(len(x_gaps)-1):
             self.lc['limits']+=[[x_gaps[ng],x_gaps[ng+1]]]
             gap_lens+=[self.lc['time'][self.lc['limits'][-1][1]-1]-self.lc['time'][self.lc['limits'][-1][0]]]
             self.lc['binlimits']+=[[np.argmin(abs(self.lc['bin_time']-self.lc['time'][x_gaps[ng]])),
                          np.argmin(abs(self.lc['bin_time']-self.lc['time'][x_gaps[ng+1]-1]))+1]]
-            if len(lc['time'])!=len(self.lc['time']):
-                modlclims+=[[np.argmin(abs(lc['time']-self.lc['time'][x_gaps[ng]])),
-                             np.argmin(abs(lc['time']-self.lc['time'][x_gaps[ng+1]-1]))+1]]
-        if len(lc['time'])==len(self.lc['time']):
-            modlclims=self.lc['limits']
-
         self.lc['gap_lens']=np.array(gap_lens)
         all_lens=np.sum(gap_lens)
         self.lc['limit_mask']={}
         #modlclim_mask={}
         for n in range(len(self.lc['gap_lens'])):
-            #modlclim_mask[n]=np.tile(False,len(lc['time']))
+            #modlclim_mask[n]=np.tile(False,len(self.plot_lc['time']))
             #modlclim_mask[n][modlclims[n][0]:modlclims[n][1]][lc['mask'][modlclims[n][0]:modlclims[n][1]]]=True
             self.lc['limit_mask'][n]=np.tile(False,len(self.lc['time']))
             self.lc['limit_mask'][n][self.lc['limits'][n][0]:self.lc['limits'][n][1]][self.lc['mask'][self.lc['limits'][n][0]:self.lc['limits'][n][1]]]=True
@@ -1876,15 +1870,6 @@ class monoModel():
         if not hasattr(self,'trace'):
             n_samp==1
         
-        #Assigning which lc was connected to the transit/gp modelling:
-        if self.bin_oot:
-            lc=self.pseudo_binlc
-        elif self.cutDistance>0:
-            lc=self.lc_near_trans
-        else:
-            lc=self.lc
-        
-
         if interactive:
             #Plots bokeh figure
             
