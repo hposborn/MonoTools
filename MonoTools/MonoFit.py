@@ -2036,7 +2036,7 @@ class monoModel():
                                    self.trans_to_plot['all']['med'][self.lc['limit_mask'][n]],
                                    self.lc['flux_err'][self.lc['limit_mask'][n]])),
                                    binsize=29/1440)
-                else:
+            else:
                 if np.nanmedian(np.diff(self.lc['time'][self.lc['limit_mask'][n]]))<1/72:
                     bin_resids=tools.bin_lc_segment(np.column_stack((self.lc['time'][self.lc['limit_mask'][n]],
                                    self.lc['flux_flat'][self.lc['limit_mask'][n]] - \
@@ -2047,7 +2047,7 @@ class monoModel():
 
 
                 #Plotting each part of the lightcurve:
-                if interactive:
+            if interactive:
                 if self.use_GP:
                     #Plotting GP region and subtracted flux
                     if np.nanmedian(np.diff(self.lc['time']))<1/72:
