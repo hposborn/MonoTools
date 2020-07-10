@@ -87,14 +87,15 @@ class monoModel():
         self.ID=ID
         self.mission=mission
 
+        
         #Initalising MonoModel
         if LoadFromFile and not overwrite:
-            if savefileloc is None:
-                self.LoadModelFromFile(savefileloc)
-            else:
-                self.GetSavename(how='load')
-                self.LoadModelFromFile(self.savenames[0]+'_model.pickle')
-        else:
+            #Catching the case where the file doesnt exist:
+            try:
+                self.LoadModelFromFile(loadfile=savefileloc)
+            except:
+                LoadFromFile=False
+        if not LoadFromFile or overwrite:
             assert ID is not None and mission is not None and lc is not None
 
             if 'mask' not in lc:
@@ -129,6 +130,7 @@ class monoModel():
         if loadfile is None:
             self.GetSavename(how='load')
             loadfile=self.savenames[1]+'_model.pickle'
+        assert os.path.exists(loadfile)
         #Loading from pickled dictionary
         pick=pickle.load(open(loadfile,'rb'))
         assert not isinstance(pick, monoModel)
@@ -1672,6 +1674,8 @@ class monoModel():
     def init_gp_to_plot(self,n_samp,max_gp_len=12000):
         import celerite
         from celerite import terms
+        if not hasattr(self,'gap_lens'):
+            self.init_plot()
         gp_pred=[]
         gp_sd=[]
         self.gp_to_plot={'n_samp':n_samp}
@@ -1703,7 +1707,7 @@ class monoModel():
                 limit_mask_bool[n]={}
                 for nc,c in enumerate(cutBools):
                     limit_mask_bool[n][nc]=np.tile(False,len(self.lc['time']))
-                    limit_mask_bool[n][nc][self.lc['limits'][n][0]:self.lc['limits'][n][1]][c]=limit_mask[n][self.lc['limits'][n][0]:self.lc['limits'][n][1]][c]
+                    limit_mask_bool[n][nc][self.lc['limits'][n][0]:self.lc['limits'][n][1]][c]=self.lc['limit_mask'][n][self.lc['limits'][n][0]:self.lc['limits'][n][1]][c]
                     i_kernel = terms.SHOTerm(log_S0=np.log(self.meds['S0']), log_omega0=np.log(self.meds['w0']), log_Q=np.log(1/np.sqrt(2)))
                     i_gp = celerite.GP(i_kernel,mean=self.meds['mean'],fit_mean=False)
 
@@ -1749,7 +1753,7 @@ class monoModel():
                 limit_mask_bool[n]={}
                 for nc,c in enumerate(cutBools):
                     limit_mask_bool[n][nc]=np.tile(False,len(self.lc['time']))
-                    limit_mask_bool[n][nc][self.lc['limits'][n][0]:self.lc['limits'][n][1]][c]=limit_mask[n][self.lc['limits'][n][0]:self.lc['limits'][n][1]][c]
+                    limit_mask_bool[n][nc][self.lc['limits'][n][0]:self.lc['limits'][n][1]][c]=self.lc['limit_mask'][n][self.lc['limits'][n][0]:self.lc['limits'][n][1]][c]
                     i_gp_pred=[]
                     i_gp_var=[]
                     for i, sample in enumerate(xo.get_samples_from_trace(self.trace, size=n_samp)):
@@ -1775,6 +1779,8 @@ class monoModel():
             self.gp_to_plot['gp_sd']=np.hstack(gp_sd)
 
     def init_trans_to_plot(self,n_samp):
+        if not hasattr(self,'gap_lens'):
+            self.init_plot()
         self.init_trans_to_plot={}
         self.init_trans_to_plot['all']={}
         if hasattr(self,'trace') and 'marg_all_light_curve' in self.trace.varnames:
@@ -1822,6 +1828,39 @@ class monoModel():
                 self.trans_to_plot[key1][key2]=np.zeros(len(self.lc['time']))
                 self.trans_to_plot[key1][key2][self.lc['near_trans']]=self.init_trans_to_plot[key1][key2][self.lc['near_trans']]
 
+    def init_plot(self,gap_thresh=10):
+        #Making sure lc is binned to 30mins
+        self.lc=tools.lcBin(self.lc,binsize=1/48.0)
+        
+        #Finding if there's a single enormous gap in the lightcurve, and creating time splits for each region
+        x_gaps=np.hstack((0, np.where(np.diff(self.lc['time'])>gap_thresh)[0]+1, len(self.lc['time'])))
+        self.lc['limits']=[]
+        self.lc['binlimits']=[]
+        if len(lc['time'])!=len(self.lc['time']):
+            modlclims=[]
+        gap_lens=[]
+        for ng in range(len(x_gaps)-1):
+            self.lc['limits']+=[[x_gaps[ng],x_gaps[ng+1]]]
+            gap_lens+=[self.lc['time'][self.lc['limits'][-1][1]-1]-self.lc['time'][self.lc['limits'][-1][0]]]
+            self.lc['binlimits']+=[[np.argmin(abs(self.lc['bin_time']-self.lc['time'][x_gaps[ng]])),
+                         np.argmin(abs(self.lc['bin_time']-self.lc['time'][x_gaps[ng+1]-1]))+1]]
+            if len(lc['time'])!=len(self.lc['time']):
+                modlclims+=[[np.argmin(abs(lc['time']-self.lc['time'][x_gaps[ng]])),
+                             np.argmin(abs(lc['time']-self.lc['time'][x_gaps[ng+1]-1]))+1]]
+        if len(lc['time'])==len(self.lc['time']):
+            modlclims=self.lc['limits']
+
+        self.lc['gap_lens']=np.array(gap_lens)
+        all_lens=np.sum(gap_lens)
+        self.lc['limit_mask']={}
+        #modlclim_mask={}
+        for n in range(len(self.lc['gap_lens'])):
+            #modlclim_mask[n]=np.tile(False,len(lc['time']))
+            #modlclim_mask[n][modlclims[n][0]:modlclims[n][1]][lc['mask'][modlclims[n][0]:modlclims[n][1]]]=True
+            self.lc['limit_mask'][n]=np.tile(False,len(self.lc['time']))
+            self.lc['limit_mask'][n][self.lc['limits'][n][0]:self.lc['limits'][n][1]][self.lc['mask'][self.lc['limits'][n][0]:self.lc['limits'][n][1]]]=True
+        masks=[]
+    
     def Plot(self, interactive=False, n_samp=35, overwrite=False,return_fig=False,max_gp_len=20000, bin_gp=True, plot_loc=None):
         ################################################################
         #       Varied plotting function for MonoTransit model
@@ -1874,48 +1913,16 @@ class monoModel():
             fig=plt.figure(figsize=(11.69,8.27))
             gs = fig.add_gridspec(len(self.planets)*4,32,wspace=0.3,hspace=0.001)
         
-        self.lc=tools.lcBin(self.lc,binsize=1/48.0)
-        
-        #Finding if there's a single enormous gap in the lightcurve, and creating time splits for each region
-        x_gaps=np.hstack((0, np.where(np.diff(self.lc['time'])>10)[0]+1, len(self.lc['time'])))
-        print(x_gaps)
-        self.lc['limits']=[]
-        self.lc['binlimits']=[]
-        if len(lc['time'])!=len(self.lc['time']):
-            modlclims=[]
-        gap_lens=[]
-        for ng in range(len(x_gaps)-1):
-            self.lc['limits']+=[[x_gaps[ng],x_gaps[ng+1]]]
-            gap_lens+=[self.lc['time'][self.lc['limits'][-1][1]-1]-self.lc['time'][self.lc['limits'][-1][0]]]
-            self.lc['binlimits']+=[[np.argmin(abs(self.lc['bin_time']-self.lc['time'][x_gaps[ng]])),
-                         np.argmin(abs(self.lc['bin_time']-self.lc['time'][x_gaps[ng+1]-1]))+1]]
-            if len(lc['time'])!=len(self.lc['time']):
-                modlclims+=[[np.argmin(abs(lc['time']-self.lc['time'][x_gaps[ng]])),
-                             np.argmin(abs(lc['time']-self.lc['time'][x_gaps[ng+1]-1]))+1]]
-        if len(lc['time'])==len(self.lc['time']):
-            modlclims=self.lc['limits']
-
-        gap_lens=np.array(gap_lens)
-        all_lens=np.sum(gap_lens)
-        limit_mask={}
-        modlclim_mask={}
-        for n in range(len(gap_lens)):
-            modlclim_mask[n]=np.tile(False,len(lc['time']))
-            modlclim_mask[n][modlclims[n][0]:modlclims[n][1]][lc['mask'][modlclims[n][0]:modlclims[n][1]]]=True
-            limit_mask[n]=np.tile(False,len(self.lc['time']))
-            limit_mask[n][self.lc['limits'][n][0]:self.lc['limits'][n][1]][self.lc['mask'][self.lc['limits'][n][0]:self.lc['limits'][n][1]]]=True
-        masks=[]
-        
         #####################################
         #       Initialising figures
         #####################################
         f_alls=[];f_all_resids=[];f_trans=[];f_trans_resids=[]
         if not interactive:
             #Creating cumulative list of integers which add up to 24 but round to nearest length ratio:
-            n_pl_widths=np.hstack((0,np.cumsum(1+np.array(saferound(list((24-len(gap_lens))*gap_lens/all_lens), places=0))))).astype(int)
+            n_pl_widths=np.hstack((0,np.cumsum(1+np.array(saferound(list((24-len(self.lc['gap_lens']))*self.lc['gap_lens']/np.sum(self.lc['gap_lens'])), places=0))))).astype(int)
             #(gs[0, :]) - all top
             #(gs[:, 0]) - all left
-            print(gap_lens/all_lens,n_pl_widths,32,range(len(n_pl_widths)-1))
+            print(self.lc['gap_lens']/np.sum(self.lc['gap_lens']),n_pl_widths,32,range(len(n_pl_widths)-1))
             for ng in range(len(n_pl_widths)-1):
                 if ng==0:
                     f_all_resids+=[fig.add_subplot(gs[len(self.planets)*3:,n_pl_widths[ng]:n_pl_widths[ng+1]])]
@@ -1936,8 +1943,8 @@ class monoModel():
 
         else:
             #For Bokeh plots, we can just use the size in pixels
-            for ng,gaplen in enumerate(gap_lens):
-                fwidth=int(np.round(750*gaplen/all_lens)-10)
+            for ng,gaplen in enumerate(self.lc['gap_lens']):
+                fwidth=int(np.round(750*gaplen/np.sum(self.lc['gap_lens']))-10)
                 if ng==0:
                     f_all_resids+=[figure(width=fwidth, plot_height=150, title=None)]
                     f_alls+=[figure(width=fwidth, plot_height=400, title=None,x_range=f_all_resids[0].x_range)]
@@ -2011,42 +2018,42 @@ class monoModel():
         raw_plot_offset = 2.5*abs(self.min_trans) if not self.use_GP else 1.25*abs(self.min_trans) + resid_sd +\
                                                                      abs(np.min(self.gp_to_plot['gp_pred'][self.lc['mask']]))
 
-        for n in np.arange(len(gap_lens)):
+        for n in np.arange(len(self.lc['gap_lens'])):
             low_lim = self.lc['time'][self.lc['limits'][n][0]]
             upp_lim = self.lc['time'][self.lc['limits'][n][1]-1]
             unmasked_lim_bool = (self.lc['time']>=(low_lim-0.5))&(self.lc['time']<(upp_lim+0.5))
             
             if self.use_GP:
-                if np.nanmedian(np.diff(self.lc['time'][limit_mask[n]]))<1/72:
-                    bin_detrend=tools.bin_lc_segment(np.column_stack((self.lc['time'][limit_mask[n]],
-                                   self.lc['flux'][limit_mask[n]] - \
-                                   self.gp_to_plot['gp_pred'][limit_mask[n]],
-                                   self.lc['flux_err'][limit_mask[n]])),
+                if np.nanmedian(np.diff(self.lc['time'][self.lc['limit_mask'][n]]))<1/72:
+                    bin_detrend=tools.bin_lc_segment(np.column_stack((self.lc['time'][self.lc['limit_mask'][n]],
+                                   self.lc['flux'][self.lc['limit_mask'][n]] - \
+                                   self.gp_to_plot['gp_pred'][self.lc['limit_mask'][n]],
+                                   self.lc['flux_err'][self.lc['limit_mask'][n]])),
                                    binsize=29/1440)
-                    bin_resids=tools.bin_lc_segment(np.column_stack((self.lc['time'][limit_mask[n]],
-                                   self.lc['flux'][limit_mask[n]] - \
-                                   self.gp_to_plot['gp_pred'][limit_mask[n]] - \
-                                   self.trans_to_plot['all']['med'][limit_mask[n]],
-                                   self.lc['flux_err'][limit_mask[n]])),
+                    bin_resids=tools.bin_lc_segment(np.column_stack((self.lc['time'][self.lc['limit_mask'][n]],
+                                   self.lc['flux'][self.lc['limit_mask'][n]] - \
+                                   self.gp_to_plot['gp_pred'][self.lc['limit_mask'][n]] - \
+                                   self.trans_to_plot['all']['med'][self.lc['limit_mask'][n]],
+                                   self.lc['flux_err'][self.lc['limit_mask'][n]])),
                                    binsize=29/1440)
-            else:
-                if np.nanmedian(np.diff(self.lc['time'][limit_mask[n]]))<1/72:
-                    bin_resids=tools.bin_lc_segment(np.column_stack((self.lc['time'][limit_mask[n]],
-                                   self.lc['flux_flat'][limit_mask[n]] - \
-                                   self.trans_to_plot['all']['med'][limit_mask[n]],
-                                   self.lc['flux_err'][limit_mask[n]])),
+                else:
+                if np.nanmedian(np.diff(self.lc['time'][self.lc['limit_mask'][n]]))<1/72:
+                    bin_resids=tools.bin_lc_segment(np.column_stack((self.lc['time'][self.lc['limit_mask'][n]],
+                                   self.lc['flux_flat'][self.lc['limit_mask'][n]] - \
+                                   self.trans_to_plot['all']['med'][self.lc['limit_mask'][n]],
+                                   self.lc['flux_err'][self.lc['limit_mask'][n]])),
                                    binsize=29/1440)
                 mean=np.nanmedian(self.trace['mean']) if hasattr(self,'trace') else self.init_soln['mean']
 
-            
-            #Plotting each part of the lightcurve:
-            if interactive:
+
+                #Plotting each part of the lightcurve:
+                if interactive:
                 if self.use_GP:
                     #Plotting GP region and subtracted flux
                     if np.nanmedian(np.diff(self.lc['time']))<1/72:
                         #PLOTTING DETRENDED FLUX, HERE WE BIN
-                        f_alls[n].circle(self.lc['time'][limit_mask[n]],
-                                         self.lc['flux'][limit_mask[n]]+raw_plot_offset,
+                        f_alls[n].circle(self.lc['time'][self.lc['limit_mask'][n]],
+                                         self.lc['flux'][self.lc['limit_mask'][n]]+raw_plot_offset,
                                          alpha=0.5,size=0.75,color='black')
                         f_alls[n].circle(self.lc['bin_time'][self.lc['binlimits'][n][0]:self.lc['binlimits'][n][1]],
                                          self.lc['bin_flux'][self.lc['binlimits'][n][0]:self.lc['binlimits'][n][1]] + raw_plot_offset,
@@ -2064,26 +2071,26 @@ class monoModel():
                                                      lower_head=TeeHead(line_color='#dddddd',line_alpha=0.5)))
                     else:
                         #PLOTTING DETRENDED FLUX, NO BINNING
-                        f_alls[n].circle(self.lc['time'][limit_mask[n]],
-                                         self.lc['flux'][limit_mask[n]]+raw_plot_offset,
+                        f_alls[n].circle(self.lc['time'][self.lc['limit_mask'][n]],
+                                         self.lc['flux'][self.lc['limit_mask'][n]]+raw_plot_offset,
                                          legend="raw",alpha=0.65,size=3.5)
 
-                    
-                    gpband = ColumnDataSource(data=dict(base=self.lc['time'][limit_mask[n]],
-                              lower=raw_plot_offset+self.gp_to_plot['gp_pred'][limit_mask[n]]-self.gp_to_plot['gp_sd'][limit_mask[n]], 
-                              upper=raw_plot_offset+self.gp_to_plot['gp_pred'][limit_mask[n]]+self.gp_to_plot['gp_sd'][limit_mask[n]]))
+
+                    gpband = ColumnDataSource(data=dict(base=self.lc['time'][self.lc['limit_mask'][n]],
+                              lower=raw_plot_offset+self.gp_to_plot['gp_pred'][self.lc['limit_mask'][n]]-self.gp_to_plot['gp_sd'][self.lc['limit_mask'][n]], 
+                              upper=raw_plot_offset+self.gp_to_plot['gp_pred'][self.lc['limit_mask'][n]]+self.gp_to_plot['gp_sd'][self.lc['limit_mask'][n]]))
                     f_alls[n].add_layout(Band(source=gpband,base='base',lower='lower',upper='upper',
                                               fill_alpha=0.4, line_width=0.0, fill_color=pal[3]))
-                    f_alls[n].line(self.lc['time'][limit_mask[n]], self.gp_to_plot['gp_pred'][limit_mask[n]]+raw_plot_offset, 
+                    f_alls[n].line(self.lc['time'][self.lc['limit_mask'][n]], self.gp_to_plot['gp_pred'][self.lc['limit_mask'][n]]+raw_plot_offset, 
                                    line_alpha=0.6, line_width=1.0, color=pal[3], legend="GP fit")
 
-                    if np.nanmedian(np.diff(self.lc['time'][limit_mask[n]] ))<1/72:
+                    if np.nanmedian(np.diff(self.lc['time'][self.lc['limit_mask'][n]] ))<1/72:
                         #Here we plot the detrended flux:
-                        f_alls[n].circle(self.lc['time'][limit_mask[n]],
-                                         self.lc['flux'][limit_mask[n]]-self.gp_to_plot['gp_pred'][limit_mask[n]], color='black',
+                        f_alls[n].circle(self.lc['time'][self.lc['limit_mask'][n]],
+                                         self.lc['flux'][self.lc['limit_mask'][n]]-self.gp_to_plot['gp_pred'][self.lc['limit_mask'][n]], color='black',
                                          alpha=0.5,size=0.75)
                         f_alls[n].circle(bin_detrend[:,0],bin_detrend[:,1],alpha=0.65,size=3.5,legend='detrended')
-                        
+
                         errors = ColumnDataSource(data=dict(base=bin_detrend[:,0],
                                                      lower=bin_detrend[:,1]+bin_detrend[:,2],
                                                      upper=bin_detrend[:,1]-bin_detrend[:,2]))
@@ -2092,21 +2099,21 @@ class monoModel():
                                                      upper_head=TeeHead(line_color='#dddddd',line_alpha=0.5),
                                                      lower_head=TeeHead(line_color='#dddddd',line_alpha=0.5)))
                     else:
-                        f_alls[n].circle(self.lc['time'][limit_mask[n]],
-                                         self.lc['flux'][limit_mask[n]]-self.gp_to_plot['gp_pred'][limit_mask[n]],
+                        f_alls[n].circle(self.lc['time'][self.lc['limit_mask'][n]],
+                                         self.lc['flux'][self.lc['limit_mask'][n]]-self.gp_to_plot['gp_pred'][self.lc['limit_mask'][n]],
                                          legend="detrended",alpha=0.65,
                                          size=3.5)
 
                 else:
                     if np.nanmedian(np.diff(self.lc['time']))<1/72:
                         #PLOTTING DETRENDED FLUX, HERE WE BIN
-                        f_alls[n].circle(self.lc['time'][limit_mask[n]],
-                                         self.lc['flux_flat'][limit_mask[n]]+raw_plot_offset, ".k",
+                        f_alls[n].circle(self.lc['time'][self.lc['limit_mask'][n]],
+                                         self.lc['flux_flat'][self.lc['limit_mask'][n]]+raw_plot_offset, ".k",
                                          alpha=0.5,size=0.75)
                         f_alls[n].circle(self.lc['bin_time'][self.lc['binlimits'][n][0]:self.lc['binlimits'][n][1]],
                                          self.lc['bin_flux'][self.lc['binlimits'][n][0]:self.lc['binlimits'][n][1]],
                                          legend="detrended",alpha=0.65,size=3.5)
-                        
+
                         errors = ColumnDataSource(data=dict(base=self.lc['bin_time'][self.lc['binlimits'][n][0]:self.lc['binlimits'][n][1]],
                                      lower=self.lc['bin_flux'][self.lc['binlimits'][n][0]:self.lc['binlimits'][n][1]] - \
                                      self.lc['bin_flux_err'][self.lc['binlimits'][n][0]:self.lc['binlimits'][n][1]],
@@ -2116,10 +2123,10 @@ class monoModel():
                                                      line_color='#dddddd', line_alpha=0.5,
                                                      upper_head=TeeHead(line_color='#dddddd',line_alpha=0.5),
                                                      lower_head=TeeHead(line_color='#dddddd',line_alpha=0.5)))
-                        
+
                         #Here we plot the detrended flux:
-                        f_alls[n].circle(self.lc['time'][limit_mask[n]],
-                                         self.lc['flux_flat'][limit_mask[n]]+raw_plot_offset, ".k",
+                        f_alls[n].circle(self.lc['time'][self.lc['limit_mask'][n]],
+                                         self.lc['flux_flat'][self.lc['limit_mask'][n]]+raw_plot_offset, ".k",
                                          alpha=0.5,size=0.75)
                         f_alls[n].circle(self.lc['bin_time'][self.lc['binlimits'][n][0]:self.lc['binlimits'][n][1]],
                                          self.lc['bin_flux_flat'][self.lc['binlimits'][n][0]:self.lc['binlimits'][n][1]],
@@ -2136,11 +2143,11 @@ class monoModel():
                                                      lower_head=TeeHead(line_color='#dddddd',line_alpha=0.5)))
                     else:
                         #PLOTTING DETRENDED FLUX, NO BINNING
-                        f_alls[n].circle(self.lc['time'][limit_mask[n]],
-                                         self.lc['flux'][limit_mask[n]]+raw_plot_offset,
+                        f_alls[n].circle(self.lc['time'][self.lc['limit_mask'][n]],
+                                         self.lc['flux'][self.lc['limit_mask'][n]]+raw_plot_offset,
                                          legend="raw",alpha=0.65,size=3.5)
-                        f_alls[n].circle(self.lc['time'][limit_mask[n]],
-                                         self.lc['flux_flat'][limit_mask[n]],
+                        f_alls[n].circle(self.lc['time'][self.lc['limit_mask'][n]],
+                                         self.lc['flux_flat'][self.lc['limit_mask'][n]],
                                          legend="detrended",alpha=0.65,size=3.5)
                 #Plotting transit
                 if len(self.trans_to_plot['all'])>1:
@@ -2157,7 +2164,7 @@ class monoModel():
                 f_alls[n].line(self.lc['time'][unmasked_lim_bool],
                                self.trans_to_plot["all"]["med"][unmasked_lim_bool],
                                color=pal[1], legend="transit fit")
-                
+
                 if n>0:
                     f_alls[n].yaxis.major_tick_line_color = None  # turn off x-axis major ticks
                     f_alls[n].yaxis.minor_tick_line_color = None  # turn off x-axis minor ticks
@@ -2165,16 +2172,16 @@ class monoModel():
                     f_all_resids[n].yaxis.major_tick_line_color = None  # turn off x-axis major ticks
                     f_all_resids[n].yaxis.minor_tick_line_color = None  # turn off x-axis minor ticks
                     f_all_resids[n].yaxis.major_label_text_font_size = '0pt'  # preferred method for removing tick labels
-                
+
                 if self.use_GP:
                     #Plotting residuals:
-                    if np.nanmedian(np.diff(self.lc['time'][limit_mask[n]]))<1/72:
+                    if np.nanmedian(np.diff(self.lc['time'][self.lc['limit_mask'][n]]))<1/72:
                         #HERE WE BIN
-                        f_all_resids[n].circle(self.lc['time'][limit_mask[n]],
-                                               self.lc['flux'][limit_mask[n]] - self.gp_to_plot['gp_pred'][limit_mask[n]] - \
-                                               self.trans_to_plot['all']['med'][limit_mask[n]], color='black',
+                        f_all_resids[n].circle(self.lc['time'][self.lc['limit_mask'][n]],
+                                               self.lc['flux'][self.lc['limit_mask'][n]] - self.gp_to_plot['gp_pred'][self.lc['limit_mask'][n]] - \
+                                               self.trans_to_plot['all']['med'][self.lc['limit_mask'][n]], color='black',
                                                alpha=0.5,size=0.75)
-                        
+
                         errors = ColumnDataSource(data=dict(base=bin_resids[:,0],
                                                      lower=bin_resids[:,1] - bin_resids[:,2],
                                                      upper=bin_resids[:,1] + bin_resids[:,2]))
@@ -2185,28 +2192,28 @@ class monoModel():
                         f_all_resids[n].circle(bin_resids[:,0],bin_resids[:,1],
                                                legend="residuals",alpha=0.65,size=3.5)
                     else:
-                        errors = ColumnDataSource(data=dict(base=self.lc['time'][limit_mask[n]],
-                                          lower=self.lc['flux'][limit_mask[n]] - self.gp_to_plot['gp_pred'][limit_mask[n]] - \
-                                           self.trans_to_plot['all']['med'][limit_mask[n]] - self.lc['flux_err'][limit_mask[n]],
-                                          upper=self.lc['flux'][limit_mask[n]] - self.gp_to_plot['gp_pred'][limit_mask[n]] - \
-                                           self.trans_to_plot['all']['med'][limit_mask[n]] + self.lc['flux_err'][limit_mask[n]]))
+                        errors = ColumnDataSource(data=dict(base=self.lc['time'][self.lc['limit_mask'][n]],
+                                          lower=self.lc['flux'][self.lc['limit_mask'][n]] - self.gp_to_plot['gp_pred'][self.lc['limit_mask'][n]] - \
+                                           self.trans_to_plot['all']['med'][self.lc['limit_mask'][n]] - self.lc['flux_err'][self.lc['limit_mask'][n]],
+                                          upper=self.lc['flux'][self.lc['limit_mask'][n]] - self.gp_to_plot['gp_pred'][self.lc['limit_mask'][n]] - \
+                                           self.trans_to_plot['all']['med'][self.lc['limit_mask'][n]] + self.lc['flux_err'][self.lc['limit_mask'][n]]))
                         f_alls[n].add_layout(Whisker(source=errors, base='base', upper='upper',lower='lower',
                                                      line_color='#dddddd', line_alpha=0.5,
                                                      upper_head=TeeHead(line_color='#dddddd',line_alpha=0.5),
                                                      lower_head=TeeHead(line_color='#dddddd',line_alpha=0.5)))
-                        f_all_resids[n].circle(self.lc['time'][limit_mask[n]],
-                                               self.lc['flux'][limit_mask[n]] - self.gp_to_plot['gp_pred'][limit_mask[n]] - \
-                                               self.trans_to_plot['all']['med'][limit_mask[n]],
+                        f_all_resids[n].circle(self.lc['time'][self.lc['limit_mask'][n]],
+                                               self.lc['flux'][self.lc['limit_mask'][n]] - self.gp_to_plot['gp_pred'][self.lc['limit_mask'][n]] - \
+                                               self.trans_to_plot['all']['med'][self.lc['limit_mask'][n]],
                                                alpha=0.65,
                                                size=3.5)
 
                 else:
                     #Plotting detrended:
                     mean=np.nanmedian(self.trace['mean']) if hasattr(self,'trace') else self.init_soln['mean']
-                    if np.nanmedian(np.diff(self.lc['time'][limit_mask[n]]))<1/72:
-                        f_all_resids[n].circle(self.lc['time'][limit_mask[n]],
-                                               self.lc['flux_flat'][limit_mask[n]] - mean - \
-                                               self.trans_to_plot["all"]["med"][limit_mask[n]], color='black',
+                    if np.nanmedian(np.diff(self.lc['time'][self.lc['limit_mask'][n]]))<1/72:
+                        f_all_resids[n].circle(self.lc['time'][self.lc['limit_mask'][n]],
+                                               self.lc['flux_flat'][self.lc['limit_mask'][n]] - mean - \
+                                               self.trans_to_plot["all"]["med"][self.lc['limit_mask'][n]], color='black',
                                                zorder=-1000,alpha=0.5,
                                                size=0.75)
                         errors = ColumnDataSource(data=dict(base=bin_resids[:,0],
@@ -2218,11 +2225,11 @@ class monoModel():
                                                      lower_head=TeeHead(line_color='#dddddd',line_alpha=0.5)))
                         f_all_resids[n].circle(bin_resids[:,0],bin_resids[:,1],
                                                alpha=0.65,size=3.5)
-                        
+
                     else:
-                        f_alls[n].circle(self.lc['time'][limit_mask[n]], 
-                                         self.lc['flux_flat'][limit_mask[n]] - mean - \
-                                         self.trans_to_plot["all"]["med"][limit_mask[n]],
+                        f_alls[n].circle(self.lc['time'][self.lc['limit_mask'][n]], 
+                                         self.lc['flux_flat'][self.lc['limit_mask'][n]] - mean - \
+                                         self.trans_to_plot["all"]["med"][self.lc['limit_mask'][n]],
                                          legend="raw data",alpha=0.65,size=3.5)
 
                 f_all_resids[n].xaxis.axis_label = 'Time [BJD-'+str(int(self.lc['jd_base']))+']' #<- x-axis label
@@ -2231,49 +2238,49 @@ class monoModel():
                 f_alls[n].xaxis.major_tick_line_color = None  # turn off x-axis major ticks
                 f_alls[n].xaxis.minor_tick_line_color = None  # turn off x-axis minor ticks
                 f_alls[n].xaxis.major_label_text_font_size = '0pt'  # preferred method for removing tick labels
-                
-            else:
+
+                else:
                 #Matplotlib plot:
-                if np.nanmedian(np.diff(self.lc['time'][limit_mask[n]]))<1/72:
-                    f_alls[n].plot(self.lc['time'][limit_mask[n]], self.lc['flux'][limit_mask[n]] + raw_plot_offset,
+                if np.nanmedian(np.diff(self.lc['time'][self.lc['limit_mask'][n]]))<1/72:
+                    f_alls[n].plot(self.lc['time'][self.lc['limit_mask'][n]], self.lc['flux'][self.lc['limit_mask'][n]] + raw_plot_offset,
                                    ".k", alpha=0.5,markersize=0.75, rasterized=raster)
                     f_alls[n].errorbar(self.lc['bin_time'][self.lc['binlimits'][n][0]:self.lc['binlimits'][n][1]],
                                        self.lc['bin_flux'][self.lc['binlimits'][n][0]:self.lc['binlimits'][n][1]] + raw_plot_offset, 
                                        yerr=self.lc['bin_flux_err'][self.lc['binlimits'][n][0]:self.lc['binlimits'][n][1]],color='C1',
                                        fmt=".", label="raw", ecolor='#dddddd', alpha=0.5,markersize=3.5, rasterized=raster)
                 else:
-                    f_alls[n].errorbar(self.lc['time'][limit_mask[n]], self.lc['flux'][limit_mask[n]] + raw_plot_offset, 
+                    f_alls[n].errorbar(self.lc['time'][self.lc['limit_mask'][n]], self.lc['flux'][self.lc['limit_mask'][n]] + raw_plot_offset, 
                                        yerr=self.lc['flux_err'][self.lc['binlimits'][n][0]:self.lc['binlimits'][n][1]],color='C1',
                                        fmt=".", label="raw", ecolor='#dddddd', 
                                        alpha=0.5,markersize=3.5, rasterized=raster)
 
                 if self.use_GP:
-                    if np.nanmedian(np.diff(self.lc['time'][limit_mask[n]]))<1/72:
-                        f_alls[n].plot(self.lc['time'][limit_mask[n]], self.lc['flux'][limit_mask[n]] - \
-                                       self.gp_to_plot['gp_pred'][limit_mask[n]],
+                    if np.nanmedian(np.diff(self.lc['time'][self.lc['limit_mask'][n]]))<1/72:
+                        f_alls[n].plot(self.lc['time'][self.lc['limit_mask'][n]], self.lc['flux'][self.lc['limit_mask'][n]] - \
+                                       self.gp_to_plot['gp_pred'][self.lc['limit_mask'][n]],
                                        ".k", alpha=0.5,markersize=0.75, rasterized=raster)
                         f_alls[n].errorbar(bin_detrend[:,0], bin_detrend[:,1], yerr=bin_detrend[:,2],color='C2',fmt=".",
                                            label="detrended", ecolor='#dddddd', alpha=0.5,markersize=3.5, rasterized=raster)
-                        
+
                         #Plotting residuals:
-                        f_all_resids[n].plot(self.lc['time'][limit_mask[n]],
-                                             self.lc['flux'][limit_mask[n]] - self.gp_to_plot['gp_pred'][limit_mask[n]] - \
-                                             self.trans_to_plot['all']['med'][limit_mask[n]],
+                        f_all_resids[n].plot(self.lc['time'][self.lc['limit_mask'][n]],
+                                             self.lc['flux'][self.lc['limit_mask'][n]] - self.gp_to_plot['gp_pred'][self.lc['limit_mask'][n]] - \
+                                             self.trans_to_plot['all']['med'][self.lc['limit_mask'][n]],
                                              ".k", alpha=0.5,markersize=0.75, rasterized=raster)
 
                         f_all_resids[n].errorbar(bin_resids[:,0],bin_resids[:,1], yerr=bin_resids[:,2], fmt=".", 
                                                  ecolor='#dddddd',alpha=0.5,markersize=0.75, rasterized=raster)
-                    
+
                     else:
-                        f_alls[n].errorbar(self.lc['time'][limit_mask[n]], 
-                                           self.lc['flux'][limit_mask[n]] - self.gp_to_plot['gp_pred'][limit_mask[n]], 
-                                           yerr=self.lc['flux_err'][limit_mask[n]],color='C2', rasterized=raster,
+                        f_alls[n].errorbar(self.lc['time'][self.lc['limit_mask'][n]], 
+                                           self.lc['flux'][self.lc['limit_mask'][n]] - self.gp_to_plot['gp_pred'][self.lc['limit_mask'][n]], 
+                                           yerr=self.lc['flux_err'][self.lc['limit_mask'][n]],color='C2', rasterized=raster,
                                            fmt=".", label="detrended", ecolor='#dddddd', alpha=0.5,markersize=3.5)
-                        
-                        f_all_resids[n].errorbar(self.lc['time'][limit_mask[n]], 
-                                                 self.lc['flux'][limit_mask[n]] - self.gp_to_plot['gp_pred'][limit_mask[n]] - \
-                                                 self.trans_to_plot['all']['med'][limit_mask[n]],
-                                                 yerr=self.lc['flux_err'][limit_mask[n]], fmt=".", rasterized=raster,
+
+                        f_all_resids[n].errorbar(self.lc['time'][self.lc['limit_mask'][n]], 
+                                                 self.lc['flux'][self.lc['limit_mask'][n]] - self.gp_to_plot['gp_pred'][self.lc['limit_mask'][n]] - \
+                                                 self.trans_to_plot['all']['med'][self.lc['limit_mask'][n]],
+                                                 yerr=self.lc['flux_err'][self.lc['limit_mask'][n]], fmt=".", rasterized=raster,
                                                  ecolor='#dddddd',label="residuals", alpha=0.5,markersize=0.75)
                     #Plotting GP region and subtracted flux
                     f_alls[n].fill_between(self.lc['time'][self.lc['limits'][n][0]:self.lc['limits'][n][1]],
@@ -2292,33 +2299,33 @@ class monoModel():
 
                 else:
                     #GP not used.
-                    if np.nanmedian(np.diff(self.lc['time'][limit_mask[n]]))<1/72:
+                    if np.nanmedian(np.diff(self.lc['time'][self.lc['limit_mask'][n]]))<1/72:
                         #Plotting flat flux only
-                        f_alls[n].plot(self.lc['time'][limit_mask[n]], self.lc['flux_flat'][limit_mask[n]],
+                        f_alls[n].plot(self.lc['time'][self.lc['limit_mask'][n]], self.lc['flux_flat'][self.lc['limit_mask'][n]],
                                        ".k",alpha=0.5,markersize=0.75, rasterized=raster)
                         f_alls[n].errorbar(self.lc['bin_time'][self.lc['binlimits'][n][0]:self.lc['binlimits'][n][1]],
                                            self.lc['bin_flux_flat'][self.lc['binlimits'][n][0]:self.lc['binlimits'][n][1]],
                                            yerr= self.lc['bin_flux_err'][self.lc['binlimits'][n][0]:self.lc['binlimits'][n][1]], rasterized=raster, 
                                            color='C2',fmt=".",label="detrended", ecolor='#dddddd', alpha=0.5,markersize=3.5)
                         #Plotting residuals:
-                        f_all_resids[n].plot(self.lc['time'][limit_mask[n]],
-                                             self.lc['flux'][limit_mask[n]] - self.gp_to_plot['gp_pred'][limit_mask[n]] - \
-                                             self.trans_to_plot['all']['med'][limit_mask[n]],
+                        f_all_resids[n].plot(self.lc['time'][self.lc['limit_mask'][n]],
+                                             self.lc['flux'][self.lc['limit_mask'][n]] - self.gp_to_plot['gp_pred'][self.lc['limit_mask'][n]] - \
+                                             self.trans_to_plot['all']['med'][self.lc['limit_mask'][n]],
                                              ".k",label="raw data", alpha=0.5,markersize=0.75, rasterized=raster)
 
                         f_all_resids[n].errorbar(bin_resids[:,0],bin_resids[:,1],yerr=bin_resids[:,2], fmt=".",
                                                  ecolor='#dddddd',label="residuals", alpha=0.5,
                                                  markersize=0.75, rasterized=raster)
-                        
+
                     else:
-                        f_alls[n].errorbar(self.lc['time'][limit_mask[n]], self.lc['flux_flat'][limit_mask[n]],
-                                           yerr=self.lc['flux_err'][limit_mask[n]],fmt=".", label="detrended", 
+                        f_alls[n].errorbar(self.lc['time'][self.lc['limit_mask'][n]], self.lc['flux_flat'][self.lc['limit_mask'][n]],
+                                           yerr=self.lc['flux_err'][self.lc['limit_mask'][n]],fmt=".", label="detrended", 
                                            ecolor='#dddddd', alpha=0.5,markersize=3.5, rasterized=raster)
-                        
-                        f_all_resids[n].errorbar(self.lc['time'][limit_mask[n]], 
-                                                 self.lc['flux_flat'][limit_mask[n]] - \
-                                                 self.trans_to_plot['all']['med'][limit_mask[n]],
-                                                 yerr=self.lc['flux_err'][limit_mask[n]], fmt=".",
+
+                        f_all_resids[n].errorbar(self.lc['time'][self.lc['limit_mask'][n]], 
+                                                 self.lc['flux_flat'][self.lc['limit_mask'][n]] - \
+                                                 self.trans_to_plot['all']['med'][self.lc['limit_mask'][n]],
+                                                 yerr=self.lc['flux_err'][self.lc['limit_mask'][n]], fmt=".",
                                                  ecolor='#dddddd', alpha=0.5,markersize=0.75, rasterized=raster)
 
                 #Plotting transit
@@ -2342,7 +2349,7 @@ class monoModel():
                 
                 f_all_resids[n].set_xlabel = 'Time [BJD-'+str(int(self.lc['jd_base']))+']' #<- x-axis label
                 f_all_resids[n].set_xlim(self.lc['time'][self.lc['limits'][n][0]]-0.5,self.lc['time'][self.lc['limits'][n][1]-1]+0.5)
-                if gap_lens[n]==np.max(gap_lens):
+                if self.lc['gap_lens'][n]==np.max(self.lc['gap_lens']):
                     f_alls[n].legend()
                     
         extra = '[ppt]' if self.lc['flux_unit']==0.001 else ''
