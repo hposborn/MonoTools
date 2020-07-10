@@ -139,7 +139,7 @@ class monoModel():
         else:
             return False
     
-    def SaveModelToFile(self, savefile=None, limit_size=True):
+    def SaveModelToFile(self, savefile=None, limit_size=False):
         if savefile is None:
             self.GetSavename(how='save')
             savefile=self.savenames[0]+'_model.pickle'
@@ -1257,7 +1257,7 @@ class monoModel():
             self.model = model
             self.init_soln = map_soln
     
-    def RunMcmc(self, n_draws=350, plot=True, do_per_gap_cuts=True, overwrite=False,**kwargs):
+    def RunMcmc(self, n_draws=50, plot=True, do_per_gap_cuts=True, overwrite=False,**kwargs):
         if not overwrite:
             self.LoadPickle()
             print("LOADED MCMC")
@@ -1270,7 +1270,7 @@ class monoModel():
             with self.model:
                 print(type(self.init_soln))
                 print(self.init_soln.keys())
-                self.trace = pm.sample(tune=np.clip(int(n_draws*0.66),600,5000), draws=n_draws, start=self.init_soln, chains=4,
+                self.trace = pm.sample(tune=np.clip(int(n_draws*0.66),60,5000), draws=n_draws, start=self.init_soln, chains=4,
                                        step=xo.get_dense_nuts_step(target_accept=0.9),compute_convergence_checks=False)
 
             self.SavePickle()
