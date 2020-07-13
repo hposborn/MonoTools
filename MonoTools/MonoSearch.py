@@ -10,6 +10,7 @@ import numpy as np
 import pandas as pd
 import pickle
 import os
+import glob
 
 from copy import deepcopy
 from datetime import datetime
@@ -20,6 +21,9 @@ import scipy.interpolate as interp
 import scipy.optimize as optim
 import matplotlib.pyplot as plt
 import matplotlib
+
+from astropy.coordinates import SkyCoord
+from astropy import units as u
 
 import seaborn as sns
 import logging
@@ -76,7 +80,7 @@ def least_sq(pars,x,y,yerr):
     chisq=-1*np.sum((y-model)**2*yerr**-2)
     return chisq
 
-def QuickMonoFit(lc,it0,dur,Rs=None,Ms=None,Teff=None,useL2=False,fit_poly=True,
+def QuickMonoFit(lc,it0,dur,Rs=None,Ms=None,Teff=None,useL2=False,fit_poly=True,force_tdur=False,
                  polyorder=2, ndurs=4.2, how='mono', init_period=None,fluxindex='flux_flat',mask=None):
     # Performs simple planet fit to monotransit dip given the detection data.
     #Initial depth estimate:
@@ -135,7 +139,7 @@ def QuickMonoFit(lc,it0,dur,Rs=None,Ms=None,Teff=None,useL2=False,fit_poly=True,
             y=lc[fluxindex][nearby&mask]
             y-=np.nanmedian(y)
             #print(np.sum(abs(x-it0)<0.6),it0,np.min(x),np.max(x))
-            init_poly=np.polyfit(x[abs(x-it0)<0.6]-it0,y[abs(x-it0)<0.6],polyorder)
+            init_poly=np.polyfit(x[abs(x-it0)>0.7*dur]-it0,y[abs(x-it0)>0.7*dur],polyorder)
             oot_flux=np.nanmedian((y-np.polyval(init_poly,x-it0))[abs(x-it0)>0.65*dur])
             int_flux=np.nanmedian((y-np.polyval(init_poly,x-it0))[abs(x-it0)<0.35*dur])
     dep=abs(oot_flux-int_flux)*lc['flux_unit']
@@ -145,15 +149,17 @@ def QuickMonoFit(lc,it0,dur,Rs=None,Ms=None,Teff=None,useL2=False,fit_poly=True,
     with pm.Model() as model:
         # Parameters for the stellar properties
         if fit_poly:
-            trend = pm.Uniform("trend", upper=np.tile(1,polyorder+1), shape=polyorder+1,
-                              lower=np.tile(-1,polyorder+1), testval=init_poly)
-
+            trend = pm.Normal("trend", mu=0, sd=10.0 ** -np.arange(polyorder+1)[::-1], shape=polyorder+1,testval=init_poly)
+            flux_trend = pm.Deterministic("flux_trend", tt.dot(np.vander(x - it0, polyorder+1), trend))
+            #trend = pm.Uniform("trend", upper=np.tile(1,polyorder+1), shape=polyorder+1,
+            #                  lower=np.tile(-1,polyorder+1), testval=init_poly)
             #trend = pm.Normal("trend", mu=np.zeros(polyorder+1), sd=5*(10.0 ** -np.arange(polyorder+1)[::-1]), 
             #                  shape=polyorder+1, testval=np.zeros(polyorder+1))
             #trend = pm.Uniform("trend", upper=np.tile(10,polyorder+1),lower=np.tile(-10,polyorder+1),
             #                   shape=polyorder+1, testval=np.zeros(polyorder+1))
         else:
             mean = pm.Normal("mean", mu=0.0, sd=3*np.nanstd(y))
+            flux_trend = mean
         
         r_star = Rs if Rs is not None and not np.isnan(Rs) else 1.0
         m_star = Ms if Ms is not None and not np.isnan(Ms) else 1.0
@@ -198,8 +204,9 @@ def QuickMonoFit(lc,it0,dur,Rs=None,Ms=None,Teff=None,useL2=False,fit_poly=True,
         #correcting for grazing transits by multiplying b by 1-rp/rs
         tdur=pm.Deterministic("tdur",(2*tt.sqrt((1+ror)**2-b**2))/vrel)
         
-        #Adding a potential to force our transit towards the observed transit duration:
-        pm.Potential("tdur_prior", -0.1*len(x)*abs(tt.log(tdur/dur)))        
+        if force_tdur:
+            #Adding a potential to force our transit towards the observed transit duration:
+            pm.Potential("tdur_prior", -0.05*len(x)*abs(tt.log(tdur/dur)))        
         
         # The 2nd light (not third light as companion light is not modelled) 
         # This quantity is in delta-mag
@@ -207,21 +214,15 @@ def QuickMonoFit(lc,it0,dur,Rs=None,Ms=None,Teff=None,useL2=False,fit_poly=True,
             deltamag_contam = pm.Uniform("deltamag_contam", lower=-20.0, upper=20.0)
             third_light = pm.Deterministic("third_light", tt.power(2.511,-1*deltamag_contam))#Factor to multiply normalised lightcurve by
         else:
-            third_light=0.0
+            third_light = 0.0
 
         # Compute the model light curve using starry
         light_curves = (
             xo.LimbDarkLightCurve(u_star).get_light_curve(
                 orbit=orbit, r=r_pl/109.1, t=x, texp=cad))*(1+third_light)/lc['flux_unit']
-        if fit_poly:
-            flux_trend = pm.Deterministic("flux_trend", tt.dot(np.vander(x - it0, polyorder+1), trend))
-            transit_light_curve = pm.math.sum(light_curves, axis=-1)
-            light_curve = transit_light_curve + flux_trend
-        else:
-            transit_light_curve = pm.math.sum(light_curves, axis=-1)
-            light_curve = transit_light_curve + mean
+        transit_light_curve = pm.math.sum(light_curves, axis=-1)
         
-        pm.Deterministic("light_curve", light_curve)
+        light_curve = pm.Deterministic("light_curve", transit_light_curve + flux_trend)
 
         pm.Normal("obs", mu=light_curve, sd=yerr, observed=y)
         #print(model.check_test_point())
@@ -2531,7 +2532,7 @@ def MonoVetting(ID, mission, tcen=None, tdur=None, overwrite=None, do_search=Tru
         else:
             print("loading from ",file_loc+"/"+file_loc.split('/')[-1]+'_starpars.csv')
             info=pd.read_csv(file_loc+"/"+file_loc.split('/')[-1]+'_starpars.csv', index_col=0, header=0).T.iloc[0]
-        
+        radec=SkyCoord(float(info['ra'])*u.deg,float(info['dec'])*u.deg)
         Rstar=[float(info['rad']),float(info['eneg_rad']),float(info['epos_rad'])]
         Teff=[float(info['teff']),float(info['eneg_teff']),float(info['epos_teff'])]
         logg=[float(info['logg']),float(info['eneg_logg']),float(info['epos_logg'])]
@@ -2548,11 +2549,12 @@ def MonoVetting(ID, mission, tcen=None, tdur=None, overwrite=None, do_search=Tru
     else:
         Rstar, rhostar, Teff, logg = kwargs['StarPars']
         Ms=rhostar[0]*Rstar[0]**3
+        radec=None
         
     #opening lightcurve:
     if not os.path.isfile(file_loc+"/"+file_loc.split('/')[-1]+'_lc.pickle') or overwrites['lc']:
         #Gets Lightcurve
-        lc,hdr=tools.openLightCurve(ID,mission,use_ppt=False,**kwargs)
+        lc,hdr=tools.openLightCurve(ID,mission,coor=radec,use_ppt=False,**kwargs)
         pickle.dump(lc,open(file_loc+"/"+file_loc.split('/')[-1]+'_lc.pickle','wb'))
         #lc=lcFlatten(lc,winsize=9*tdur,stepsize=0.1*tdur)
     else:
@@ -2781,7 +2783,7 @@ def MonoVetting(ID, mission, tcen=None, tdur=None, overwrite=None, do_search=Tru
             # PLANET MODELLING:
             print({pl:{'tcen':both_dic[pl]['tcen'],'depth':both_dic[pl]['depth'],'period':both_dic[pl]['period'],'orbit_flag':both_dic[pl]['orbit_flag'],'flag':both_dic[pl]['flag']} for pl in both_dic})
             print("Planets to model:",[obj for obj in both_dic if both_dic[obj]['flag']=='planet'])
-            if not os.path.isfile(file_loc+"/"+file_loc.split('/')[-1]+'_model.pickle') or overwrites['fit']:
+            if len(glob.glob(file_loc+"/"+file_loc.split('/')[-1]+'*_model.pickle'))==0 or overwrites['fit']:
                 
                 if mission=='kepler' and cutDistance not in kwargs and bin_oot not in kwargs:
                     mod=MonoFit.monoModel(ID, mission, lc, {}, savefileloc=file_loc+'/',cutDistance=2.0,bin_oot=False)
@@ -2815,7 +2817,9 @@ def MonoVetting(ID, mission, tcen=None, tdur=None, overwrite=None, do_search=Tru
                 mod.init_model(useL2=useL2,FeH=FeH,**kwargs)
                 mod.SaveModelToFile()
                 #pickle.dump(mod,open(file_loc+"/"+file_loc.split('/')[-1]+'_model.pickle','wb'))
-            elif os.path.isfile(file_loc+"/"+file_loc.split('/')[-1]+'_model.pickle'):
+            elif len(glob.glob(file_loc+"/"+file_loc.split('/')[-1]+'*_model.pickle'))>0:
+                print("#Loading model from file")
+                
                 mod = MonoFit.monoModel(ID, mission, LoadFromFile=True)
             else:
                 mod=None

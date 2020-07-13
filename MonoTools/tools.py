@@ -514,7 +514,8 @@ def observed(tic):
     return out_dic
 
 def getCorotLC(corid,use_ppt=True):
-    lc=openFits(np.load("data/CorotLCs/CoRoT"+str(corid)+".npy"),"CorotLCs/CoRoT"+str(corid)+".npy",mission="Corot")
+    lc=openFits(np.load('/'.join(MonoData_tablepath.split('/')[:-1]+["CorotLCs","CoRoT"+str(corid)+".npy"])),
+                        "CorotLCs/CoRoT"+str(corid)+".npy",mission="Corot",use_ppt=use_ppt)
     return lc
 
 def TESS_lc(tic,sectors='all',use_ppt=True, coords=None, use_eleanor=True, data_loc=None,**kwargs):
@@ -613,15 +614,16 @@ def TESS_lc(tic,sectors='all',use_ppt=True, coords=None, use_eleanor=True, data_
     else:
         return None,None
 
-def openLightCurve(ID,mission,use_ppt=True,other_data=True,jd_base=2457000,**kwargs):
-    #Doing this to get coordinates:
-    df,_=starpars.GetExoFop(ID,mission)
-    #Getting coordinates from df in order to search other surveys for ID/data:
-    ra,dec=df['ra'],df['dec']
-    if type(ra)==str and (ra.find(':')!=-1)|(ra.find('h')!=-1):
-        coor=SkyCoord(ra,dec,unit=(units.hourangle,units.deg))
-    elif (type(ra)==float)|(type(ra)==np.float64) or (type(ra)==str)&(ra.find(',')!=-1):
-        coor=SkyCoord(ra,dec,unit=units.deg)
+def openLightCurve(ID,mission,coor=None,use_ppt=True,other_data=True,jd_base=2457000,**kwargs):
+    if coor is None:
+        #Doing this to get coordinates:
+        df,_=starpars.GetExoFop(ID,mission)
+        #Getting coordinates from df in order to search other surveys for ID/data:
+        ra,dec=df['ra'],df['dec']
+        if type(ra)==str and (ra.find(':')!=-1)|(ra.find('h')!=-1):
+            coor=SkyCoord(ra,dec,unit=(units.hourangle,units.deg))
+        elif (type(ra)==float)|(type(ra)==np.float64) or (type(ra)==str)&(ra.find(',')!=-1):
+            coor=SkyCoord(ra,dec,unit=units.deg)
     
     #Finding IDs for other missions:
     IDs={mission.lower():ID}
