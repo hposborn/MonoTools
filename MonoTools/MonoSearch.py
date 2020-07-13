@@ -2532,7 +2532,8 @@ def MonoVetting(ID, mission, tcen=None, tdur=None, overwrite=None, do_search=Tru
         else:
             print("loading from ",file_loc+"/"+file_loc.split('/')[-1]+'_starpars.csv')
             info=pd.read_csv(file_loc+"/"+file_loc.split('/')[-1]+'_starpars.csv', index_col=0, header=0).T.iloc[0]
-        radec=SkyCoord(float(info['ra'])*u.deg,float(info['dec'])*u.deg)
+        if 'ra' in info.index:
+            radec=SkyCoord(float(info['ra'])*u.deg,float(info['dec'])*u.deg)
         Rstar=[float(info['rad']),float(info['eneg_rad']),float(info['epos_rad'])]
         Teff=[float(info['teff']),float(info['eneg_teff']),float(info['epos_teff'])]
         logg=[float(info['logg']),float(info['eneg_logg']),float(info['epos_logg'])]
