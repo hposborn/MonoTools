@@ -1175,9 +1175,10 @@ def getStellarInfoFromCsv(ID,mission,radec=None,k2tab=None,keptabs=None):
                 xtra=pd.read_csv("https://exoplanetarchive.ipac.caltech.edu/cgi-bin/nstedAPI/nph-nstedAPI?table=q1_q17_dr25_stellar&select=kepid,ra,dec,teff,teff_err1,teff_err2,teff_prov,logg,logg_err1,logg_err2,feh,radius,radius_err1,radius_err2,mass,mass_err1,mass_err2&format=csv&where=kepid=%27"+str(int(ID))+"%27")
             if xtra.shape[0]==0:
                 xtra=pd.read_csv("https://exoplanetarchive.ipac.caltech.edu/cgi-bin/nstedAPI/nph-nstedAPI?table=keplerstellar&select=kepid,ra,dec,teff,teff_err1,teff_err2,teff_prov,logg,logg_err1,logg_err2,feh,radius,radius_err1,radius_err2,mass,mass_err1,mass_err2&format=csv&where=kepid=%27"+str(int(ID))+"%27")
+            print(xtra)
             if xtra.shape[0]>0:
                 xtra=xtra.iloc[0] if type(xtra)==pd.DataFrame else xtra
-                radec=SkyCoord(info['ra']*u.deg,info['dec']*u.deg)
+                radec=SkyCoord(xtra['ra']*u.deg,xtra['dec']*u.deg)
             else:
                 xtra=None
                 radec=None
