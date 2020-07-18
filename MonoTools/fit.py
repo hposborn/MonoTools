@@ -45,7 +45,7 @@ if not os.path.isdir(MonoData_savepath):
 
 from . import tools
 from . import starpars
-from . import MonoSearch
+from . import search
 #from . import tools
 #from .stellar import starpars
 #from . import MonoSearch
@@ -421,9 +421,7 @@ class monoModel():
         self.use_pymc3=use_pymc3 if not hasattr(self,'use_pymc3') or overwrite else use_pymc3
         self.bin_oot=bin_oot if not hasattr(self,'bin_oot') or overwrite else bin_oot
         self.ecc_prior=ecc_prior if not hasattr(self,'ecc_prior') or overwrite else ecc_prior
-        
-        
-        
+                
         n_pl=len(self.planets)
         assert n_pl>0
 
@@ -1304,7 +1302,7 @@ class monoModel():
             self.model = model
             self.init_soln = map_soln
     
-    def RunMcmc(self, n_draws=500, plot=True, do_per_gap_cuts=True, overwrite=False,**kwargs):
+    def RunMcmc(self, n_draws=500, plot=True, overwrite=False,**kwargs):
         if not overwrite:
             self.LoadPickle()
             print("LOADED MCMC")
@@ -1317,7 +1315,7 @@ class monoModel():
             with self.model:
                 print(type(self.init_soln))
                 print(self.init_soln.keys())
-                self.trace = pm.sample(tune=np.clip(int(n_draws*0.66),300,5000), draws=n_draws, start=self.init_soln, chains=4,
+                self.trace = pm.sample(tune=np.clip(int(n_draws*0.66),500,5000), draws=n_draws, start=self.init_soln, chains=4,
                                        step=xo.get_dense_nuts_step(target_accept=0.9),compute_convergence_checks=False)
             self.SaveModelToFile()
         elif not (hasattr(self,'trace') or hasattr(self,'trace_df')):
@@ -2685,6 +2683,64 @@ class monoModel():
             else:
                 plt.savefig(plot_loc)
     
+    def PlotCorner(self,use_marg=True):
+        # Plotting corner for those parameters we're interested in - e.g. orbital parameters
+        # If "use_marg" is True - uses the marginalised tdur and period parameters for multis and duos
+        # If "use_marg" is False - generates samples for each marginalised distribution and weights by logprob
+        import corner
+        
+        corner_vars=['logrho_S']
+        
+        for pl in self.duos:
+            corner_vars+=['duo_t0s_'+pl,'duo_logrors_'+pl,'duo_bs_'+pl,'tdur_marg_'+pl,
+                           'period_marg_'+pl,'duo_eccs_'+pl,'duo_omegas_'+pl]
+        for pl in self.monos:
+            corner_vars+=['mono_t0s_'+pl,'mono_logrors_'+pl,'mono_bs_'+pl,'tdur_marg_'+pl,
+                           'period_marg_'+pl,'mono_eccs_'+pl,'mono_omegas_'+pl]
+        if len(self.multis)>0:
+            corner_vars+=['multi_t0s','multi_logrors','multi_bs','multi_tdurs',
+                           'multi_periods','multi_eccs','multi_omegas']
+        samples = pm.trace_to_dataframe(self.trace, varnames=corner_vars)
+
+        if use_marg: 
+            
+            fig = corner.corner(samples)
+        else:
+            #Not using the marginalised period, and instead using weights:
+            logprobs=[]
+            
+            all_weighted_periods={}
+            all_logprobs={}
+            
+            n_mult=np.product([len(self.planets[mpl]['per_gaps']) for mpl in self.monos]) * \
+                   np.product([len(self.planets[dpl]['period_aliases']) for dpl in self.duos])
+            print(n_mult,"x samples")
+            samples['log_prob']=np.tile(0.0,len(samples))
+            samples_len=len(samples)
+            samples=pd.concat([samples]*int(n_mult),axis=0)
+            print(samples.shape,samples_len)
+            
+            n_pos=0
+            
+            for mpl in self.monos:
+                for n_gap in np.arange(len(self.planets[mpl]['per_gaps'])):
+                    sampl_loc=np.in1d(np.arange(0,len(samples),1),np.arange(n_pos*samples_len,(n_pos+1)*samples_len,1))
+                    samples.loc[sampl_loc,'period_marg_'+mpl]=self.trace['mono_periods_'+mpl][:,n_gap]
+                    samples.loc[sampl_loc,'tdur_marg_'+mpl]=self.trace['mono_tdurs_'+mpl][:,n_gap]
+                    samples.loc[sampl_loc,'log_prob']=self.trace['logprob_marg_'+mpl][:,n_gap]
+                    n_pos+=1
+            for dpl in self.duos:
+                for n_per in np.arange(len(self.planets[mpl]['per_gaps'])):
+                    sampl_loc=np.in1d(np.arange(len(samples)),np.arange(n_pos*samples_len,(n_pos+1)*samples_len))
+                    samples.loc[sampl_loc,'period_marg_'+dpl]=self.trace['duo_periods_'+dpl][:,n_per]
+                    samples.loc[sampl_loc,'tdur_marg_'+dpl]=self.trace['duo_tdurs_'+dpl][:,n_per]
+                    samples.loc[sampl_loc,'log_prob'] = self.trace['logprob_marg_'+dpl][:,n_per]
+                    n_pos+=1
+            weight_samps = np.exp(samples["log_prob"])
+            fig = corner.corner(samples[[col for col in samples.columns if col!='log_prob']],weights=weight_samps);
+        
+        fig.savefig(self.savenames[0]+'_corner.pdf',dpi=400,rasterized=True)
+        
     def PlotTable(self,plot_loc=None):
         new_df=True
         assert hasattr(self,'trace')
@@ -2722,40 +2778,7 @@ class monoModel():
         else:
             plt.savefig(plot_loc)
     
-    def PlotCorner(self, varnames=["b", "ecc", "period", "r_pl","u_star","vrel"],
-               savename=None, overwrite=False,savefileloc=None,returnfig=False,tracemask=None):
-        #Plots Corner plot
-        #Plotting corner of the parameters to see correlations
-        import corner
-        import matplotlib.pyplot as plt
-        print("varnames = ",varnames)
 
-        if not hasattr(self,'savenames'):
-            self.savenames=self.GetSavename(how='save')
-        
-        if self.tracemask is None:
-            self.tracemask=np.tile(True,len(self.trace['Rs']))
-        if "u_star" in varnames:
-            #Checking we're not using u_star and instead are using mission-specific params:
-            varnames.remove("u_star")
-            for u_col in ["u_star_tess","u_star_kep"]:
-                if u_col in self.trace.varnames:
-                    varnames+=[u_col]
-        self.samples = pm.trace_to_dataframe(self.trace, varnames=varnames)
-        self.amples=self.samples.loc[self.tracemask]
-
-        plt.figure()
-        if 'logprob_class' in self.trace.varnames:
-            #If there's a logprob_class, that suggests we had gaps, so we need to do the marginalisation weighting:
-            weight_samps = np.exp(self.trace["logprob_class"].flatten())
-            fig = corner.corner(self.samples,weights=weight_samps);
-        else:
-            fig = corner.corner(self.samples)
-
-        fig.savefig(self.savenames[0]+'_corner.png',dpi=250)
-
-        if returnfig:
-            return fig
         
     def LoadPickle(self, loadname=None):
         #Pickle file style: folder/TIC[11-number ID]_[20YY-MM-DD]_[n]_mcmc.pickle
@@ -2912,234 +2935,3 @@ class monoModel():
             file_to_write.write(outstring)
         #print("appending to file,",savename,"not yet supported")
         return outstring
-
-def Run(ID, initdepth, initt0, mission='TESS', stellardict=None,n_draws=1200,
-        overwrite=False,LoadFromFile=False,savefileloc=None, doplots=True,do_per_gap_cuts=True, **kwargs):
-    #, cutDistance=0.0):
-    """#PymcSingles - Run model
-    Inputs:
-    #  * ID - ID of star (in TESS, Kepler or K2)
-    #  * initdepth - initial detected depth (for Rp guess)
-    #  * initt0 - initial detection transit time
-    #  * mission - TESS or Kepler/K2
-    #  * stellardict - dictionary of stellar parameters. (alternatively taken from Gaia). With:
-    #         Rs, Rs_err - 
-    #         rho_s, rho_s_err - 
-    #         Teff, Teff_err - 
-    #         logg, logg_err - 
-    #  * n_draws - number of samples for the MCMC to take
-    #  * overwrite - whether to overwrite saved samples
-    #  * LoadFromFile - whether to load the last written sample file
-    #  * savefileloc - location of savefiles. If None, creates a folder specific to the ID
-    # In KWARGS:
-    #  * ALL INPUTS TO INIT_MODEL
-    
-    Outputs:
-    # model - the PyMc3 model
-    # trace - the samples
-    # lc - a 3-column light curve with time, flux, flux_err
-    """
-    
-    if not LoadFromFile:
-        savenames=GetSavename(ID, mission, how='save', overwrite=overwrite, savefileloc=savefileloc)
-    else:
-        savenames=GetSavename(ID, mission, how='load', overwrite=overwrite, savefileloc=savefileloc)
-    print(savenames)
-    
-    if os.path.exists(savenames[1]+'.lc') and os.path.exists(savenames[1]+'_hdr.pickle') and not overwrite:
-        print("loading from",savenames[1]+'.lc')
-        #Loading lc from file
-        df=pd.read_csv(savenames[1]+'.lc')
-        lc={col.replace('# ',''):df[col].values for col in df.columns}
-        hdr=pickle.load(open(savenames[1]+'_hdr.pickle','rb'))
-    else:
-        lc,hdr = openLightCurve(ID,mission,**kwargs)
-        print([len(lc[key]) for key in list(lc.keys())])
-        pd.DataFrame({key:lc[key] for key in list(lc.keys())}).to_csv(savenames[1]+'.lc')
-        pickle.dump(hdr, open(savenames[1]+'_hdr.pickle','wb'))
-
-    if stellardict is None:
-        Rstar, rhostar, Teff, logg, src = starpars.getStellarInfo(ID, hdr, mission, overwrite=overwrite,
-                                                             fileloc=savenames[1]+'_starpars.csv',
-                                                             savedf=True)
-    else:
-        if type(stellardict['Rs_err'])==tuple:
-            Rstar=np.array([stellardict['Rs'],stellardict['Rs_err'][0],stellardict['Rs_err'][1]])
-        else:
-            Rstar=np.array([stellardict['Rs'],stellardict['Rs_err'],stellardict['Rs_err']])
-        if type(stellardict['rho_s_err'])==tuple:
-            rhostar = np.array([stellardict['rho_s'],stellardict['rho_s_err'][0],stellardict['rho_s_err'][1]])
-        else:
-            rhostar = np.array([stellardict['rho_s'],stellardict['rho_s_err'],stellardict['rho_s_err']])
-        if type(stellardict['Teff_err'])==tuple:
-            Teff = np.array([stellardict['Teff'],stellardict['Teff_err'][0],stellardict['Teff_err'][1]])
-        else:
-            Teff = np.array([stellardict['Teff'],stellardict['Teff_err'],stellardict['Teff_err']])
-        if type(stellardict['logg_err'])==tuple:
-            logg = np.array([stellardict['logg'],stellardict['logg_err'][0],stellardict['logg_err'][1]])
-        else:
-            logg = np.array([stellardict['logg'],stellardict['logg_err'],stellardict['logg_err']])
-    print("Initialising transit model")
-    print(lc['time'],type(lc['time']),type(lc['time'][0]))
-    model, soln, lcmask, P_gap_cuts = init_model(lc,initdepth, initt0, Rstar, rhostar, Teff,
-                                                 logg=logg, **kwargs)
-    #initdur=None,n_pl=1,periods=None,per_index=-8/3,
-    #assume_circ=False,use_GP=True,constrain_LD=True,ld_mult=1.5,
-    #mission='TESS',LoadFromFile=LoadFromFile,cutDistance=cutDistance)
-    print("Model loaded")
-
-
-    #try:
-    if LoadFromFile and not overwrite:
-        self.LoadPickle(ID, mission, savenames[0]+'_mcmc.pickle')
-    else:
-        self.trace=None
-   
-    if self.trace is None:
-        #Running sampler:
-        np.random.seed(int(self.ID))
-        with model:
-            print(type(soln))
-            print(soln.keys())
-            trace = pm.sample(tune=np.clip(int(n_draws*0.66),400,4000), draws=n_draws, start=soln, chains=4,
-                                  step=xo.get_dense_nuts_step(target_accept=0.9),compute_convergence_checks=False)
-
-        self.SavePickle()
-            
-    if do_per_gap_cuts:
-        #Doing Cuts for Period gaps (i.e. where photometry rules out the periods of a planet)
-        #Only taking MCMC positions in the trace where either:
-        #  - P<0.5dur away from a period gap in P_gap_cuts[:-1]
-        #  - OR P is greater than P_gap_cuts[-1]
-        tracemask=np.tile(True,len(trace['t0'][:,0]))
-        for n in range(len(P_gap_cuts)):
-            #for each planet - only use monos
-            periods=kwargs.get("periods",None)
-            if periods is None or np.isnan(periods[n]) or periods[n]==0.0:
-                #Cutting points where P<P_gap_cuts[-1] and P is not within 0.5Tdurs of a gap:
-                gap_dists=np.nanmin(abs(trace['period'][:,n][:,np.newaxis]-P_gap_cuts[n][:-1][np.newaxis,:]),axis=1)
-                tracemask[(trace['period'][:,n]<P_gap_cuts[n][-1])*(gap_dists>0.5*np.nanmedian(trace['tdur'][:,n]))] = False
-            
-        #tracemask=np.column_stack([(np.nanmin(abs(trace['period'][:,n][:,np.newaxis]-P_gap_cuts[n][:-1][np.newaxis,:]),axis=1)<0.5*np.nanmedian(trace['tdur'][:,n]))|(trace['period'][:,n]>P_gap_cuts[n][-1]) for n in range(len(P_gap_cuts))]).any(axis=1)
-        print(np.sum(~tracemask),"(",int(100*np.sum(~tracemask)/len(tracemask)),") removed due to period gap cuts")
-    else:
-        tracemask=None
-    if doplots:
-        print("plotting")
-        PlotLC(lc, trace, ID, mission=mission, savename=savenames[0]+'_TransitFit.png', lcmask=lcmask,tracemask=tracemask)
-        PlotCorner(trace, ID, mission=mission, savename=savenames[0]+'_corner.png',tracemask=tracemask)
-    
-    if LoadFromFile and not overwrite and os.path.exists(savenames[0]+'_results.txt'):
-        with open(savenames[0]+'_results.txt', 'r', encoding='UTF-8') as file:
-            restable = file.read()
-    else:
-        restable=ToLatexTable(trace, ID, mission=mission, varnames=None,order='columns',
-                              savename=savenames[0]+'_results.txt', overwrite=False,
-                              savefileloc=None, tracemask=tracemask)
-    return {'model':model, 'trace':trace, 'light_curve':lc, 'lcmask':lcmask, 'P_gap_cuts':P_gap_cuts, 'tracemask':tracemask,'restable':restable}
-
-def RunFromScratch(ID, mission, tcen, tdur, ra=None, dec=None, 
-                   mono_SNRthresh=6.0,
-                   other_planet_SNRthresh=6.0, PL_ror_thresh=0.2):
-    '''
-    # Given only an ID, mission, tcen and tdur, this function will
-    # - get the lightcurve and stellar parameters
-    # - check if the candidate is a false positive
-    # - Search for other transits and/or planets in the lightcurve
-    # - Run the required Namaste model for all high-SNR planet candidates
-    '''
-    
-    #Gets stellar info
-    Rstar, rhostar, Teff, logg, src = starpars.getStellarInfo(ID, hdr, mission, overwrite=overwrite,
-                                                             fileloc=savenames[1]+'_starpars.csv',
-                                                             savedf=True)
-    
-    #Gets Lightcurve
-    lc,hdr=openLightCurve(ID,mission,use_ppt=False)
-    lc=tools.lcFlatten(lc,winsize=9*tdur,stepsize=0.1*tdur)
-    
-    #Runs Quick Model fit
-    monoparams, interpmodel = MonoSearch.QuickMonoFit(lc,tc,dur,Rs=Rstar[0],Ms=rhostar[0]*Rstar[0]**3)
-    
-    #Checks to see if dip is due to background asteroid
-    asteroidDeltaBIC=MonoSearch.AsteroidCheck(lc, monoparams, interpmodel)
-    if asteroidDeltaBIC>6:
-        planet_dic_1['01']['flag']='asteroid'
-    
-    #Checks to see if dip is combined with centroid
-    centroidDeltaBIC=MonoSearch.CentroidCheck(lc, monoparams, interpmodel)
-    if centroidDeltaBIC>6:
-        planet_dic_1['01']['flag']='EB'
-
-    #Searches for other dips in the lightcurve
-    planet_dic_1=MonoSearch.SearchForSubsequentTransits(lc, interpmodel, tc, dur, Rs=Rstar[0],Ms=rhostar[0]*Rstar[0]**3)
-    
-    #Asses whether any dips are significant enough:
-    if planet_dic_1['01']['SNR']>mono_SNRthresh:
-        #Check if the Depth/Rp suggests we have a very likely EB, we search for a secondary
-        if planet_dic_1['01']['rp_rs']<PL_ror_thresh:
-            #Searching for other (periodic) planets in the system
-            planet_dic_2=MonoSearch.SearchForOtherPlanets(lc, planet_dic_1['01'], SNRthresh=other_planet_SNRthresh)
-            if len(planet_dic_2)>1:
-                planet_dic_1['01']['flag']='multiplanet'
-            else:
-                planet_dic_1['01']['flag']='monoplanet'
-        else:
-            #Likely EB
-            planet_dic_1['01']['flag']='EB'
-    #If other dips exist, we need to figure out if there are possible integer periods to search between:
-    
-    #We then do an EB model here
-    if planet_dic_1['01']['flag']=='EB':
-        #Either doing Namaste model with "third light" switched on.
-        print(" ")
-    else:
-        #If not, we have a planet.
-        #Checking if monoplanet is single, double-with-gap, or periodic.
-        if planet_dic_1['01']['flag']=='monoplanet' and planet_dic_1['01']['orbit_flag'] == 'singlemono':
-            #Monotransit?
-            print(" ")
-        elif planet_dic_1['01']['flag']=='monoplanet' and planet_dic_1['01']['orbit_flag'] == 'multimono':
-            #Two monotransits?
-            print(" ")
-        elif planet_dic_1['01']['flag']=='monoplanet' and planet_dic_1['01']['orbit_flag'] == 'doublemono':
-            #Monotransit with gap?
-            print(" ")
-        elif planet_dic_1['01']['flag']=='periodic':
-            print(" ")
-
-                    
-    
-
-
-def PlotCorner(trace, ID, mission='TESS', varnames=["b", "ecc", "period", "r_pl","u_star","vrel"],
-               savename=None, overwrite=False,savefileloc=None,returnfig=False,tracemask=None):
-    #Plotting corner of the parameters to see correlations
-    import corner
-    import matplotlib.pyplot as plt
-    print("varnames = ",varnames)
-    
-    if savename is None:
-        savename=GetSavename(ID, mission, how='save', 
-                             overwrite=overwrite, savefileloc=savefileloc)[0]
-    
-    if tracemask is None:
-        tracemask=np.tile(True,len(trace['Rs']))
-    
-
-    samples = pm.trace_to_dataframe(trace, varnames=varnames)
-    samples=samples.loc[tracemask]
-
-    plt.figure()
-    if 'logprob_class' in trace.varnames:
-        #If there's a logprob_class, that suggests we had gaps, so we need to do the marginalisation weighting:
-        weight_samps = np.exp(trace["logprob_class"].flatten())
-        fig = corner.corner(samples,weights=weight_samps);
-    else:
-        weight_samps = np.exp(trace["logprob_class"].flatten())
-        fig = corner.corner(samples)
-
-    fig.savefig(savename,dpi=250)
-    
-    if returnfig:
-        return fig

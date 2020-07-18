@@ -469,7 +469,7 @@ def GetExoFop(icid,mission='tess',file=''):
 
 def LoadModel():
     #Loading isoclassify "mesa" model from file:
-    from ..stellar.isoclassify import classify, pipeline
+    from stellar.isoclassify import classify, pipeline
     mist_loc='/'.join(classify.__file__.split('/')[:-3])+'/mesa.h5'
     import h5py
     file = h5py.File(mist_loc,'r+', driver='core', backing_store=False)
@@ -523,7 +523,7 @@ def LoadModel():
 
 def LoadDust(sc,plx,dust='allsky'):
     import mwdust
-    from ..stellar.isoclassify import pipeline
+    from stellar.isoclassify import pipeline
     av=mwdust.SFD()(sc.galactic.l.deg,sc.galactic.b.deg,1000.0/plx)
     #sfdmap(sc.ra.deg.to_string(),sc.dec.deg.to_string())
     ext={}
@@ -643,7 +643,7 @@ def CheckSpecCsv(radec,icid,thresh=20*u.arcsec):
 def Assemble_and_run_isoclassify(icid,sc,mission,survey_dat,exofop_dat,errboost=0.2,spec_dat=None,
                                  useGaiaLum=True,useGaiaBR=True,useBV=True,useGaiaSpec=True,
                                  use2mass=True,useGriz=True,useGaiaAg=True):
-    from ..stellar.isoclassify import classify, pipeline
+    from stellar.isoclassify import classify, pipeline
     ############################################
     #    Building isoclassify input data:      #
     ############################################
@@ -670,7 +670,7 @@ def Assemble_and_run_isoclassify(icid,sc,mission,survey_dat,exofop_dat,errboost=
         print("No Gaia mag for",icid)
         mag+=False
     #BV from either APASS or Exofop:
-    if useBV and 'ap_Johnson B (B)' in survey_dat.index and not np.isnan(np.sum(survey_dat[['ap_Johnson B (B)','ap_Johnson V (V)','ap_Berr','ap_Verr']].values)):
+    if useBV and 'ap_Johnson B (B)' in survey_dat.index and not pd.isnull(survey_dat[['ap_Johnson B (B)','ap_Johnson V (V)','ap_Berr','ap_Verr']]).any():
         #BV photometry (eg apass)
         x.addbv([survey_dat['ap_Johnson B (B)'],survey_dat['ap_Johnson V (V)']],
                 [errboost+survey_dat['ap_Berr'],errboost+survey_dat['ap_Verr']])
@@ -684,7 +684,7 @@ def Assemble_and_run_isoclassify(icid,sc,mission,survey_dat,exofop_dat,errboost=
         mag+=False
 
     #Spectra either from APASS, or from user-uploaded file, or from Gaia spectrum:
-    if exofop_dat['spec'] is not None:
+    if 'spec' in exofop_dat.index and exofop_dat['spec'] is not None:
         #From ExoFop - either has _user (K2) or _INSTRUMENT (TESS)
         
         #If there's multiple spectra, we'll take the one with lowest Teff err:
@@ -716,19 +716,21 @@ def Assemble_and_run_isoclassify(icid,sc,mission,survey_dat,exofop_dat,errboost=
         #From LAMOST or AAT or Coralie (cross-matched list in stellar folder)
         x.addspec([spec_dat.teff, spec_dat.logg, spec_dat.feh],
                   [spec_dat.teff_err, spec_dat.logg_err, spec_dat.feh_err])
-    elif useGaiaSpec and 'teff_val' in survey_dat.index and not np.isnan(survey_dat.teff_val):
+    elif useGaiaSpec and 'teff_val' in survey_dat.index and not pd.isnull(survey_dat.teff_val):
         #From Gaia:
         x.addspec([survey_dat.teff_val, survey_dat.rv_template_logg, 0.0],
                   [0.5*(survey_dat.teff_percentile_upper-survey_dat.teff_percentile_lower), 0.4, 1.0])
     #2MASS JHK from Gaia-xmatched catalogue or from ExoFop:
-    if use2mass and '2m_ks_m' in survey_dat.index and not np.isnan(np.sum(survey_dat[['2m_j_m','2m_h_m','2m_ks_m',
-                                                                                     '2m_j_msigcom','2m_h_msigcom','2m_ks_msigcom']].values)):
+    if use2mass and '2m_j_m' in survey_dat.index and '2m_h_m' in survey_dat.index and '2m_ks_m' in survey_dat.index:
+        for col in ['2m_j_msigcom','2m_h_msigcom','2m_ks_msigcom']:
+            if col not in survey_dat:
+                survey_dat[col] = 0.2
         # 2MASS photometry
         x.addjhk([survey_dat['2m_j_m'],survey_dat['2m_h_m'],survey_dat['2m_ks_m']],
                  [errboost+survey_dat['2m_j_msigcom'],errboost+survey_dat['2m_h_msigcom'],errboost+survey_dat['2m_ks_msigcom']])
         mag+=True
-    elif use2mass and 'K' in exofop_dat.index  and not np.isnan(np.sum(exofop_dat[['J','H','K',
-                                                                                   'Je','He','Ke']].values.astype(float))):
+    elif use2mass and 'K' in exofop_dat.index  and not pd.isnull(exofop_dat[['J','H','K',
+                                                                                   'Je','He','Ke']]).any():
         x.addjhk([float(exofop_dat['J']),float(exofop_dat['H']),float(exofop_dat['K'])],
                  [errboost+float(exofop_dat['Je']),errboost+float(exofop_dat['He']),errboost+float(exofop_dat['Ke'])])
         mag+=True
@@ -736,19 +738,22 @@ def Assemble_and_run_isoclassify(icid,sc,mission,survey_dat,exofop_dat,errboost=
         print("No 2MASS for",icid)
         mag+=False
     #GRIZ photometry from APASS or Gaia-xmatched SDSS catalogue or from ExoFop:
-    if useGriz and "ap_Sloan z' (SZ)" in survey_dat.index and not np.isnan(np.sum(survey_dat[["ap_Sloan g' (SG)","ap_Sloan r' (SR)","ap_Sloan i' (SI)","ap_Sloan z' (SZ)","ap_SGerr","ap_SRerr","ap_SIerr","ap_SZerr"]].values)):
+    if useGriz and "ap_Sloan z' (SZ)" in survey_dat.index and "ap_Sloan r' (SR)" in survey_dat.index and "ap_Sloan i' (SI)" in survey_dat.index and "ap_Sloan z' (SZ)" in survey_dat.index:
+        for col in ["ap_SGerr","ap_SRerr","ap_SIerr","ap_SZerr"]:
+            if col not in survey_dat:
+                survey_dat[col] = 0.2
         # 2MASS photometry
         x.addgriz([survey_dat["ap_Sloan g' (SG)"],survey_dat["ap_Sloan r' (SR)"],
                    survey_dat["ap_Sloan i' (SI)"],survey_dat["ap_Sloan z' (SZ)"]],
                  [errboost+survey_dat["ap_SGerr"],errboost+survey_dat["ap_SRerr"],
                   errboost+survey_dat["ap_SIerr"],errboost+survey_dat["ap_SZerr"]])
         mag+=True
-    elif useGriz and 'sd_z_mag' in survey_dat.index and not np.isnan(np.sum(survey_dat[["sd_g_mag","sd_r_mag","sd_i_mag","sd_z_mag","sd_g_mag_error","sd_r_mag_error","sd_i_mag_error","sd_z_mag_error"]].values)):
+    elif useGriz and 'sd_z_mag' in survey_dat.index and not pd.isnull(survey_dat["sd_g_mag","sd_r_mag","sd_i_mag","sd_z_mag","sd_g_mag_error","sd_r_mag_error","sd_i_mag_error","sd_z_mag_error"]).any():
         x.addgriz([survey_dat['sd_g_mag'],survey_dat['sd_r_mag'],survey_dat['sd_i_mag'],survey_dat['sd_z_mag']],
                   [errboost+survey_dat['sd_g_mag_error'],errboost+survey_dat['sd_r_mag_error'],
                    errboost+survey_dat['sd_i_mag_error'],errboost+survey_dat['sd_z_mag_error']])
         mag+=True
-    elif useGriz and 'z' in exofop_dat.index and not np.isnan(np.sum(exofop_dat[["g","r","i","z","ge","re","ie","ze"]].values)):
+    elif useGriz and 'z' in exofop_dat.index and not pd.isnull(exofop_dat[["g","r","i","z","ge","re","ie","ze"]]).any():
         x.addgriz([float(exofop_dat['g']),float(exofop_dat['r']),float(exofop_dat['i']),float(exofop_dat['z'])],
                   [errboost+float(exofop_dat['ge']),errboost+float(exofop_dat['re']),
                    errboost+float(exofop_dat['ie']),errboost+float(exofop_dat['ze'])])
@@ -802,7 +807,7 @@ def Assemble_and_run_isoclassify(icid,sc,mission,survey_dat,exofop_dat,errboost=
     isoclass_df['rho_gcm3em']=isoclass_df['rhoem']*1.411
     return isoclass_df, paras
     
-def starpars(icid,mission,errboost=0.1,return_best=True,
+def starpars(icid,mission,errboost=0.1,radec=None,return_best=True,
              useGaiaLum=True,useGaiaBR=True,useGaiaSpec=True,
              useBV=True,use2mass=True,useGriz=True,useGaiaAg=True,use_surveys=False):
     # Estimating stellar parameters given survey data, input catalogues, and possibly follow-up data
@@ -823,7 +828,7 @@ def starpars(icid,mission,errboost=0.1,return_best=True,
     ############################################
     #    Getting stellar data from Exofop:     #
     ############################################
-    if mission is not 'CoRoT':
+    if mission.lower()!='corot':
         exofop_dat, kicinfo = GetExoFop(icid,mission)
         if exofop_dat is not None:
             tic_info=Catalogs.query_criteria(catalog="Tic",
@@ -837,12 +842,12 @@ def starpars(icid,mission,errboost=0.1,return_best=True,
         if exofop_dat is None and kicinfo is not None:
             exofop_dat=kicinfo
             exofop_dat['mission']='kep_or_k2'
-    else:
-        corot_dat=pd.read_csv("CorotLCs/CorotSinglesFixed.csv")
-        corot_dat=corot_dat.loc[corot_dat['ID']==icid].iloc[0]
-        exofop_dat=Catalogs.query_criteria(catalog="Tic",coordinates=str(corot_dat['ra'])+','+str(corot_dat['dec']),
-                                       radius=20*u.arcsecond,objType="STAR").to_pandas()
-        exofop_dat=exofop_dat.append(corot_dat)
+    elif radec is not None:
+        exofop_dat=Catalogs.query_criteria(catalog="Tic",coordinates=str(radec.ra.deg)+','+str(radec.dec.deg),
+                                           radius=12.5*u.arcsecond,objType="STAR").to_pandas()
+        if exofop_dat.shape[0]>0:
+            exofop_dat=exofop_dat.loc[np.argmin(exofop_dat['Tmag'])]
+        #exofop_dat=exofop_dat.append(corot_dat)
         kicinfo=None
     ############################################
     #   Getting survey data from [Various]:    #
@@ -850,11 +855,13 @@ def starpars(icid,mission,errboost=0.1,return_best=True,
     
     if use_surveys:
         #Loading RA and Dec:
-        if type(exofop_dat['ra'])==str and (exofop_dat['ra'].find(':')!=-1)|(exofop_dat['ra'].find('h')!=-1):
-            coor=SkyCoord(exofop_dat['ra'],exofop_dat['dec'],unit=(u.hourangle,u.deg))
-        elif (type(exofop_dat['ra'])==float)|(type(exofop_dat['ra'])==np.float64) or (type(exofop_dat['ra'])==str)&(exofop_dat['ra'].find(',')!=-1):
-            coor=SkyCoord(exofop_dat['ra'],exofop_dat['dec'],unit=u.deg)
-
+        if radec is None:
+            if type(exofop_dat['ra'])==str and (exofop_dat['ra'].find(':')!=-1)|(exofop_dat['ra'].find('h')!=-1):
+                coor=SkyCoord(exofop_dat['ra'],exofop_dat['dec'],unit=(u.hourangle,u.deg))
+            elif (type(exofop_dat['ra'])==float)|(type(exofop_dat['ra'])==np.float64) or (type(exofop_dat['ra'])==str)&(exofop_dat['ra'].find(',')!=-1):
+                coor=SkyCoord(exofop_dat['ra'],exofop_dat['dec'],unit=u.deg)
+        else:
+            coor=radec
         #Getting TIC, Spec and survey data:
         #tic_dat = Catalogs.query_criteria("TIC",coordinates=coor,radius=20/3600,objType="STAR")#This is not used, as TIC is on ExoFop
         spec_dat = CheckSpecCsv(coor,icid)
@@ -941,7 +948,10 @@ def starpars(icid,mission,errboost=0.1,return_best=True,
         inputcat_err_rho=100
     print(inputcat_err_rho,exofop_dat['rho_gcm3e'],'<err | rho>',exofop_dat['rho_gcm3'])
     print('Density errors.  isoclassify:',isoclass_err_rho,', input cat:',inputcat_err_rho)
-    if isoclass_df is not None and abs(exofop_dat['rho_gcm3']-isoclass_df['rho_gcm3']) > abs(0.5*(abs(isoclass_df['rho_gcm3ep'])+abs(isoclass_df['rho_gcm3em']))+exofop_dat['rho_gcm3e']):
+    print(isoclass_df is not None)
+    print(exofop_dat['rho_gcm3'],isoclass_df['rho_gcm3'])
+    print(abs(0.5*(abs(isoclass_df['rho_gcm3ep'])+abs(isoclass_df['rho_gcm3em']))+exofop_dat['rho_gcm3e']))
+    if isoclass_df is not None and ((exofop_dat['rho_gcm3'] is None) or (abs(exofop_dat['rho_gcm3']-isoclass_df['rho_gcm3']) > abs(0.5*(abs(isoclass_df['rho_gcm3ep'])+abs(isoclass_df['rho_gcm3em']))+exofop_dat['rho_gcm3e']))):
         print('Densities disagree at >1-sigma | isoclassify:',isoclass_df['rho_gcm3'],0.5*(abs(isoclass_df['rho_gcm3ep'])+abs(isoclass_df['rho_gcm3em'])),'| input cat:',exofop_dat['rho_gcm3'],exofop_dat['rho_gcm3e'])
     
     #Now we know which is best, we put that best info into "best_df"
@@ -987,6 +997,68 @@ def starpars(icid,mission,errboost=0.1,return_best=True,
     else:
         return exofop_dat,survey_dat,isoclass_df,paras,best_df
 
+    
+def IsoClass(icid,mission,coor,ic_info=None,return_best=True,errboost=0.05,
+             useGaiaLum=True,useGaiaBR=True,useGaiaSpec=True,
+             useBV=True,use2mass=True,useGriz=True,useGaiaAg=True):
+
+    #Getting TIC, Spec and survey data:
+    #tic_dat = Catalogs.query_criteria("TIC",coordinates=coor,radius=20/3600,objType="STAR")#This is not used, as TIC is on ExoFop
+    spec_dat = CheckSpecCsv(coor,icid)
+    survey_dat=QueryGaiaAndSurveys(coor,mission=mission)
+    
+    ic_info=pd.Series({'ra':coor.ra.deg,'dec':coor.dec.deg}) if ic_info is None else ic_info
+
+    order_of_kw_to_remove=['useGaiaAg','useGriz','useBV','useGaiaBR','use2mass','useGaiaSpec','useGaiaLum']
+    n_kw_to_remove=0
+    isoclass_dens_is_NaN=True
+    #Isoclass often fails, e.g. due to photometry. So let's loop through the kwargs and gradually remove contraints:
+    while isoclass_dens_is_NaN and n_kw_to_remove<=len(order_of_kw_to_remove):
+        kwars={order_of_kw_to_remove[nkw]:(True if nkw>=n_kw_to_remove else False) for nkw in range(len(order_of_kw_to_remove))}
+        #print(n_kw_to_remove,'/',len(order_of_kw_to_remove),kwars)
+        #try:
+        if 1==1:
+            isoclass_df, paras = Assemble_and_run_isoclassify(icid,coor,mission,survey_dat,ic_info,
+                                               errboost=errboost*(1+0.33*n_kw_to_remove),spec_dat=spec_dat,**kwars)
+            #print(isoclass_df[['rho_gcm3','rho_gcm3ep','rho_gcm3em']])
+            isoclass_dens_is_NaN=(np.isnan(isoclass_df[['rho_gcm3','rho_gcm3ep','rho_gcm3em']]).any())|(isoclass_df[['rho_gcm3','rho_gcm3ep','rho_gcm3em']]==0.0).all()
+        #except Exception as e:
+        #    exc_type, exc_obj, exc_tb = sys.exc_info()
+        #    print(exc_type, exc_tb.tb_lineno)
+        #    isoclass_df,paras=None,None
+            #print(n_kw_to_remove,'|',isoclass_df)
+        n_kw_to_remove+=1
+    #Assessing which available data source is the *best* using lowest density error
+    
+    if isoclass_df is not None:
+        isoclass_err_rho=(0.5*(abs(isoclass_df['rho_gcm3ep'])+abs(isoclass_df['rho_gcm3em'])))/isoclass_df['rho_gcm3']
+    else:
+        isoclass_err_rho=100
+
+    #selecting the best stellar parameter source from input cat vs isoclassify
+    #Generated Density better constrained by isoclassify:
+    col_names=['teff','teffep','teffem','logg','loggep','loggem','lum','lumep','lumem',
+               'rad','radep','radem','mass','massep','massem','rho_gcm3','rho_gcm3ep','rho_gcm3em',
+               'dis','disep','disem']
+    best_df={}
+    for col in col_names:
+        if 'dis' in col:
+            print(col)
+            bdfcol = col.replace('dis', 'dist')
+        else:
+            bdfcol = col
+        if col[-2:]=='em':
+            bdfcol="eneg_"+bdfcol[:-2]
+        elif col[-2:]=='ep':
+            bdfcol="epos_"+bdfcol[:-2]
+        best_df[bdfcol]=isoclass_df[col]
+        
+        if 'rho_gcm3' in col:
+            best_df[bdfcol.replace('_gcm3','')]=isoclass_df[col]/1.411
+    best_df['ra']=coor.ra.deg
+    best_df['dec']=coor.dec.deg
+    best_df['src']='isoclassify'
+    return pd.Series(best_df,name=icid)
     
 def getStellarDensity(ID,mission,errboost=0.1):
     #Compiling dfs (which may have spectra)
@@ -1151,7 +1223,7 @@ def compileInfos(ID,norminfo,tic_dat,epicdat):
             info[col]=epicdat[col]
     return pd.Series(info,name=ID)
 
-def getStellarInfoFromCsv(ID,mission,radec=None,k2tab=None,keptabs=None):
+def getStellarInfoFromCsv(ID,mission,radec=None,k2tab=None,keptabs=None,use_isochrones=0):
     # Kepler on Vizier J/ApJ/866/99/table1
     # New K2: "http://kevinkhu.com/table1.txt"
     # TESS on Vizier (TICv8)
@@ -1161,7 +1233,7 @@ def getStellarInfoFromCsv(ID,mission,radec=None,k2tab=None,keptabs=None):
     
     if mission.lower()=='tess':
         info = TICdata(int(ID)).iloc[0]
-        info['src']='TIC'
+        info['source']='TICv8'
         print("TESS object",ID,info.name,info)
         k2tab = None
         keptabs = None
@@ -1171,11 +1243,15 @@ def getStellarInfoFromCsv(ID,mission,radec=None,k2tab=None,keptabs=None):
         if mission.lower()=='kepler':
             #Getting Kepler info from the KIC and reading a RA/Dec
             xtra=pd.read_csv("https://exoplanetarchive.ipac.caltech.edu/cgi-bin/nstedAPI/nph-nstedAPI?table=q1_q17_dr25_supp_stellar&select=kepid,ra,dec,teff,teff_err1,teff_err2,teff_prov,logg,logg_err1,logg_err2,feh,radius,radius_err1,radius_err2,mass,mass_err1,mass_err2&format=csv&where=kepid=%27"+str(int(ID))+"%27")
+            src='q1_q17_dr25_supp_stellar'
             if xtra.shape[0]==0:
                 xtra=pd.read_csv("https://exoplanetarchive.ipac.caltech.edu/cgi-bin/nstedAPI/nph-nstedAPI?table=q1_q17_dr25_stellar&select=kepid,ra,dec,teff,teff_err1,teff_err2,teff_prov,logg,logg_err1,logg_err2,feh,radius,radius_err1,radius_err2,mass,mass_err1,mass_err2&format=csv&where=kepid=%27"+str(int(ID))+"%27")
+                src='q1_q17_dr25_stellar'
             if xtra.shape[0]==0:
                 xtra=pd.read_csv("https://exoplanetarchive.ipac.caltech.edu/cgi-bin/nstedAPI/nph-nstedAPI?table=keplerstellar&select=kepid,ra,dec,teff,teff_err1,teff_err2,teff_prov,logg,logg_err1,logg_err2,feh,radius,radius_err1,radius_err2,mass,mass_err1,mass_err2&format=csv&where=kepid=%27"+str(int(ID))+"%27")
-            print(xtra)
+                src='keplerstellar'
+            xtra['source']=src
+            #print(xtra)
             if xtra.shape[0]>0:
                 xtra=xtra.iloc[0] if type(xtra)==pd.DataFrame else xtra
                 radec=SkyCoord(xtra['ra']*u.deg,xtra['dec']*u.deg)
@@ -1192,6 +1268,7 @@ def getStellarInfoFromCsv(ID,mission,radec=None,k2tab=None,keptabs=None):
                 info1=info1.iloc[0] if type(info1)==pd.DataFrame else info1
                 info2=info2.iloc[0] if type(info2)==pd.DataFrame else info2
                 info=pd.concat([info1,info2.drop('KIC')])
+                info['source']='GKSPC_KIC'
                 info=info.rename(index={'KIC':'ID','gmag':'GAIA',
                                         'iso_rad':'rad',  'iso_rad_err1':'epos_rad',   'iso_rad_err2':'eneg_rad',
                                         'iso_mass':'mass','iso_mass_err1':'epos_mass', 'iso_mass_err2':'eneg_mass',
@@ -1219,14 +1296,13 @@ def getStellarInfoFromCsv(ID,mission,radec=None,k2tab=None,keptabs=None):
                     info['epos_Teff']=info['e_Teff']
                     info['e_d']=0.5*(abs(info['epos_dist'])+abs(info['eneg_dist']))
                     info['e_rad']=0.5*(abs(info['eneg_Rad'])+abs(info['epos_Rad']))
-
+                    info['source']='Berger2018_revised'
                 else:
                     info={}
                 
-                
-                
                 if info=={} and xtra is not None:
-                    print({col:col.replace('radius','rad') for col in info.index if 'radius' in col})
+                    info=xtra
+                    #print({col:col.replace('radius','rad') for col in info.index if 'radius' in col})
                     info=info.rename(index={col:col.replace('radius','rad') for col in info.index if 'radius' in col})
                     info=info.rename(index={col:'eneg_'+col.replace('_err2','') for col in info.index if '_err2' in col})
                     info=info.rename(index={col:'epos_'+col.replace('_err1','') for col in info.index if '_err1' in col})
@@ -1241,6 +1317,7 @@ def getStellarInfoFromCsv(ID,mission,radec=None,k2tab=None,keptabs=None):
                     info['epos_logg']=xtra['logg_err2']
                     info['e_logg']=0.5*(abs(info['eneg_logg'])+abs(info['epos_logg']))
                     info['feh']=xtra['feh']
+                    info['source']+='&'+xtra['source']
                     
             k2tab=None
             epicdat=None
@@ -1263,6 +1340,7 @@ def getStellarInfoFromCsv(ID,mission,radec=None,k2tab=None,keptabs=None):
                 info = k2tab.loc[k2tab['EPIC']==int(ID)]
                 info = info.iloc[0] if type(info)==pd.DataFrame else info
                 info['mission']='K2'
+                info['source']='KHU_EPIC'
                 info=info.rename(index={'EPIC':'ID','Gaia':'GAIA',
                                           'Dist':'dist','E_Dist':'epos_dist','e_Dist':'eneg_dist',
                                           'Mstar':'mass','E_Mstar':'epos_mass','e_Mstar':'eneg_mass',
@@ -1294,7 +1372,6 @@ def getStellarInfoFromCsv(ID,mission,radec=None,k2tab=None,keptabs=None):
                         radec = SkyCoord(gaiainfo['ra']*u.deg,gaiainfo['dec']*u.deg)
                         info['ra']=gaiainfo['ra']
                         info['dec']=gaiainfo['dec']
-                
             keptabs=None            
         elif mission.lower()=='corot':
             #getting radec and then searching TIC
@@ -1307,17 +1384,18 @@ def getStellarInfoFromCsv(ID,mission,radec=None,k2tab=None,keptabs=None):
             #Now getting TIC, which may be present for the above too
             try:
                 tic_dat = Catalogs.query_criteria("TIC", coordinates=radec,
-                                                  radius=15/3600,objType='STAR').to_pandas()#This is not used, as TIC is on ExoFop
+                                                  radius=10*u.arcsec,objType='STAR').to_pandas()#This is not used, as TIC is on ExoFop
                 tic_dat=tic_dat.iloc[np.argmin(tic_dat['Tmag'])]
-                if info is None:
+                if info is None or info['source'] in z:
                     info=tic_dat
+                    info['source']='TICv8'
             except:
                 print(ID," not in TIC")
                 tic_dat=None
     if info is not None:
         #Switching all e_, E_, etc to uniform column names:
         info=RenameSeries(info)
-        print(info[['rad','logg','teff','mass']])
+        #print(info[['rad','logg','teff','mass']])
         if tic_dat is not None:
             tic_dat=RenameSeries(deepcopy(tic_dat))
         if epicdat is not None:
@@ -1325,10 +1403,10 @@ def getStellarInfoFromCsv(ID,mission,radec=None,k2tab=None,keptabs=None):
         #Taking the best-constrained info from these arrays into a single series:
         info=compileInfos(ID,deepcopy(info),tic_dat,epicdat)
 
-        if 'rad' not in info.index:
+        if 'rad' not in info.index and use_isochrones==1:
             try:
                 print("#Using Isoclassify to attempt to get star parameters:")
-                Rstar, rhos, Teff, logg, src = getStellarInfo(ID,info,mission)
+                Rstar, rhos, Teff, logg, src = getStellarInfo(ID,info,mission,radec=radec)
                 info['rad']=Rstar[0]
                 info['eneg_rad']=Rstar[1]
                 info['epos_rad']=Rstar[2]
@@ -1341,6 +1419,7 @@ def getStellarInfoFromCsv(ID,mission,radec=None,k2tab=None,keptabs=None):
                 info['rho']=rhos[0]
                 info['eneg_rho']=rhos[1]
                 info['epos_rho']=rhos[2]
+                info['source']='IsoClassify'
             except:
                 print("getStellarInfo fails")
 
@@ -1353,6 +1432,7 @@ def getStellarInfoFromCsv(ID,mission,radec=None,k2tab=None,keptabs=None):
                         msinfo=MainSequenceFit(info[mags[nm]],info['dist'])
                         for col in msinfo:
                             info[col]=msinfo[col]
+                            info['source']='MS_Fit'
                         nomag=False
 
         if 'mass' not in info.index:
@@ -1371,8 +1451,16 @@ def getStellarInfoFromCsv(ID,mission,radec=None,k2tab=None,keptabs=None):
                 info['logg']=np.nan
                 info['eneg_logg']=np.nan
                 info['epos_logg']=np.nan
-
-        #print('mass' in info.index, 'rad' in info.index, 'logg' in info.index)
+        
+        if ('logg' not in info or np.isnan(info['logg'])) and ('mass' not in info or np.isnan(info['mass'])) and ('rho' not in info or np.isnan(info['rho'])):
+            #Problem here - not enough info for rho... Doing IsoClassify to get that info:
+            isoinfo = IsoClass(ID,mission,radec)
+            #Overwriting current info with isoclassify outputs:
+            for col in info.keys():
+                info[col] =  isoinfo[col] if col in isoinfo.keys() and not pd.isnull(isoinfo[col]) else info[col]
+            for col in isoinfo.keys():
+                info[col]=isoinfo[col]
+        
         #Problem here - need rho. Derive from Teff and Rs, plus Dist vs. mag?
         allrhos={}
         if 'mass' in info.index and 'rad' in info.index:
@@ -1389,24 +1477,23 @@ def getStellarInfoFromCsv(ID,mission,radec=None,k2tab=None,keptabs=None):
         if 'rho' in info.index and info['rho']>0.0:
             rhos={'rho':info['rho'], 'epos_rho':info['epos_rho'], 'eneg_rho':info['eneg_rho']}
             allrhos['rho']=rhos
-        assert not np.all([np.isnan(allrhos[rho]['rho']) for rho in allrhos])
-        print(allrhos)
-        av1, neg_std = weighted_avg_and_std(np.array([allrhos[rho]['rho'] for rho in allrhos]),
-                                           np.array([allrhos[rho]['eneg_rho'] for rho in allrhos]))
-        av2, pos_std = weighted_avg_and_std(np.array([allrhos[rho]['rho'] for rho in allrhos]),
-                                           np.array([allrhos[rho]['epos_rho'] for rho in allrhos]))
+        av1, neg_std = weighted_avg_and_std(np.array([allrhos[rho]['rho'] for rho in allrhos if not np.isnan(allrhos[rho]['rho'])]),
+                                           np.array([allrhos[rho]['eneg_rho'] for rho in allrhos if not np.isnan(allrhos[rho]['rho'])]))
+        av2, pos_std = weighted_avg_and_std(np.array([allrhos[rho]['rho'] for rho in allrhos if not np.isnan(allrhos[rho]['rho'])]),
+                                           np.array([allrhos[rho]['epos_rho'] for rho in allrhos if not np.isnan(allrhos[rho]['rho'])]))
+        #print(av1, neg_std, pos_std)
         info['rho']=0.5*(av1+av2)
         #Clipping the STD values such that they cannot be below the uncertainties of the best-constrained density:
-        info['epos_rho']=np.clip(neg_std,np.min([allrhos[rho]['eneg_rho'] for rho in allrhos]),info['rho']) if (np.isfinite(pos_std) and pos_std!=0.0) else 0.5*info['rho']
-        info['eneg_rho']=np.clip(pos_std,np.min([allrhos[rho]['epos_rho'] for rho in allrhos]),info['rho']) if (np.isfinite(neg_std) and neg_std!=0.0) else 0.5*info['rho']
+        info['eneg_rho']=np.clip(neg_std,np.nanmin([allrhos[rho]['eneg_rho'] for rho in allrhos]),info['rho']) if (np.isfinite(pos_std) and pos_std!=0.0) else 0.5*info['rho']
+        info['epos_rho']=np.clip(pos_std,np.nanmin([allrhos[rho]['epos_rho'] for rho in allrhos]),info['rho']) if (np.isfinite(neg_std) and neg_std!=0.0) else 0.5*info['rho']
     #Making sure ra and deg are uniform:
-    if radec is not None:
+    if radec is not None and info is not None:
         info['ra']=radec.ra.deg
         info['dec']=radec.dec.deg
     return info, k2tab, keptabs
         
 
-def getStellarInfo(ID,hdr,mission,overwrite=False,fileloc=None,savedf=True,use_surveys=True):
+def getStellarInfo(ID,hdr,mission,radec=None,overwrite=False,fileloc=None,savedf=True,use_surveys=True):
     #Compiling dfs (which may have spectra)
     if not overwrite and fileloc is not None and os.path.exists(fileloc.replace('.csv','_best.csv')):
         print("Loading stellar params from file")
@@ -1415,7 +1502,7 @@ def getStellarInfo(ID,hdr,mission,overwrite=False,fileloc=None,savedf=True,use_s
         isoclass_df=make_numeric(pd.read_csv(fileloc.replace('.csv','_isoclass.csv'), index_col=0,header=None).T)
         best_stardf=make_numeric(pd.read_csv(fileloc.replace(".csv","_best.csv"), index_col=0,header=None).T)
     else:
-        exofop_dat,survey_dat,isoclass_df,paras,best_stardf=starpars(ID,mission,errboost=0.1,
+        exofop_dat,survey_dat,isoclass_df,paras,best_stardf=starpars(ID,mission,errboost=0.1,radec=radec,
                                                                      return_best=False,useGaiaLum=True,
                                                                      useGaiaBR=True,useGaiaSpec=True,
                                                                      useBV=True,use2mass=True,

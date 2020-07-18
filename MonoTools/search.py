@@ -64,7 +64,7 @@ theano.config.print_test_value = True
 theano.config.exception_verbosity='high'
 
 from . import tools
-from . import MonoFit
+from . import fit
 
 def transit(pars,x):
     log_per,b,t0,log_r_pl,u1,u2=pars
@@ -341,7 +341,7 @@ def MonoTransitSearch(lc,ID,mission, Rs=None,Ms=None,Teff=None,
                       mono_SNR_thresh=6.5,mono_BIC_thresh=-6,n_durs=5,poly_order=3,
                       n_oversamp=20,binsize=15/1440.0,
                       transit_zoom=3.5,use_flat=False,use_binned=True,use_poly=True,
-                      plot=False,plot_loc=None,n_max_monos=8,**kwargs):
+                      plot=False, plot_loc=None ,n_max_monos=8, use_stellar_dens=True, **kwargs):
     #Searches LC for monotransits - in this case without minimizing for duration, but only for Tdur
     '''
     lc
@@ -361,19 +361,20 @@ def MonoTransitSearch(lc,ID,mission, Rs=None,Ms=None,Teff=None,
     Teff=None
     plot=False
     plot_loc=None
+    use_stellar_dens=True - use stellar density to produce transit templates to search.
     '''
     
     #Computing a fine x-range to search:
     search_xrange=[]
     
-    Rs=1.0 if Rs is None else float(Rs)
-    Ms=1.0 if Ms is None else float(Ms)
+    Rs=1.0 if (Rs is None or not use_stellar_dens) else float(Rs)
+    Ms=1.0 if (Ms is None or not use_stellar_dens) else float(Ms)
     Teff=5800.0 if Teff is None else float(Teff)
 
     mincad=np.min([float(cad[1:])/1440 for cad in np.unique(lc['cadence'])])
-    interpmodels,tdurs=get_interpmodels(Rs,Ms,Teff,lc['time'],lc['flux_unit'],n_durs=n_durs,texp=mincad, mission=mission)
+    interpmodels,tdurs=get_interpmodels(Rs,Ms,Teff,lc['time'],lc['flux_unit'],
+                                        n_durs=n_durs,texp=mincad, mission=mission)
     
-
     #print("Checking input model matches. flux:",np.nanmedian(uselc[:,0]),"std",np.nanstd(uselc[:,1]),"transit model:",
     #       interpmodels[0](10.0),"depth:",interpmodels[0](0.0))
         
@@ -936,7 +937,7 @@ def PeriodicPlanetSearch(lc, ID, planets, use_binned=False, use_flat=True, binsi
         elif SNR>multi_SNR_thresh:
             # pseudo-fails - we have a high-SNR detection but it's a duo or a mono.
             print(plparams['tcen'],plparams['tdur'],"fails with transits at ",trans,"with durations",plparams['tdur'],"transits. Reserching")
-            this_pl_masked=np.min(abs(lc[prefix+'time'][np.newaxis,:]-np.array(trans)[:,np.newaxis]),axis=0)<(0.7*plparams['tdur'])
+            this_pl_masked=np.min(abs((lc[prefix+'time'][np.newaxis,:]-t_zero)-np.array(trans)[:,np.newaxis]),axis=0)<(0.7*plparams['tdur'])
             #this_pl_masked=(((lc[prefix+'time']-plparams['tcen']+0.7*plparams['tdur'])%results[-1].period)<(1.4*plparams['tdur']))
             #print(n_pl,results[-1].period,plparams['tdur'],np.sum(this_pl_masked))
             plmask=plmask+this_pl_masked
@@ -974,8 +975,8 @@ def PeriodicPlanetSearch(lc, ID, planets, use_binned=False, use_flat=True, binsi
                 plt.plot(np.sort(phase[abs(phase)<1.2]),
                          planets[mult]['interpmodel'](phase[abs(phase)<1.2][np.argsort(phase[abs(phase)<1.2])]),
                          c=sns.color_palette()[n_pl-init_n_pl],alpha=0.4)
-                plt.ylim(np.nanmin(bin_phase[:,1])-2*np.nanstd(bin_phase[:,1]),
-                         np.nanmax(bin_phase[:,1])+2*np.nanstd(bin_phase[:,1]))
+                #plt.ylim(np.nanmin(bin_phase[:,1])-2*np.nanstd(bin_phase[:,1]),
+                #         np.nanmax(bin_phase[:,1])+2*np.nanstd(bin_phase[:,1]))
                 plt.gca().set_title(planet_name+'/det='+str(n_pl))
         if plot_loc is None:
             plot_loc = str(ID).zfill(11)+"_multi_search.pdf"
@@ -1322,7 +1323,7 @@ def VariabilityCheck(lc, params, ID, modeltype='both',plot=False,plot_loc=None,n
         priors['step']= [0.0,0.5*params['tdur']]
         best_mod_res['step']={'fun':1e30,'bic':1e9,'sin_llk':-1e9,'npolys':[]}
         mods+=['step']
-    if modeltype is not 'none':
+    if modeltype!='none':
         methods=['L-BFGS-B','Nelder-Mead','Powell']
         n=0
         while n<21:
@@ -1506,7 +1507,6 @@ def CentroidCheck(lc,monoparams,interpmodel,ID,order=2,dur_region=3.5, plot=True
     # - one with a "dip" correlated to the transit combined with a polynomial trend
     # - one with only a polynomial trend
     # These are then compared, and the BIC returned to judge 
-    print("Centroid check...",lc.keys())
     if 'cent_1' in lc:
         
         if monoparams['orbit_flag']=='mono':
@@ -2278,14 +2278,14 @@ def get_interpmodels(Rs,Ms,Teff,lc_time,lc_flux_unit,mission='tess',n_durs=3,tex
     cadence=np.nanmedian(np.diff(lc_time))
     jumps=np.hstack((0,np.where(np.diff(lc_time)>5.0)[0],len(lc_time)-1))
     P_guess=np.clip(lc_time[jumps[1+np.argmax(np.diff(jumps))]]-lc_time[jumps[np.argmax(np.diff(jumps))]],5.0,250)
-
+    
     #print(jumps,jumps[np.argmax(np.diff(jumps))],jumps[1+np.argmax(np.diff(jumps))],P_guess)
 
     # Orbit models - for every n_dur over 4, we add longer durations to check:
     per_steps=np.logspace(np.log10(0.4),np.log10(2.5+0.33*np.clip(n_durs-4,0.0,2.0)),n_durs)
     b_steps=np.linspace(0.85,0,n_durs)
     orbits = xo.orbits.KeplerianOrbit(r_star=Rs,m_star=Ms,period=P_guess*per_steps,t0=np.tile(0.0,n_durs),b=b_steps)
-
+    
     vx, vy, vz = orbits.get_relative_velocity(0.0)
     tdurs=((2*1.1*Rs*np.sqrt(1-b_steps**2))/tt.sqrt(vx**2 + vy**2)).eval().ravel()
 
@@ -2305,9 +2305,9 @@ def get_interpmodels(Rs,Ms,Teff,lc_time,lc_flux_unit,mission='tess',n_durs=3,tex
 
 def VetCand(pl_dic,pl,ID,lc,Rs=1.0,Ms=1.0,Teff=5800,
             mono_SNR_thresh=6.5,mono_SNR_r_thresh=4.75,variable_llk_thresh=5,
-            plot=False,file_loc=None,do_fit=True,**kwargs):
+            plot=False,file_loc=None,vet_do_fit=True,**kwargs):
     #Best-fit model params for the mono transit:
-    if pl_dic['orbit_flag']=='mono' and do_fit:
+    if pl_dic['orbit_flag']=='mono' and vet_do_fit:
         monoparams = QuickMonoFit(deepcopy(lc),pl_dic['tcen'],np.clip(pl_dic['tdur'],0.1,2.5),
                                                Rs=Rs,Ms=Ms,Teff=Teff,how='mono')
         #if not bool(monoparams['model_success']):
@@ -2320,7 +2320,7 @@ def VetCand(pl_dic,pl,ID,lc,Rs=1.0,Ms=1.0,Teff=5800,
         monoparams['init_depth']=pl_dic['depth']
         monoparams['orbit_flag']='mono'
         
-    elif pl_dic['orbit_flag']=='periodic' and do_fit:
+    elif pl_dic['orbit_flag']=='periodic' and vet_do_fit:
         monoparams = QuickMonoFit(deepcopy(lc),pl_dic['tcen'],
                                       pl_dic['tdur'], init_period=pl_dic['period'],how='periodic',
                                       Teff=Teff,Rs=Rs,Ms=Ms)
@@ -2343,7 +2343,7 @@ def VetCand(pl_dic,pl,ID,lc,Rs=1.0,Ms=1.0,Teff=5800,
         ast_ax=None
         cent_ax=None
     #update dic:
-    if do_fit:
+    if vet_do_fit:
         pl_dic.update(monoparams)
     pl_dic['flag']='planet'
     if pl_dic['snr']<mono_SNR_thresh or pl_dic['snr_r']<(mono_SNR_r_thresh):
@@ -2379,9 +2379,9 @@ def VetCand(pl_dic,pl,ID,lc,Rs=1.0,Ms=1.0,Teff=5800,
             #Only doing the sinusoidal model in the periodic case
             varfits,varfig=VariabilityCheck(deepcopy(lc), pl_dic, plot=plot,modeltype='sin',
                                             ID=str(ID).zfill(11)+'_'+pl, plot_loc=var_ax, **kwargs)
-        print("Vetted after variability:",pl_dic['snr'],pl_dic['snr_r'],
-              pl_dic['depth'],pl_dic['stepLogLik'],variable_llk_thresh,varfits['sin']['llk_ratio'])
-        print(pl_dic['flag']) if 'flag' in pl_dic else ''
+        #print("Vetted after variability:",pl_dic['snr'],pl_dic['snr_r'],
+        #      pl_dic['depth'],pl_dic['stepLogLik'],variable_llk_thresh,varfits['sin']['llk_ratio'])
+        #print(pl_dic['flag']) if 'flag' in pl_dic else ''
         pl_dic['variableLogLik']=varfits['sin']['llk_ratio']
 
         #>1 means variability fits the data ~2.7 times better than a transit.
@@ -2433,12 +2433,15 @@ def VetCand(pl_dic,pl,ID,lc,Rs=1.0,Ms=1.0,Teff=5800,
         #Attaching all our subplots and savings
         #vetfig.tight_layout()
         vetfig.subplots_adjust(left = 0.05,right = 0.97,bottom = 0.075,top = 0.925)
-        vetfig.savefig(file_loc+"/"+str(ID).zfill(11)+'_'+pl+'_vetting.pdf', dpi=400)
-        return pl_dic, file_loc+"/"+str(ID).zfill(11)+'_'+pl+'_vetting.pdf'
+        if file_loc is not None:
+            vetfig.savefig(file_loc+"/"+str(ID).zfill(11)+'_'+pl+'_vetting.pdf', dpi=400)
+            return pl_dic, file_loc+"/"+str(ID).zfill(11)+'_'+pl+'_vetting.pdf'
+        else:
+            return pl_dic, None
     else:
         return pl_dic, None
 
-def MonoVetting(ID, mission, tcen=None, tdur=None, overwrite=None, do_search=True, do_fit=True,
+def MonoVetting(ID, mission, tcen=None, tdur=None, overwrite=None, do_search=True, do_fit=True, coords=None,
                 useL2=False,PL_ror_thresh=0.2,variable_llk_thresh=5,file_loc=None, plot=True, **kwargs):
     '''#Here we're going to initialise the Monotransit fitting by searching for other planets/transits/secondaries and filtering out binaries.
     INPUTS:
@@ -2494,7 +2497,7 @@ def MonoVetting(ID, mission, tcen=None, tdur=None, overwrite=None, do_search=Tru
     elif file_loc[-1]=='/':
         #If we're given a directory, we'll create a ID directory in there for the planet fits/docs
         file_loc=file_loc+tools.id_dic[mission]+str(ID).zfill(11)
-    print(file_loc,kwargs)
+    #print(file_loc,kwargs)
     kwargs['file_loc']=file_loc
     
     if 'mono_SNR_thresh' not in kwargs:
@@ -2522,28 +2525,30 @@ def MonoVetting(ID, mission, tcen=None, tdur=None, overwrite=None, do_search=Tru
         figs={}
 
     if 'StarPars' not in kwargs or overwrites['starpars']:
+        
+        radec=SkyCoord(float(coords.split(',')[0])*u.deg,float(coords.split(',')[1])*u.deg) if coords is not None else None
         #loading Rstar,Tess, logg and rho from csvs:
         if not os.path.isfile(file_loc+"/"+file_loc.split('/')[-1]+'_starpars.csv') or overwrites['starpars']:
             from . import starpars
             #from .stellar import starpars
             #Gets stellar info
-            info,_,_=starpars.getStellarInfoFromCsv(ID,mission)
+            info,_,_=starpars.getStellarInfoFromCsv(ID,mission,radec=radec)
             info.to_csv(file_loc+"/"+file_loc.split('/')[-1]+'_starpars.csv')
         else:
             print("loading from ",file_loc+"/"+file_loc.split('/')[-1]+'_starpars.csv')
             info=pd.read_csv(file_loc+"/"+file_loc.split('/')[-1]+'_starpars.csv', index_col=0, header=0).T.iloc[0]
-        if 'ra' in info.index:
+        if 'ra' in info.index and radec is None:
             radec=SkyCoord(float(info['ra'])*u.deg,float(info['dec'])*u.deg)
         Rstar=[float(info['rad']),float(info['eneg_rad']),float(info['epos_rad'])]
         Teff=[float(info['teff']),float(info['eneg_teff']),float(info['epos_teff'])]
         logg=[float(info['logg']),float(info['eneg_logg']),float(info['epos_logg'])]
         rhostar=[float(info['rho']),float(info['eneg_rho']),float(info['epos_rho'])]
         FeH=0.0 if 'FeH' not in info else float(info['FeH'])
-        print(Rstar,Teff,logg,rhostar)
         if 'mass' in info:
             Ms=float(info['mass'])
         else:
             Ms=rhostar[0]*Rstar[0]**3
+        print(Rstar,Teff,logg,rhostar,Ms)
         #Rstar, rhostar, Teff, logg, src = starpars.getStellarInfo(ID, hdr, mission, overwrite=overwrite,
         #                                                         fileloc=savenames[1].replace('_mcmc.pickle','_starpars.csv'),
         #                                                         savedf=True)
@@ -2569,7 +2574,7 @@ def MonoVetting(ID, mission, tcen=None, tdur=None, overwrite=None, do_search=Tru
             #Doing search if we dont have a mono pickle file or we want to overwrite one:
             both_dic, monosearchparams, monofig = MonoTransitSearch(deepcopy(lc),ID,mission,
                                                                     Rs=Rstar[0],Ms=Ms,Teff=Teff[0],
-                                                                    plot_loc=file_loc+"/", plot=plot,**kwargs)
+                                                                    plot_loc=file_loc+"/", plot=plot, **kwargs)
             pickle.dump(monosearchparams,open(file_loc+"/"+file_loc.split('/')[-1]+'_monosearchpars.pickle','wb'))
             
             if plot:
@@ -2595,7 +2600,7 @@ def MonoVetting(ID, mission, tcen=None, tdur=None, overwrite=None, do_search=Tru
                 #Best-fit model params for the mono transit:
                 pl_dic, vet_fig = VetCand(both_dic[pl],pl,ID,lc,Rs=Rstar[0],Ms=Ms,Teff=Teff[0],
                                           variable_llk_thresh=variable_llk_thresh,plot=plot,
-                                          do_fit=True,**kwargs)
+                                          vet_do_fit=True,**kwargs)
                 if plot:
                     figs[pl]=vet_fig
         pickle.dump(both_dic,open(file_loc+"/"+file_loc.split('/')[-1]+'_monos.pickle','wb'))
@@ -2629,7 +2634,6 @@ def MonoVetting(ID, mission, tcen=None, tdur=None, overwrite=None, do_search=Tru
         if np.sum([both_dic[pl]['orbit_flag']=='periodic' for pl in both_dic])>0:
             for pl in [pl for pl in both_dic if both_dic[pl]['orbit_flag']=='periodic']:
                 pl_dic, pl_fig = VetCand(both_dic[pl],pl,ID,lc,Rs=Rstar[0],Ms=Ms,Teff=Teff[0],
-                                         mono_SNR_thresh=mono_SNR_thresh,mono_SNR_r_thresh=mono_SNR_r_thresh,
                                          variable_llk_thresh=variable_llk_thresh,plot=plot,**kwargs)
                 if plot:
                     figs[pl]=pl_fig
@@ -2646,7 +2650,7 @@ def MonoVetting(ID, mission, tcen=None, tdur=None, overwrite=None, do_search=Tru
         if not os.path.isfile(file_loc+"/"+file_loc.split('/')[-1]+'_allpls.pickle') or overwrites['vet']:
             #Loading candidates from file:
             # Removing any monos or multis which are confused (e.g. a mono which is in fact in a multi)
-            both_dic,monos,multis = CheckPeriodConfusedPlanets(deepcopy(lc),deepcopy(both_dic),mono_multi=False)
+            both_dic,monos,multis = CheckPeriodConfusedPlanets(deepcopy(lc), deepcopy(both_dic), mono_multi=False)
             print({pl:{'tcen':both_dic[pl]['tcen'],'depth':both_dic[pl]['depth'],'dur':both_dic[pl]['tdur'],
                        'period':both_dic[pl]['period'],'orbit_flag':both_dic[pl]['orbit_flag'],'flag':both_dic[pl]['flag']} for pl in both_dic})
 
@@ -2729,7 +2733,7 @@ def MonoVetting(ID, mission, tcen=None, tdur=None, overwrite=None, do_search=Tru
         if plot:
             #Chcking if values in df are different:
             new_df=True
-            if not os.path.exists(file_loc+"/"+file_loc.split('/')[-1]+'_candidates.csv'):
+            if not os.path.exists(file_loc+"/"+file_loc.split('/')[-1]+'_candidates.csv') or np.any([overwrites[col] for col in overwrites]):
                 # Making table a plot for PDF:
                 fig=plt.figure(figsize=(11.69,2+0.5*len(both_dic)))
                 ax=fig.add_subplot(111)
@@ -2787,9 +2791,9 @@ def MonoVetting(ID, mission, tcen=None, tdur=None, overwrite=None, do_search=Tru
             if len(glob.glob(file_loc+"/"+file_loc.split('/')[-1]+'*_model.pickle'))==0 or overwrites['fit']:
                 
                 if mission=='kepler' and cutDistance not in kwargs and bin_oot not in kwargs:
-                    mod=MonoFit.monoModel(ID, mission, lc, {}, savefileloc=file_loc+'/',cutDistance=2.0,bin_oot=False)
+                    mod=fit.monoModel(ID, mission, lc, {}, savefileloc=file_loc+'/',cutDistance=2.0,bin_oot=False)
                 else:
-                    mod=MonoFit.monoModel(ID, mission, lc, {}, savefileloc=file_loc+'/')
+                    mod=fit.monoModel(ID, mission, lc, {}, savefileloc=file_loc+'/')
                 #If not, we have a planet.
                 #Checking if monoplanet is single, double-with-gap, or periodic.
                 multis=[]
@@ -2820,15 +2824,11 @@ def MonoVetting(ID, mission, tcen=None, tdur=None, overwrite=None, do_search=Tru
                 #pickle.dump(mod,open(file_loc+"/"+file_loc.split('/')[-1]+'_model.pickle','wb'))
             elif len(glob.glob(file_loc+"/"+file_loc.split('/')[-1]+'*_model.pickle'))>0:
                 print("#Loading model from file")
-                
-                mod = MonoFit.monoModel(ID, mission, LoadFromFile=True)
+                mod = fit.monoModel(ID, mission, LoadFromFile=True)
             else:
                 mod=None
-            if mod is not None and do_fit and not overwrites['fit']:
-                #Attempting to load past MCMC file
-                mod.LoadModelFromFile()
             if mod is not None and do_fit and (not hasattr(mod,'trace') or overwrites['fit']):
-                mod.RunMcmc()
+                mod.RunMcmc(**kwargs)
                 mod.SaveModelToFile()
                 #pickle.dump(mod,open(file_loc+"/"+file_loc.split('/')[-1]+'_model.pickle','wb'))
 

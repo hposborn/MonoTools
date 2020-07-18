@@ -95,6 +95,7 @@ else:
 parser.add_argument('id', type=int, help='ID of candidate (e.g. in TIC, KIC, EPIC, etc)', default=None, nargs=1)
 parser.add_argument('mission', type=str, help='name of mission', default=None, nargs=1)
 
+parser.add_argument('--coords', type=str, help='Coordinates in degrees separated by a comma without a space', default=None, nargs=1)
 parser.add_argument('--tcen', type=float, help='Central transit time', default=None, nargs=1)
 parser.add_argument('--tdur', type=float, help='Transit duration in days', default=None, nargs=1)
 parser.add_argument('--overwrite', type=str, help='which steps to overwrite', default=None, nargs=1)
@@ -106,6 +107,9 @@ parser.add_argument('--file_loc', type=str, help='Location to store outputs. Oth
 parser.add_argument('--plot', type=bool, help='Perform search for all possible monotransits?', default=True, nargs=1)
 parser.add_argument('--do_fit', type=bool, help='Perform search for all possible monotransits?', default=True, nargs=1)
 parser.add_argument('--use_GP', type=bool, help='Model using Celerite GP?', default=False, nargs=1)
+parser.add_argument('--multi_SNR_thresh', type=float, help='SNR threshold for multi-transiting planets', default=6.75, nargs=1)
+parser.add_argument('--mono_SNR_thresh', type=float, help='SNR threshold for mono-transiting planets', default=7.25, nargs=1)
+parser.add_argument('--n_draws', type=int, help='Number of MCMC draws', default=500, nargs=1)
 '''tcen=float(sys.argv[3]) if len(sys.argv)>3 else None
 tdur=float(sys.argv[4]) if len(sys.argv)>4 else None
 overwrite=sys.argv[5] if len(sys.argv)>5 else None
@@ -123,13 +127,13 @@ args = parser.parse_args()
 
 #Only running if we haven't already created a report:
 if not os.path.exists(os.path.join(x_file_loc,id_dic[mission]+str(ID).zfill(11)+"_report.pdf")) or args.overwrite is not None:
-    from MonoTools import MonoSearch
+    from MonoTools import search
     #try:
-    outs=MonoSearch.MonoVetting(ID,mission,
-                                tcen=args.tcen,tdur=args.tdur,overwrite=args.overwrite,do_search=args.do_search,
-                                useL2=args.useL2,PL_ror_thresh=args.PL_ror_thresh,
-                                variable_llk_thresh=args.variable_llk_thresh,file_loc=args.file_loc,
-                                plot=args.plot, do_fit=args.do_fit, use_GP=args.use_GP)
+    outs=search.MonoVetting(ID,mission,tcen=args.tcen,tdur=args.tdur,
+                            overwrite=args.overwrite,do_search=args.do_search,
+                            useL2=args.useL2,PL_ror_thresh=args.PL_ror_thresh,
+                            variable_llk_thresh=args.variable_llk_thresh,file_loc=args.file_loc,
+                            plot=args.plot, do_fit=args.do_fit, use_GP=args.use_GP)
     #except Exception as e:
     #    #traceback.print_exc()
     #    exc_type, exc_obj, exc_tb = sys.exc_info()

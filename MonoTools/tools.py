@@ -58,7 +58,7 @@ def openFits(f,fname,mission,cut_all_anom_lim=4.0,use_ppt=True):
     # Processing involvesd iteratively masking anomlaous flux values
     '''
     #print(type(f),"opening ",fname,fname.find('everest')!=-1,f[1].data,f[0].header['TELESCOP']=='Kepler')
-    
+    mask=None
     end_of_orbit=False #Boolean as to whether we need to cut/fix the end-of-orbit flux
     
     if type(f)==fits.hdu.hdulist.HDUList or type(f)==fits.fitsrec.FITS_rec:
@@ -145,14 +145,24 @@ def openFits(f,fname,mission,cut_all_anom_lim=4.0,use_ppt=True):
     elif type(f)==np.ndarray and np.shape(f)[1]==3:
         #Already opened lightcurve file
         lc={'time':f[:,0],'flux':f[:,1],'flux_err':f[:,2]}
+        if mission.lower()=='corot':
+            #Need to remove SAA spikes
+            stacked_arr=np.vstack((lc['flux'][(15-n):(len(lc['time'])-(n+15))] for n in np.hstack((np.arange(-15,-4),
+                                                                                                   np.arange(4,15),0))))
+            errs=np.nanmedian(abs(np.diff(stacked_arr[:-1],axis=0)),axis=0)
+            stacked_arr=np.vstack((stacked_arr[-1]-np.nanmedian(stacked_arr[:11],axis=0),
+                                   stacked_arr[-1]-np.nanmedian(stacked_arr[11:-1],axis=0)))/errs
+            anom_high=np.hstack((np.tile(0,15),np.sum(stacked_arr,axis=0),np.tile(0,15)))
+            mask=anom_high<4
+
     elif type(f)==dict:
         lc=f
     else:
         print('cannot identify fits type to identify with')
         #logging.debug('Found fits file but cannot identify fits type to identify with')
         return None
-    
-    lc['mask']=maskLc(lc,fname,cut_all_anom_lim=cut_all_anom_lim,use_ppt=use_ppt,end_of_orbit=end_of_orbit)
+
+    lc['mask']=maskLc(lc,fname,cut_all_anom_lim=cut_all_anom_lim,use_ppt=use_ppt,end_of_orbit=end_of_orbit,input_mask=mask)
     
     #Including the cadence in the lightcurve as ["t2","t30","k1","k30"] mission letter + cadence
     lc['cadence']=np.tile(mission[0]+str(np.round(np.nanmedian(np.diff(lc['time']))*1440).astype(int)),len(lc['time']))
@@ -180,20 +190,23 @@ def openFits(f,fname,mission,cut_all_anom_lim=4.0,use_ppt=True):
     return lc
 
     
-def maskLc(lc,fhead,cut_all_anom_lim=5.0,use_ppt=False,end_of_orbit=True,use_binned=False,use_flat=False,mask_islands=True):
+def maskLc(lc,fhead,cut_all_anom_lim=5.0,use_ppt=False,end_of_orbit=True,
+           use_binned=False,use_flat=False,mask_islands=True,input_mask=None):
     # Mask bad data (nans, infs and negatives) 
     
     prefix= 'bin_' if use_binned else ''
     suffix='_flat' if use_flat else ''
     
     mask = np.isfinite(lc[prefix+'flux'+suffix]) & np.isfinite(lc[prefix+'time'])# & (lc[prefix+'flux'+suffix]>0.0) 
+    if input_mask is not None:
+        mask=mask&input_mask
     # Mask data if it's 4.2-sigma from its points either side (repeating at 7-sigma to get any points missed)
     #print(np.sum(~lc['mask']),"points before quality flags")
     if 'quality' in lc and len(lc['quality'])==len(lc[prefix+'flux'+suffix]):
         qs=[1,2,3,4,6,7,8,9,13,15,16,17]#worst flags to cut - for the moment just using those in the archive_manual
-        if type(fhead)==dict and 'lcsource' in fhead.keys() and fhead['lcsource']=='everest':
-            qs+=[23]
-            print("EVEREST file with ",np.log(np.max(lc['quality']))/np.log(2)," max quality")
+        #if type(fhead)==dict and 'lcsource' in fhead.keys() and fhead['lcsource']=='everest':
+        #    qs+=[23]
+        #    print("EVEREST file with ",np.log(np.max(lc['quality']))/np.log(2)," max quality")
         mask=mask&(np.sum(np.vstack([lc['quality'] & 2 ** (q - 1) for q in qs]),axis=0)==0)
     #print(np.sum(~lc['mask']),"points after quality flags")
     if cut_all_anom_lim>0:
@@ -1579,27 +1592,27 @@ def RunFromScratch(ID, mission, tcen, tdur, ra=None, dec=None,
     lc=lcFlatten(lc,winsize=9*tdur,stepsize=0.1*tdur)
     
     #Runs Quick Model fit
-    monoparams, interpmodel = MonoSearch.QuickMonoFit(lc,tc,dur,Rs=Rstar[0],Ms=rhostar[0]*Rstar[0]**3)
+    monoparams, interpmodel = search.QuickMonoFit(lc,tc,dur,Rs=Rstar[0],Ms=rhostar[0]*Rstar[0]**3)
     
     #Checks to see if dip is due to background asteroid
-    asteroidDeltaBIC=MonoSearch.AsteroidCheck(lc, monoparams, interpmodel)
+    asteroidDeltaBIC=search.AsteroidCheck(lc, monoparams, interpmodel)
     if asteroidDeltaBIC>6:
         planet_dic_1['01']['flag']='asteroid'
     
     #Checks to see if dip is combined with centroid
-    centroidDeltaBIC=MonoSearch.CentroidCheck(lc, monoparams, interpmodel)
+    centroidDeltaBIC=search.CentroidCheck(lc, monoparams, interpmodel)
     if centroidDeltaBIC>6:
         planet_dic_1['01']['flag']='EB'
 
     #Searches for other dips in the lightcurve
-    planet_dic_1=MonoSearch.SearchForSubsequentTransits(lc, interpmodel, tc, dur, Rs=Rstar[0],Ms=rhostar[0]*Rstar[0]**3)
+    planet_dic_1=search.SearchForSubsequentTransits(lc, interpmodel, tc, dur, Rs=Rstar[0],Ms=rhostar[0]*Rstar[0]**3)
     
     #Asses whether any dips are significant enough:
     if planet_dic_1['01']['SNR']>mono_SNRthresh:
         #Check if the Depth/Rp suggests we have a very likely EB, we search for a secondary
         if planet_dic_1['01']['rp_rs']<PL_ror_thresh:
             #Searching for other (periodic) planets in the system
-            planet_dic_2=MonoSearch.SearchForOtherPlanets(lc, planet_dic_1['01'], SNRthresh=other_planet_SNRthresh)
+            planet_dic_2=search.SearchForOtherPlanets(lc, planet_dic_1['01'], SNRthresh=other_planet_SNRthresh)
             if len(planet_dic_2)>1:
                 planet_dic_1['01']['flag']='multiplanet'
             else:
