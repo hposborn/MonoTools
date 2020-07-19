@@ -24,7 +24,7 @@ If that doesn't render, try [this nbviewer link](https://nbviewer.jupyter.org/gi
 
 To run the entire process from the command line, use `python -m MonoTools.main 000ID00 MISSION`
 
-![alt text](https://github.com/hposborn/MonoTools/blob/master/EPIC00248847494/EPIC00248847494_2019-09-06_0_TransitFit.png)
+![alt text](https://github.com/hposborn/MonoTools/blob/master/data/TIC00296737508/00296737508_model_plot.pdf)
 
 <!--MonoTools natively includes eccentricity and fits for period (rather than scaled transit velocity as before).-->
 <!--The period prior can be applied according to your prefered index - P^-8/3 (as suggested by [Kipping et al](https://iopscience.iop.org/article/10.3847/2515-5172/aaf50c) ), or the less-steep P^-5/3 (as used by [Osborn et al 2016](https://academic.oup.com/mnras/article/457/3/2273/2588921) and [Sandford et al 2019](https://arxiv.org/abs/1908.08548))-->

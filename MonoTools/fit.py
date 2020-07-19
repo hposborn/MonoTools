@@ -1942,7 +1942,7 @@ class monoModel():
             if plot_loc is None:
                 if not hasattr(self,'savenames'):
                     self.GetSavename(how='save')
-                savename=self.savenames[0]+'_transit_fit.html'
+                savename=self.savenames[0]+'_model_plot.html'
             else:
                 savename=plot_loc
             
@@ -2614,7 +2614,7 @@ class monoModel():
             
         else:
             if plot_loc is None:
-                plt.savefig(self.savenames[0]+'_period_dists.pdf')
+                plt.savefig(self.savenames[0]+'_model_plot.pdf')
             else:
                 plt.savefig(plot_loc)
 
