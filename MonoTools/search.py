@@ -2441,7 +2441,7 @@ def VetCand(pl_dic,pl,ID,lc,Rs=1.0,Ms=1.0,Teff=5800,
     else:
         return pl_dic, None
 
-def MonoVetting(ID, mission, tcen=None, tdur=None, overwrite=None, do_search=True, do_fit=True, coords=None,
+def MonoVetting(ID, mission, tcen=None, tdur=None, overwrite=None, do_search=True, do_fit=False, coords=None,
                 useL2=False,PL_ror_thresh=0.2,variable_llk_thresh=5,file_loc=None, plot=True, **kwargs):
     '''#Here we're going to initialise the Monotransit fitting by searching for other planets/transits/secondaries and filtering out binaries.
     INPUTS:
@@ -2828,6 +2828,7 @@ def MonoVetting(ID, mission, tcen=None, tdur=None, overwrite=None, do_search=Tru
             else:
                 mod=None
             if mod is not None and do_fit and (not hasattr(mod,'trace') or overwrites['fit']):
+                print("Running MCMC")
                 mod.RunMcmc(**kwargs)
                 mod.SaveModelToFile()
                 #pickle.dump(mod,open(file_loc+"/"+file_loc.split('/')[-1]+'_model.pickle','wb'))

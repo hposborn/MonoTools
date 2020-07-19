@@ -1301,11 +1301,7 @@ class monoModel():
             self.model = model
             self.init_soln = map_soln
     
-<<<<<<< HEAD:MonoTools/fit.py
     def RunMcmc(self, n_draws=500, plot=True, n_burn_in=None, overwrite=False,**kwargs):
-=======
-    def RunMcmc(self, n_draws=500, plot=True, overwrite=False,**kwargs):
->>>>>>> 7da2b4500c48f536d0482fa327742a8d99084ac0:MonoTools/MonoFit.py
         if not overwrite:
             self.LoadPickle()
             print("LOADED MCMC")
@@ -1319,11 +1315,7 @@ class monoModel():
                 n_burn_in=np.clip(int(n_draws*0.66),500,5000) if n_burn_in is None else n_burn_in
                 print(type(self.init_soln))
                 print(self.init_soln.keys())
-<<<<<<< HEAD:MonoTools/fit.py
                 self.trace = pm.sample(tune=n_burn_in, draws=n_draws, start=self.init_soln, chains=4,
-=======
-                self.trace = pm.sample(tune=np.clip(int(n_draws*0.66),500,5000), draws=n_draws, start=self.init_soln, chains=4,
->>>>>>> 7da2b4500c48f536d0482fa327742a8d99084ac0:MonoTools/MonoFit.py
                                        step=xo.get_dense_nuts_step(target_accept=0.9),compute_convergence_checks=False)
             self.SaveModelToFile()
         elif not (hasattr(self,'trace') or hasattr(self,'trace_df')):

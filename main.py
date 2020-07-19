@@ -105,7 +105,7 @@ parser.add_argument('--PL_ror_thresh', type=float, help='Upper bound in Rp/Rs to
 parser.add_argument('--variable_llk_thresh', type=float, help='Likelihood threshold for transit over variability', default=5, nargs=1)
 parser.add_argument('--file_loc', type=str, help='Location to store outputs. Otherwise uses $MONOTOOLSPATH', default=None, nargs=1)
 parser.add_argument('--plot', type=bool, help='Perform search for all possible monotransits?', default=True, nargs=1)
-parser.add_argument('--do_fit', type=bool, help='Perform search for all possible monotransits?', default=True, nargs=1)
+parser.add_argument('--do_fit', type=bool, help='Perform search for all possible monotransits?', default=False, nargs=1)
 parser.add_argument('--use_GP', type=bool, help='Model using Celerite GP?', default=False, nargs=1)
 parser.add_argument('--multi_SNR_thresh', type=float, help='SNR threshold for multi-transiting planets', default=6.75, nargs=1)
 parser.add_argument('--mono_SNR_thresh', type=float, help='SNR threshold for mono-transiting planets', default=7.25, nargs=1)
@@ -129,6 +129,7 @@ args = parser.parse_args()
 if not os.path.exists(os.path.join(x_file_loc,id_dic[mission]+str(ID).zfill(11)+"_report.pdf")) or args.overwrite is not None:
     from MonoTools import search
     #try:
+    print(args)
     outs=search.MonoVetting(ID,mission,tcen=args.tcen,tdur=args.tdur,
                             overwrite=args.overwrite,do_search=args.do_search,
                             useL2=args.useL2,PL_ror_thresh=args.PL_ror_thresh,

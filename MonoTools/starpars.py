@@ -1043,7 +1043,7 @@ def IsoClass(icid,mission,coor,ic_info=None,return_best=True,errboost=0.05,
     best_df={}
     for col in col_names:
         if 'dis' in col:
-            print(col)
+            #print(col)
             bdfcol = col.replace('dis', 'dist')
         else:
             bdfcol = col
@@ -1234,7 +1234,7 @@ def getStellarInfoFromCsv(ID,mission,radec=None,k2tab=None,keptabs=None,use_isoc
     if mission.lower()=='tess':
         info = TICdata(int(ID)).iloc[0]
         info['source']='TICv8'
-        print("TESS object",ID,info.name,info)
+        print("TESS object")
         k2tab = None
         keptabs = None
         epicdat=None
