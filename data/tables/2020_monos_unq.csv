@@ -81,7 +81,7 @@
 1569,,0.312498333,lacourse_tess_ste_huber.csv;lacourse_tess_ste_monos.csv,188620407,TESS,,3542.485428
 1570,,0.166664083,lacourse_tess_ste_huber.csv;U-shaped_good_pcs_steven_tess.csv;steven_martti_lacourse_targetlist_TESS.csv;lacourse_tess_ste_monos.csv,206541859,TESS,,3539.201345
 1571,,0.249995833,lacourse_tess_ste_huber.csv;lacourse_tess_ste_monos.csv,224279805,TESS,,3536.723999
-1571,5.067259,0.21,lacourse_tess_ste_huber.csv;lacourse_tess_ste_monos.csv,102356770,CoRoT,93.100867,336.300726
+1571,5.067259,0.21,CorotSinglesFixed.csv,102356770,CoRoT,93.100867,336.300726
 1572,5.302407,0.239583333,CorotSinglesFixed.csv,102387834,CoRoT,93.461526,326.5821
 1573,-0.674015,0.191666667,CorotSinglesFixed.csv,102574444,CoRoT,100.178884,-410.658
 1574,-0.636498,0.245833333,CorotSinglesFixed.csv,102582649,CoRoT,100.237433,-322.008
@@ -111,7 +111,7 @@
 1598,-6.468048,0.333333333,CorotSinglesFixed.csv,310190466,CoRoT,278.744434,145.9
 1599,-0.256745,0.166666667,CorotSinglesFixed.csv,315188649,CoRoT,97.408653,442.147387
 1600,5.823252,0.291666667,CorotSinglesFixed.csv,629951504,CoRoT,278.264019,934.9
-1601,,0.375,All_OsbornMarttiK2Monos.csv;All_OsbornMarttiK2Monos.csv;All_OsbornMarttiK2Monos.csv;All_OsbornMarttiK2Monos.csv;All_OsbornMarttiK2Monos.csv;All_OsbornMarttiK2Monos.csv;All_OsbornMarttiK2Monos.csv;All_OsbornMarttiK2Monos.csv;All_OsbornMarttiK2Monos.csv;All_OsbornMarttiK2Monos.csv,634075176,CoRoT,,1303.9
+1601,,0.375,All_OsbornMarttiK2Monos.csv;All_OsbornMarttiK2Monos.csv;All_OsbornMarttiK2Monos.csv;All_OsbornMarttiK2Monos.csv;All_OsbornMarttiK2Monos.csv;All_OsbornMarttiK2Monos.csv;All_OsbornMarttiK2Monos.csv;All_OsbornMarttiK2Monos.csv;All_OsbornMarttiK2Monos.csv;All_OsbornMarttiK2Monos.csv,634075176,TESS,,1303.9
 1602,-63.499101,0.148333333,lacourse_jacobs_k2_table.csv;All_OsbornMarttiK2Monos.csv;All_OsbornMarttiK2Monos.csv;All_OsbornMarttiK2Monos.csv;All_OsbornMarttiK2Monos.csv;All_OsbornMarttiK2Monos.csv;All_OsbornMarttiK2Monos.csv;All_OsbornMarttiK2Monos.csv;All_OsbornMarttiK2Monos.csv;All_OsbornMarttiK2Monos.csv;All_OsbornMarttiK2Monos.csv;All_OsbornMarttiK2Monos.csv,279741379,TESS,51.746762,3517.311
 1603,-81.247369,0.159166667,All_OsbornMarttiK2Monos.csv;All_OsbornMarttiK2Monos.csv;All_OsbornMarttiK2Monos.csv;All_OsbornMarttiK2Monos.csv;All_OsbornMarttiK2Monos.csv;All_OsbornMarttiK2Monos.csv;All_OsbornMarttiK2Monos.csv;All_OsbornMarttiK2Monos.csv,394287035,TESS,31.6898425,3497.487
 1604,-60.468081,0.398333333,lacourse_jacobs_k2_table.csv;All_OsbornMarttiK2Monos.csv;All_OsbornMarttiK2Monos.csv;All_OsbornMarttiK2Monos.csv;All_OsbornMarttiK2Monos.csv;All_OsbornMarttiK2Monos.csv;All_OsbornMarttiK2Monos.csv;All_OsbornMarttiK2Monos.csv;All_OsbornMarttiK2Monos.csv;All_OsbornMarttiK2Monos.csv;All_OsbornMarttiK2Monos.csv;All_OsbornMarttiK2Monos.csv,235039711,TESS,354.135011,3492.868
@@ -2764,10 +2764,10 @@
 4276,-11.8427,0.3473,K2_monos_TSTWG_doc,212542155,k2,201.7875,2389.68365
 4277,-11.5559,0.1635,K2_monos_TSTWG_doc,212555615,k2,207.9054,2428.67835
 4278,-6.25688,0.286,K2_monos_TSTWG_doc,212775521,k2,209.3792,2424.7963
-4279,10.08038,0.5925,K2_monos_TSTWG_doc,211311380b,k2,126.616,2309.01135
-4280,10.08038,0.7968,K2_monos_TSTWG_doc,211311380c,k2,126.616,2353.9204
-4281,10.08038,0.4699,K2_monos_TSTWG_doc,211311380d,k2,126.616,2333.30485
-4282,10.08038,0.1634,K2_monos_TSTWG_doc,211311380e,k2,126.616,2330.189
+4279,10.08038,0.5925,K2_monos_TSTWG_doc,211311380,k2,126.616,2309.01135
+4280,10.08038,0.7968,K2_monos_TSTWG_doc,211311380.1,k2,126.616,2353.9204
+4281,10.08038,0.4699,K2_monos_TSTWG_doc,211311380.2,k2,126.616,2333.30485
+4282,10.08038,0.1634,K2_monos_TSTWG_doc,211311380.3,k2,126.616,2330.189
 4283,13.11493,0.2861,K2_monos_TSTWG_doc,211498244,k2,123.6233,2321.54605
 4284,20.44082,0.2656,K2_monos_TSTWG_doc,212011230,k2,136.241,2332.4882
 4286,13.18657,0.9807,K2_monos_TSTWG_doc,211503363,k2,127.5068,2364.51425
@@ -2789,8 +2789,8 @@
 4304,23.08345,1.2668,K2_monos_TSTWG_doc,212152316,k2,130.084,2374.2193
 4305,14.52359,0.1635,K2_monos_TSTWG_doc,211598816,k2,137.1137,2363.37095
 4306,20.69412,1.0624,K2_monos_TSTWG_doc,212026444,k2,135.7985,2343.36805
-4307,19.32025,0.4904,K2_monos_TSTWG_doc,211939692b,k2,128.4018,2337.5035
-4308,19.32025,0.3882,K2_monos_TSTWG_doc,211939692c,k2,128.4018,2359.9068
+4307,19.32025,0.4904,K2_monos_TSTWG_doc,211939692,k2,128.4018,2337.5035
+4308,19.32025,0.3882,K2_monos_TSTWG_doc,211939692.1,k2,128.4018,2359.9068
 4309,20.53252,0.4086,K2_monos_TSTWG_doc,210843533,k2,61.72476,2256.1794
 4310,15.42146,0.5109,K2_monos_TSTWG_doc,210500451,k2,57.94651,2232.97855
 4311,18.73435,0.7764,K2_monos_TSTWG_doc,210725198,k2,65.24648,2258.1411

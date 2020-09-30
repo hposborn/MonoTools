@@ -64,7 +64,8 @@ def openFits(f,fname,mission,cut_all_anom_lim=4.0,use_ppt=True):
     if type(f)==fits.hdu.hdulist.HDUList or type(f)==fits.fitsrec.FITS_rec:
         if f[0].header['TELESCOP']=='Kepler' or fname.find('kepler')!=-1:
             if fname.find('k2sff')!=-1:
-                lc={'time':f[1].data['T'],'flux':f[1].data['FCOR'],
+                lc={'time':f[1].data['T'],
+                    'flux':f[1].data['FCOR'],
                     'flux_err':np.tile(np.median(abs(np.diff(f[1].data['FCOR']))),len(f[1].data['T'])),
                     'flux_raw':f[1].data['FRAW'],
                     'bg_flux':f[1+np.argmax([f[n].header['NPIXSAP'] for n in range(1,len(f)-3)])].data['FRAW']-
@@ -91,6 +92,8 @@ def openFits(f,fname,mission,cut_all_anom_lim=4.0,use_ppt=True):
                         lc['cent_1']=f[1].data['PSF_CENTR1'];lc['cent_2']=f[1].data['PSF_CENTR2']
                     else:
                         lc['cent_1']=f[1].data['MOM_CENTR1'];lc['cent_2']=f[1].data['MOM_CENTR2']
+                    if 'SAP_BKG' in f[1].columns.names:
+                        lc['bg_flux']=f[1].data['SAP_BKG']
                 elif fname.find('XD')!=-1 or fname.find('X_D')!=-1:
                     #logging.debug('Armstrong file')#Armstrong detrending:
                     lc={'time':f[1].data['TIME'],'flux':f[1].data['DETFLUX'],
@@ -161,7 +164,7 @@ def openFits(f,fname,mission,cut_all_anom_lim=4.0,use_ppt=True):
         print('cannot identify fits type to identify with')
         #logging.debug('Found fits file but cannot identify fits type to identify with')
         return None
-
+    
     lc['mask']=maskLc(lc,fname,cut_all_anom_lim=cut_all_anom_lim,use_ppt=use_ppt,end_of_orbit=end_of_orbit,input_mask=mask)
     
     #Including the cadence in the lightcurve as ["t2","t30","k1","k30"] mission letter + cadence
@@ -187,6 +190,7 @@ def openFits(f,fname,mission,cut_all_anom_lim=4.0,use_ppt=True):
     lc['time'] = lc['time'][np.isfinite(lc['time'])]
     
     lc['flux_unit']=0.001 if use_ppt else 1.0
+    
     return lc
 
     
@@ -197,90 +201,95 @@ def maskLc(lc,fhead,cut_all_anom_lim=5.0,use_ppt=False,end_of_orbit=True,
     prefix= 'bin_' if use_binned else ''
     suffix='_flat' if use_flat else ''
     
-    mask = np.isfinite(lc[prefix+'flux'+suffix]) & np.isfinite(lc[prefix+'time'])# & (lc[prefix+'flux'+suffix]>0.0) 
-    if input_mask is not None:
-        mask=mask&input_mask
-    # Mask data if it's 4.2-sigma from its points either side (repeating at 7-sigma to get any points missed)
-    #print(np.sum(~lc['mask']),"points before quality flags")
-    if 'quality' in lc and len(lc['quality'])==len(lc[prefix+'flux'+suffix]):
-        qs=[1,2,3,4,6,7,8,9,13,15,16,17]#worst flags to cut - for the moment just using those in the archive_manual
-        #if type(fhead)==dict and 'lcsource' in fhead.keys() and fhead['lcsource']=='everest':
-        #    qs+=[23]
-        #    print("EVEREST file with ",np.log(np.max(lc['quality']))/np.log(2)," max quality")
-        mask=mask&(np.sum(np.vstack([lc['quality'] & 2 ** (q - 1) for q in qs]),axis=0)==0)
-    #print(np.sum(~lc['mask']),"points after quality flags")
-    if cut_all_anom_lim>0:
-        #print(np.sum(~lc['mask']),"points before CutAnomDiff")
-        mask[mask]=CutAnomDiff(lc[prefix+'flux'+suffix][mask],cut_all_anom_lim)
-        #Doing this a second time with more stringent limits to cut two-point outliers:
-        mask[mask]=CutAnomDiff(lc[prefix+'flux'+suffix][mask],cut_all_anom_lim+3.5)
-        #print(np.sum(~lc['mask']),"after before CutAnomDiff")
-    mu = np.median(lc[prefix+'flux'+suffix][mask])
-    if use_ppt:
-        # Convert to parts per thousand
-        lc[prefix+'flux'+suffix] = (lc[prefix+'flux'+suffix] / mu - 1) * 1e3
-        lc[prefix+'flux'+suffix+'_err'] *= 1e3/mu
+    mask = np.isfinite(lc[prefix+'flux'+suffix]) & np.isfinite(lc[prefix+'time']) & np.isfinite(lc[prefix+'flux_err'])
+    if np.sum(mask)>0:
+        # & (lc[prefix+'flux'+suffix]>0.0)
+        print(np.sum(mask))
+        if input_mask is not None:
+            mask=mask&input_mask
+        # Mask data if it's 4.2-sigma from its points either side (repeating at 7-sigma to get any points missed)
+        #print(np.sum(~lc['mask']),"points before quality flags")
+        if 'quality' in lc and len(lc['quality'])==len(lc[prefix+'flux'+suffix]):
+            qs=[1,2,3,4,6,7,8,9,13,15,16,17]#worst flags to cut - for the moment just using those in the archive_manual
+            #if type(fhead)==dict and 'lcsource' in fhead.keys() and fhead['lcsource']=='everest':
+            #    qs+=[23]
+            #    print("EVEREST file with ",np.log(np.max(lc['quality']))/np.log(2)," max quality")
+            mask=mask&(np.sum(np.vstack([lc['quality'] & 2 ** (q - 1) for q in qs]),axis=0)==0)
+        #print(np.sum(~lc['mask']),"points after quality flags")
+        if cut_all_anom_lim>0:
+            #print(np.sum(~lc['mask']),"points before CutAnomDiff")
+            mask[mask]=CutAnomDiff(lc[prefix+'flux'+suffix][mask],cut_all_anom_lim)
+            #Doing this a second time with more stringent limits to cut two-point outliers:
+            mask[mask]=CutAnomDiff(lc[prefix+'flux'+suffix][mask],cut_all_anom_lim+3.5)
+            #print(np.sum(~lc['mask']),"after before CutAnomDiff")
+        mu = np.median(lc[prefix+'flux'+suffix][mask])
+        if use_ppt:
+            # Convert to parts per thousand
+            lc[prefix+'flux'+suffix] = (lc[prefix+'flux'+suffix] / mu - 1) * 1e3
+            lc[prefix+'flux'+suffix+'_err'] *= 1e3/mu
+        else:
+            lc[prefix+'flux'+suffix] = (lc[prefix+'flux'+suffix] / mu - 1)
+            lc[prefix+'flux'+suffix+'_err'] /= mu
+
+        if mask_islands:
+            #Masking islands of data which are <12hrs long and >12hrs from other data
+            jumps=np.where(np.diff(lc['time'][mask])>0.5)[0]
+            jumps=np.column_stack((np.hstack(([0,jumps+1])),
+                                   np.hstack(([jumps,len(lc['time'][mask])-1]))))
+            xmask=np.tile(True,np.sum(mask))
+            for j in range(len(jumps[:,0])):
+                t0=lc['time'][mask][jumps[j,0]]
+                t1=lc['time'][mask][jumps[j,1]]
+                jump_before = 100 if j==0 else t0-(lc['time'][mask][jumps[j-1,1]])
+                jump_after = 100 if j==(len(jumps[:,0])-1) else (lc['time'][mask][jumps[j+1,0]])-t1
+                if (t1-t0)<0.5 and jump_before>0.5 and jump_after>0.5:
+                    #ISLAND! NEED TO MASK
+                    xmask[jumps[j,0]:(jumps[j,1]+1)]=False
+            mask[mask]*=xmask
+
+        #End-of-orbit cut
+        # Arbritrarily looking at the first/last 15 points and calculating STD of first/last 300 pts.
+        # We will cut the first/last points if the lightcurve STD is drastically better without them
+        if end_of_orbit:
+            stds=np.array([np.nanstd(lc[prefix+'flux'+suffix][mask][n:(300+n)]) for n in np.arange(0,17)])
+            stds/=np.min(stds)
+            newmask=np.tile(True,np.sum(mask))
+            for n in np.arange(15):
+                if stds[n]>1.05*stds[-1]:
+                    newmask[n]=False
+                    newmask[n+1]=False
+            stds=np.array([np.nanstd(lc[prefix+'flux'+suffix][mask][(-300+n):n]) for n in np.arange(-17,0)])
+            stds/=np.min(stds)
+            for n in np.arange(-15,0):
+                if stds[n]>1.05*stds[0]:
+                    newmask[n]=False
+                    newmask[n-1]=False
+            mask[mask]=newmask
+
+        # Identify outliers
+        m2 = mask[:]
+
+        for i in range(10):
+            try:
+                y_prime = np.interp(lc[prefix+'time'], lc[prefix+'time'][m2], lc[prefix+'flux'+suffix][m2])
+                smooth = savgol_filter(y_prime, 101, polyorder=3)
+                resid = lc[prefix+'flux'+suffix] - smooth
+                sigma = np.sqrt(np.nanmean(resid**2))
+                #m0 = abs(resid) < cut_all_anom_lim*sigma
+                # Making this term less likely to cut low-flux points...
+                m0 = (resid < 0.66*cut_all_anom_lim*sigma)&(resid > -1*cut_all_anom_lim*sigma)
+                #print(np.sum((y_prime/y_prime)!=1.0),np.sum(m2),np.sum(m0))
+                if m2.sum() == m0.sum():
+                    m2 = m0
+                    break
+                m2 = m0+m2
+            except:
+                resid = np.zeros(len(lc[prefix+'flux'+suffix]))
+                sigma = 1.0
+                pass
+        return mask*m2
     else:
-        lc[prefix+'flux'+suffix] = (lc[prefix+'flux'+suffix] / mu - 1)
-        lc[prefix+'flux'+suffix+'_err'] /= mu
-    
-    if mask_islands:
-        #Masking islands of data which are <12hrs long and >12hrs from other data
-        jumps=np.where(np.diff(lc['time'][mask])>0.5)[0]
-        jumps=np.column_stack((np.hstack(([0,jumps+1])),
-                               np.hstack(([jumps,len(lc['time'][mask])-1]))))
-        xmask=np.tile(True,np.sum(mask))
-        for j in range(len(jumps[:,0])):
-            t0=lc['time'][mask][jumps[j,0]]
-            t1=lc['time'][mask][jumps[j,1]]
-            jump_before = 100 if j==0 else t0-(lc['time'][mask][jumps[j-1,1]])
-            jump_after = 100 if j==(len(jumps[:,0])-1) else (lc['time'][mask][jumps[j+1,0]])-t1
-            if (t1-t0)<0.5 and jump_before>0.5 and jump_after>0.5:
-                #ISLAND! NEED TO MASK
-                xmask[jumps[j,0]:(jumps[j,1]+1)]=False
-        mask[mask]*=xmask
-    
-    #End-of-orbit cut
-    # Arbritrarily looking at the first/last 15 points and calculating STD of first/last 300 pts.
-    # We will cut the first/last points if the lightcurve STD is drastically better without them
-    if end_of_orbit:
-        stds=np.array([np.nanstd(lc[prefix+'flux'+suffix][mask][n:(300+n)]) for n in np.arange(0,17)])
-        stds/=np.min(stds)
-        newmask=np.tile(True,np.sum(mask))
-        for n in np.arange(15):
-            if stds[n]>1.05*stds[-1]:
-                newmask[n]=False
-                newmask[n+1]=False
-        stds=np.array([np.nanstd(lc[prefix+'flux'+suffix][mask][(-300+n):n]) for n in np.arange(-17,0)])
-        stds/=np.min(stds)
-        for n in np.arange(-15,0):
-            if stds[n]>1.05*stds[0]:
-                newmask[n]=False
-                newmask[n-1]=False
-        mask[mask]=newmask
-    
-    # Identify outliers
-    m2 = mask[:]
-    
-    for i in range(10):
-        try:
-            y_prime = np.interp(lc[prefix+'time'], lc[prefix+'time'][m2], lc[prefix+'flux'+suffix][m2])
-            smooth = savgol_filter(y_prime, 101, polyorder=3)
-            resid = lc[prefix+'flux'+suffix] - smooth
-            sigma = np.sqrt(np.nanmean(resid**2))
-            #m0 = abs(resid) < cut_all_anom_lim*sigma
-            # Making this term less likely to cut low-flux points...
-            m0 = (resid < 0.66*cut_all_anom_lim*sigma)&(resid > -1*cut_all_anom_lim*sigma)
-            #print(np.sum((y_prime/y_prime)!=1.0),np.sum(m2),np.sum(m0))
-            if m2.sum() == m0.sum():
-                m2 = m0
-                break
-            m2 = m0+m2
-        except:
-            resid = np.zeros(len(lc[prefix+'flux'+suffix]))
-            sigma = 1.0
-            pass
-    return mask*m2
+        return mask
 
 def openPDC(epic,camp,use_ppt=True):
     if camp == '10':
@@ -291,6 +300,7 @@ def openPDC(epic,camp,use_ppt=True):
     if requests.get(urlfilename1, timeout=600).status_code==200:
         with fits.open(urlfilename1,show_progress=False) as hdus:
             lc=openFits(hdus,urlfilename1,mission='kepler',use_ppt=use_ppt)
+            lc['src']['K2']='K2_pdc'
         return lc
     else:
         return None
@@ -334,7 +344,9 @@ def openVand(epic,camp,v=1,use_ppt=True):
             print("Extracted vanderburg LC from ",urlfitsname)
         else:
             print("Cannot find vanderburg LC at ",urlfitsname)
-    return lcStack(lcvand)
+    lc=lcStack(lcvand)
+    lc['src']='K2_vand'
+    return lc
  
 def openEverest(epic,camp,pers=None,durs=None,t0s=None,use_ppt=True):
     import everest
@@ -372,7 +384,6 @@ def openEverest(epic,camp,pers=None,durs=None,t0s=None,use_ppt=True):
                       'quality':np.vstack((lcev['quality'],st1.quality))}
             hdr={'cdpp':st1.cdpp,'ID':st1.ID,'Tmag':st1.mag,'mission':'K2','name':st1.name,'campaign':camp,'lcsource':'everest'}
             lcs+=[openFits(lcev,hdr,mission='k2',use_ppt=use_ppt)]
-            print(len(lcs),lcs[-1])
         except:
             print(c,"not possible to load")
             return None
@@ -380,7 +391,9 @@ def openEverest(epic,camp,pers=None,durs=None,t0s=None,use_ppt=True):
         #    lcloc='https://archive.stsci.edu/hlsps/everest/v2/c'+str(int(camp))+'/'+str(epic)[:4]+'00000/'+str(epic)[4:]+'/hlsp_everest_k2_llc_'+str(epic)+'-c'+str(int(camp))+'_kepler_v2.0_lc.fits'
         #    lcev=openFits(fits.open(lcloc),lcloc)
     #print(np.unique(lcev['quality']))
-    return lcStack(lcs)
+    lc=lcStack(lcs)
+    lc['src']='K2_ev'
+    return lc
    
 
 def getK2lc(epic,camp,saveloc=None,pers=None,durs=None,t0s=None,use_ppt=True):
@@ -390,16 +403,20 @@ def getK2lc(epic,camp,saveloc=None,pers=None,durs=None,t0s=None,use_ppt=True):
     from urllib.request import urlopen
     import everest
     lcs=[]
-    lcs+=[openEverest(int(epic),camp,pers=pers,durs=durs,t0s=t0s,use_ppt=use_ppt)]
-    lcs+=[openVand(int(epic),camp,use_ppt=use_ppt)]
+    lcs+=[openEverest(int(epic), camp, pers=pers, durs=durs, t0s=t0s, use_ppt=use_ppt)]
+    lcs+=[openVand(int(epic), camp, use_ppt=use_ppt)]
+    lcs=[lc for lc in lcs if lc is not None]
     if len(lcs)==0:
         try:
             return [openPDC(int(epic),int(camp),use_ppt=use_ppt)]
         except:
             print("No LCs for "+str(epic)+" campaign "+str(camp)+" at all")
             return None
+    elif len(lcs)==1:
+        return lcs[0]
     elif len(lcs)>1:
         stds = np.array([np.nanmedian(abs(np.diff(l['flux'][l['mask']]))) for l in lcs])
+        
         if len(lcs[0]['time'])>1.5*len(lcs[1]['time']) or ((len(lcs[0]['time'])>0.66*len(lcs[1]['time']))&(stds[0]<stds[1])):
             return lcs[0]
         else:
@@ -413,10 +430,8 @@ def K2_lc(epic,pers=None,durs=None,t0s=None, use_ppt=True):
     lcs=[]
     print("K2 campaigns to search:",str(df['campaign']).split(','))
     for camp in str(df['campaign']).split(','):
-        print(camp,epic)
         lcs+=[getK2lc(epic,camp,pers=pers,durs=durs,t0s=t0s, use_ppt=use_ppt)]
     lcs=lcStack(lcs)
-    print(lcs)
     return lcs,df
 
 
@@ -479,7 +494,6 @@ def getKeplerLC(kic,cadence='long',use_ppt=True):
 def lcStack(lcs):
     #Stacks multiple lcs together
     outlc={}
-    print([nlc for nlc in range(len(lcs)) if lcs[nlc] is not None])
     allkeys=np.unique(np.hstack([list(lcs[nlc].keys()) for nlc in range(len(lcs)) if lcs[nlc] is not None]))
     allkeys=allkeys[allkeys!='flux_format'] #This is the only non-timeseries keyword
     #Stacking each timeseries on top of each other
@@ -527,11 +541,16 @@ def observed(tic):
     return out_dic
 
 def getCorotLC(corid,use_ppt=True):
+    #These are pre-computed CoRoT LCs I have lying around. There is no easy API as far as I can tell.
     lc=openFits(np.load('/'.join(MonoData_tablepath.split('/')[:-1]+["CorotLCs","CoRoT"+str(corid)+".npy"])),
                         "CorotLCs/CoRoT"+str(corid)+".npy",mission="Corot",use_ppt=use_ppt)
+    
+    #Some of these arrays have flux errors of zoer, so we need to nip that in the bud:
+    lc['flux_err'][lc['flux_err']==0]=np.nanmedian(abs(np.diff(lc['flux'][lc['flux_err']==0])))
+    lc['jd_base']=2451545
     return lc
 
-def TESS_lc(tic,sectors='all',use_ppt=True, coords=None, use_eleanor=True, data_loc=None,**kwargs):
+def TESS_lc(tic, sectors='all',use_ppt=True, coords=None, use_eleanor=True, data_loc=None,**kwargs):
     #Downloading TESS lc     
     if data_loc is None:
         data_loc=MonoData_savepath+"/TIC"+str(int(tic)).zfill(11)
@@ -541,7 +560,8 @@ def TESS_lc(tic,sectors='all',use_ppt=True, coords=None, use_eleanor=True, data_
            9:'2019058134432_0139',10:'2019085135100_0140',11:'2019112060037_0143',12:'2019140104343_0144',
            13:'2019169103026_0146',14:'2019198215352_0150',15:'2019226182529_0151',16:'2019253231442_0152',
            17:'2019279210107_0161',18:'2019306063752_0162',19:'2019331140908_0164',20:'2019357164649_0165',
-           21:'2020020091053_0167',22:'2020049080258_0174',23:'2020078014623_0177',24:'2020106103520_0180'}
+           21:'2020020091053_0167',22:'2020049080258_0174',23:'2020078014623_0177',24:'2020106103520_0180',
+           25:'2020133194932_0182',26:'2020160202036_0188'}
     lcs=[];lchdrs=[]
     if sectors == 'all':
         if coords is not None and type(coords)==SkyCoord:
@@ -600,7 +620,7 @@ def TESS_lc(tic,sectors='all',use_ppt=True, coords=None, use_eleanor=True, data_
                         except:
                             elen_obj=eleanor.eleanor.TargetData(star, height=15, width=15, bkg_size=31, do_psf=False, do_pca=False,save_postcard=False)
                     elen_hdr={'ID':star.tic,'GaiaID':star.gaia,'Tmag':star.tess_mag,
-                              'RA':star.coords[0],'dec':star.coords[1],'mission':'TESS','campaign':key,
+                              'RA':star.coords[0],'dec':star.coords[1],'mission':'TESS','campaign':key,'source':'eleanor',
                               'ap_masks':elen_obj.all_apertures,'ap_image':np.nanmedian(elen_obj.tpf[50:80],axis=0)}
                     elen_lc=openFits(elen_obj,elen_hdr,mission='tess',use_ppt=use_ppt)
                     lcs+=[elen_lc]
@@ -617,7 +637,7 @@ def TESS_lc(tic,sectors='all',use_ppt=True, coords=None, use_eleanor=True, data_
             if len(lcs)==0 or np.nanmin(abs(np.nanmedian(f['LightCurve']['BJD'])-np.hstack([l['time'] for l in lcs])))>5:
                 # This speciic QLP orbit does not have a SPOC lightcurve attached (i.e. no other obs within 5days)
                 lcs+=[openFits(f,orbit,mission='tess',use_ppt=use_ppt)]
-                lchdrs+=[None]
+                lchdrs+=[{'source':'qlp'}]
     if len(lcs)>1:
         lc=lcStack(lcs)
         return lc,lchdrs[0]
@@ -628,6 +648,7 @@ def TESS_lc(tic,sectors='all',use_ppt=True, coords=None, use_eleanor=True, data_
         return None,None
 
 def openLightCurve(ID,mission,coor=None,use_ppt=True,other_data=True,jd_base=2457000,**kwargs):
+    #from ..stellar import tess_stars2px_mod
     if coor is None:
         #Doing this to get coordinates:
         df,_=starpars.GetExoFop(ID,mission)
@@ -653,16 +674,24 @@ def openLightCurve(ID,mission,coor=None,use_ppt=True,other_data=True,jd_base=245
             else:
                 IDs['k2']=None
         if mission.lower()!='tess':
-            # Let's search for associated TESS lightcurve:    
+            # Let's search for associated TESS lightcurve:
+            
+            
             tess_id = Catalogs.query_criteria("TIC",coordinates=coor,radius=12*units.arcsec,
                                               objType="STAR",columns=['ID','KIC','Tmag']).to_pandas()
             #print(tess_id)
-            if tess_id.shape[1]>1:
-                IDs['tess']=tess_id.iloc[np.argmin(tess_id['Tmag'])]['ID']
-            elif tess_id.shape[1]==1:
-                IDs['tess']=tess_id['ID'].values[0]
+            #
+            '''tess_id, tess_dat, sects = tess_stars2px_mod.SectFromCoords(coor,tic=None)
+            if tess_id is not None:
+                IDs['tess']=tess_id
+            '''
+            tess_id=tess_id.iloc[np.argmin(tess_id['Tmag'])] if type(tess_id)==pd.DataFrame else tess_id
+            if tess_id is not None:
+                IDs['tess']=tess_id['ID']
             else:
                 IDs['tess']=None
+        #else:
+        #    tess_id, tess_dat, sects = tess_stars2px_mod.SectFromCoords(coor,tic=ID)
         if mission.lower()!='kepler':
             v = Vizier(catalog=['V/133/kic'])
             res=v.query_region(coor, radius=5*units.arcsec, catalog=['V/133/kic'])
@@ -674,7 +703,7 @@ def openLightCurve(ID,mission,coor=None,use_ppt=True,other_data=True,jd_base=245
     #Opening using url search:
     lcs={};hdrs={}
     if IDs['tess'] is not None:
-        lcs['tess'],hdrs['tess'] = TESS_lc(IDs['tess'],use_ppt=use_ppt,coords=coor,**kwargs)
+        lcs['tess'],hdrs['tess'] = TESS_lc(IDs['tess'], use_ppt=use_ppt, coords=coor,**kwargs)
         if lcs['tess'] is not None:
             lcs['tess']['time']-=(jd_base-2457000)
     if IDs['k2'] is not None:
@@ -690,7 +719,8 @@ def openLightCurve(ID,mission,coor=None,use_ppt=True,other_data=True,jd_base=245
             lcs['kepler']['time']-=(jd_base-2454833)
     if mission.lower() == 'corot':
         lcs['corot'] = getCorotLC(ID,use_ppt=use_ppt)
-        lcs['corot']['time']-=(jd_base-2454833)
+        lcs['corot']['time']-=(jd_base-lcs['corot']['jd_base'])
+        lcs['corot']['jd_base']=jd_base
         hdrs['corot'] = None
     #print(IDs,lcs)
     if len(lcs.keys())>1:
@@ -699,14 +729,15 @@ def openLightCurve(ID,mission,coor=None,use_ppt=True,other_data=True,jd_base=245
         lc=lcs[mission.lower()]
     else:
         lc=lcs[list(lcs.keys())[0]]
-    lc['jd_base']=jd_base
-    
-    #Maing sure lightcurve is sorted by time, and that there are no nans in the time array:
-    for key in lc:
-        if key!='time' and type(lc[key])==np.ndarray and len(lc[key])==len(lc['time']):
-            lc[key]=lc[key][~np.isnan(lc['time'])]
-            lc[key]=lc[key][:][np.argsort(lc['time'][~np.isnan(lc['time'])])]
-    lc['time']=np.sort(lc['time'][~np.isnan(lc['time'])])
+    if lc is not None:
+        lc['jd_base']=jd_base
+
+        #Maing sure lightcurve is sorted by time, and that there are no nans in the time array:
+        for key in lc:
+            if key!='time' and type(lc[key])==np.ndarray and len(lc[key])==len(lc['time']):
+                lc[key]=lc[key][~np.isnan(lc['time'])]
+                lc[key]=lc[key][:][np.argsort(lc['time'][~np.isnan(lc['time'])])]
+        lc['time']=np.sort(lc['time'][~np.isnan(lc['time'])])
     
     return lc,hdrs[mission.lower()]
 
@@ -765,11 +796,14 @@ def weighted_avg_and_std(values, errs, axis=None):
 
     values, weights -- Numpy ndarrays with the same shape.
     """
-    average = np.average(values, weights=1/errs**2,axis=axis)
-    # Fast and numerically precise:
-    variance = np.average((values-average)**2, weights=1/errs**2,axis=axis)
-    binsize_adj = np.sqrt(len(values)) if axis is None else np.sqrt(values.shape[axis])
-    return [average, np.sqrt(variance)/binsize_adj]
+    if len(values)>1:
+        average = np.average(values, weights=1/errs**2,axis=axis)
+        # Fast and numerically precise:
+        variance = np.average((values-average)**2, weights=1/errs**2,axis=axis)
+        binsize_adj = np.sqrt(len(values)) if axis is None else np.sqrt(values.shape[axis])
+        return [average, np.sqrt(variance)/binsize_adj]
+    else:
+        return [values[0], errs[0]]
 
 def lcBin(lc,binsize=1/48,split_gap_size=0.8,use_flat=True,use_masked=True, extramask=None,modify_lc=True):
     #Binning lightcurve to e.g. 30-min cadence for planet search
@@ -798,21 +832,25 @@ def lcBin(lc,binsize=1/48,split_gap_size=0.8,use_flat=True,use_masked=True, extr
     else:
         mask=lc['mask']
     for sh_time in loop_blocks:
+        nodata=False
         for fkey in flux_dic:
             if use_masked:
-                lc_segment=np.column_stack((lc['time'][sh_time][mask[sh_time]],
-                                            lc[fkey][sh_time][mask[sh_time]],
-                                            lc['flux_err'][sh_time][mask[sh_time]]))
-                cads=lc['cadence'][sh_time][mask[sh_time]]
+                if len(lc[fkey][sh_time][mask[sh_time]])>0:
+                    lc_segment=np.column_stack((lc['time'][sh_time][mask[sh_time]],
+                                                lc[fkey][sh_time][mask[sh_time]],
+                                                lc['flux_err'][sh_time][mask[sh_time]]))
+                    cads=lc['cadence'][sh_time][mask[sh_time]]
+                else:
+                    nodata=True
             else:
                 lc_segment=np.column_stack((lc['time'][sh_time],lc[fkey][sh_time],lc['flux_err'][sh_time]))
                 cads=lc['cadence'][sh_time]
-            if binsize>(1.66*np.nanmedian(np.diff(lc['time'][sh_time]))):
+            if binsize>(1.66*np.nanmedian(np.diff(lc['time'][sh_time]))) and not nodata:
                 #Only doing the binning if the cadence involved is >> the cadence
                 binlc[fkey]+=[bin_lc_segment(lc_segment, binsize)]
                 digi=np.digitize(lc_segment[:,0],
                                  np.arange(np.min(lc_segment[:,0])-0.5*binsize,np.max(lc_segment[:,0])+0.5*binsize,binsize))
-            else:
+            elif not nodata:
                 binlc[fkey]+=[lc_segment]
         if binsize>(1.66*np.nanmedian(np.diff(lc['time'][sh_time]))):
             binlc['bin_cadence']+=[np.array([cads[digi==d] if type(cads[digi==d])==str else cads[digi==d][0] for d in np.unique(digi)])[:,np.newaxis]]
@@ -837,11 +875,18 @@ def lcBin(lc,binsize=1/48,split_gap_size=0.8,use_flat=True,use_masked=True, extr
         ret_lc['bin_cadence']=binlc['bin_cadence'].ravel()
         return ret_lc
 
-def bin_lc_segment(lc_segment, binsize):
-    digi=np.digitize(lc_segment[:,0],np.arange(np.min(lc_segment[:,0])-0.5*binsize,np.max(lc_segment[:,0])+0.5*binsize,binsize))
-    return np.vstack([[[np.nanmedian(lc_segment[digi==d,0])]+\
-                        weighted_avg_and_std(lc_segment[digi==d,1],lc_segment[digi==d,2])] for d in np.unique(digi)])
-
+def bin_lc_segment(lc_segment, binsize,return_digi=False):
+    if len(lc_segment)>0:
+        digi=np.digitize(lc_segment[:,0],np.arange(np.min(lc_segment[:,0])-0.5*binsize,np.max(lc_segment[:,0])+0.5*binsize,binsize))
+        binlc=np.vstack([[[np.nanmedian(lc_segment[digi==d,0])]+\
+                                weighted_avg_and_std(lc_segment[digi==d,1],lc_segment[digi==d,2])] for d in np.unique(digi)])
+        if return_digi:
+            return binlc, digi
+        else:
+            return binlc
+    else:
+        return lc_segment
+    
 def dopolyfit(win,mask=None,stepcent=0.0,d=3,ni=10,sigclip=3):
     mask=np.tile(True,len(win)) if mask is None else mask
     maskedwin=win[mask]
@@ -858,9 +903,11 @@ def dopolyfit(win,mask=None,stepcent=0.0,d=3,ni=10,sigclip=3):
         # If a point's offset to the best model is great than a normally-distributed RV, it gets masked 
         # This should have the effect of cutting most "bad" points,
         #   but also potentially creating a better fit through bootstrapping:
-        randmask=abs(np.random.normal(0.0,1.0,len(maskedwin)))<best_offset
+        randmask = abs(np.random.normal(0.0,1.0,len(maskedwin)))<best_offset
+        randmask = np.tile(True,len(maskedwin)) if np.sum(randmask)==0 else randmask
+        
         new_base = np.polyfit(maskedwin[randmask,0]-stepcent,maskedwin[randmask,1],
-                          w=1.0/np.power(maskedwin[randmask,2],2),deg=d)
+                              w=1.0/np.power(maskedwin[randmask,2],2),deg=d)
         #winsigma = np.std(win[:,1]-np.polyval(base,win[:,0]))
         new_offset = (maskedwin[:,1]-np.polyval(new_base,maskedwin[:,0]))**2/maskedwin[:,2]**2
         new_llk=-0.5 * np.sum(new_offset)
@@ -916,14 +963,14 @@ def lcFlatten(lc, winsize = 3.5, stepsize = 0.15, polydegree = 2,
     #general setup
     uselc=np.column_stack((lc[prefix+'time'][:],lc[prefix+'flux'][:],lc[prefix+'flux_err'][:]))
     if len(lc['mask'])==len(uselc[:,0]) and use_mask:
-        initmask=(lc['mask']&(lc['flux']/lc['flux']==1.0)).astype(int)[:]
+        initmask=(lc['mask']&(lc['flux']/lc['flux']==1.0)&(lc['flux_err']/lc['flux_err']==1.0)).astype(int)[:]
         if type(transit_mask)==np.ndarray:
             print("transit mask:",type(initmask),len(initmask),
                   initmask[0],type(transit_mask),len(transit_mask),transit_mask[0])
             initmask=(initmask.astype(bool)&transit_mask).astype(int)
 
     else:
-        initmask=np.isfinite(uselc[:,1]).astype(int)
+        initmask=(np.isfinite(uselc[:,1])&np.isfinite(uselc[:,2])).astype(int)
     uselc=np.column_stack((uselc,initmask))
     uselc[:,1:3]/=lc['flux_unit']
     uselc[:,1]-=np.nanmedian(lc[prefix+'flux'])

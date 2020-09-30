@@ -17,6 +17,13 @@ This uses a PyMC3/Theano back-end, a differentiable Keplerian orbital model, and
 
 Here we wrap the ["exoplanet"](http://github.com/dfm/exoplanet) core model to specify it for single transits, and plot/analyse the results.
 
+#### Downloading
+
+Run `git clone http://github.com/hposborn/MonoTools`
+Make sure the folder where MonoTools is installed is included in your `$PYTHONPATH`.
+
+Pip install the necessary python modules in requirements.txt (to avoid this breaking at the first warning, use `cat requirements.txt | xargs -n 1 pip install`).
+
 #### Using MonoTools
 
 See [Example.ipynb](https://github.com/hposborn/MonoTools/blob/master/Example.ipynb) for an example of how to use it.

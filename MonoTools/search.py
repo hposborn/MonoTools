@@ -81,7 +81,7 @@ def least_sq(pars,x,y,yerr):
     return chisq
 
 def QuickMonoFit(lc,it0,dur,Rs=None,Ms=None,Teff=None,useL2=False,fit_poly=True,force_tdur=False,
-                 polyorder=2, ndurs=4.2, how='mono', init_period=None,fluxindex='flux_flat',mask=None):
+                 polyorder=2, ndurs=4.2, how='mono', init_period=None,fluxindex='flux_flat',mask=None, **kwargs):
     # Performs simple planet fit to monotransit dip given the detection data.
     #Initial depth estimate:
     dur=0.3 if dur/dur!=1.0 else dur #Fixing duration if it's broken/nan.
@@ -170,7 +170,8 @@ def QuickMonoFit(lc,it0,dur,Rs=None,Ms=None,Teff=None,useL2=False,fit_poly=True,
         if how=='periodic' and init_period is not None:
             log_per = pm.Normal("log_per", mu=np.log(init_period),sd=0.4)
         else:
-            init_per = abs(18226*((2*np.sqrt((1+dep**0.5)**2-0.41**2))/dur)**-3)
+            rhostar=m_star/r_star**3
+            init_per = abs(18226*rhostar*((2*np.sqrt((1+dep**0.5)**2-0.41**2))/dur)**-3)
             # Orbital parameters for the planets
             log_per = pm.Uniform("log_per", lower=np.log(dur*5),upper=np.log(3000),
                                  testval=np.clip(np.log(init_per),np.log(dur*6),np.log(3000))
@@ -212,7 +213,7 @@ def QuickMonoFit(lc,it0,dur,Rs=None,Ms=None,Teff=None,useL2=False,fit_poly=True,
         # This quantity is in delta-mag
         if useL2:
             deltamag_contam = pm.Uniform("deltamag_contam", lower=-20.0, upper=20.0)
-            third_light = pm.Deterministic("third_light", tt.power(2.511,-1*deltamag_contam))#Factor to multiply normalised lightcurve by
+            third_light = pm.Deterministic("third_light", tt.power(2.511,-1*deltamag_contam)) #Factor to multiply normalised lightcurve by
         else:
             third_light = 0.0
 
@@ -326,7 +327,6 @@ def QuickMonoFit(lc,it0,dur,Rs=None,Ms=None,Teff=None,useL2=False,fit_poly=True,
         best_fit['cdpp'] = np.nanstd(binlc[:,1])
 
     best_fit['snr_r']=best_fit['depth']/(best_fit['cdpp']/np.sqrt(best_fit['Ntrans']))
-    
     best_fit['interpmodel']=interp.interp1d(np.hstack((-10000,interpt-best_fit['tcen'],10000)),
                                      np.hstack((0.0,transit_zoom,0.0)))
     if how=='periodic':
@@ -339,7 +339,7 @@ def QuickMonoFit(lc,it0,dur,Rs=None,Ms=None,Teff=None,useL2=False,fit_poly=True,
 
 def MonoTransitSearch(lc,ID,mission, Rs=None,Ms=None,Teff=None,
                       mono_SNR_thresh=6.5,mono_BIC_thresh=-6,n_durs=5,poly_order=3,
-                      n_oversamp=20,binsize=15/1440.0,
+                      n_oversamp=20,binsize=15/1440.0,custom_mask=None,
                       transit_zoom=3.5,use_flat=False,use_binned=True,use_poly=True,
                       plot=False, plot_loc=None ,n_max_monos=8, use_stellar_dens=True, **kwargs):
     #Searches LC for monotransits - in this case without minimizing for duration, but only for Tdur
@@ -372,17 +372,23 @@ def MonoTransitSearch(lc,ID,mission, Rs=None,Ms=None,Teff=None,
     Teff=5800.0 if Teff is None else float(Teff)
 
     mincad=np.min([float(cad[1:])/1440 for cad in np.unique(lc['cadence'])])
-    interpmodels,tdurs=get_interpmodels(Rs,Ms,Teff,lc['time'],lc['flux_unit'],
+    interpmodels,tdurs = get_interpmodels(Rs,Ms,Teff,lc['time'],lc['flux_unit'],
                                         n_durs=n_durs,texp=mincad, mission=mission)
     
     #print("Checking input model matches. flux:",np.nanmedian(uselc[:,0]),"std",np.nanstd(uselc[:,1]),"transit model:",
     #       interpmodels[0](10.0),"depth:",interpmodels[0](0.0))
         
     search_xranges=[]
+    
+    mask = lc['mask'] if custom_mask is None else custom_mask
     #Removing gaps bigger than 2d (with no data)
     for n in range(n_durs):
         search_xranges_n=[]
-        for arr in np.array_split(lc['time'][lc['mask']],1+np.where(np.diff(lc['time'][lc['mask']])>tdurs[n])[0]):
+        if np.max(np.diff(lc['time'][mask]))<tdurs[n]:
+            lc_regions=[lc['time'][mask]]
+        else:
+            lc_regions = np.array_split(lc['time'][mask],1+np.where(np.diff(lc['time'][mask])>tdurs[n])[0])
+        for arr in lc_regions:
             search_xranges_n+=[np.arange(arr[0]+0.33*tdurs[n],arr[-1]-0.33*tdurs[n],tdurs[n]/n_oversamp)]
         search_xranges+=[np.hstack(search_xranges_n)]
     
@@ -430,7 +436,7 @@ def MonoTransitSearch(lc,ID,mission, Rs=None,Ms=None,Teff=None,
         if use_binned:
             #Having may points in a lightcurve makes flattening difficult (and fitting needlessly slow)
             # So let's bin to a fraction of the tdur - say 9 in-transit points.
-            lc=tools.lcBin(lc,binsize=tdur/9,use_flat=False)
+            lc=tools.lcBin(lc,binsize=tdur/9, use_flat=False, extramask=custom_mask)
             if use_flat and not use_poly:
                 lc=tools.lcFlatten(lc,winsize=tdur*13,stepsize=tdur*0.333,use_bin=True)
                 uselc=np.column_stack((lc['bin_time'],lc['bin_flux_flat'],lc['bin_flux_err']))
@@ -439,9 +445,9 @@ def MonoTransitSearch(lc,ID,mission, Rs=None,Ms=None,Teff=None,
         else:
             if use_flat and not use_poly:
                 lc=tools.lcFlatten(lc,winsize=tdur*13,stepsize=tdur*0.333)
-                uselc=np.column_stack((lc['time'][lc['mask']],lc['flux_flat'][lc['mask']],lc['flux_err'][lc['mask']]))
+                uselc=np.column_stack((lc['time'][mask],lc['flux_flat'][mask],lc['flux_err'][mask]))
             else:
-                uselc=np.column_stack((lc['time'][lc['mask']],lc['flux'][lc['mask']],lc['flux_err'][lc['mask']]))
+                uselc=np.column_stack((lc['time'][mask],lc['flux'][mask],lc['flux_err'][mask]))
                 
         #Making depth vary from 0.1 to 1.0
         init_dep_shifts=np.exp(np.random.normal(0.0,n_oversamp*0.01,len(search_xrange)))
@@ -592,7 +598,7 @@ def MonoTransitSearch(lc,ID,mission, Rs=None,Ms=None,Teff=None,
         print("n_sigs == 0")
         detns={}
     if plot:
-        fig_loc= PlotMonoSearch(lc,ID,outparams,detns,interpmodels,tdurs,
+        fig_loc= PlotMonoSearch(lc,ID,outparams,detns,interpmodels,tdurs,custom_mask=custom_mask,
                              use_flat=use_flat,use_binned=use_binned,use_poly=use_poly,plot_loc=plot_loc)
         return detns, outparams, fig_loc
     else:
@@ -607,20 +613,21 @@ def calc_min_P(time,tcen,tdur):
     else:
         return np.max(abs_times)
 
-def PlotMonoSearch(lc,ID,monosearchparams,mono_dic,interpmodels,tdurs,
-                   use_flat=True,use_binned=True,use_poly=False,transit_zoom=2.5,plot_loc=None,**kwargs):
+def PlotMonoSearch(lc, ID, monosearchparams, mono_dic, interpmodels, tdurs, 
+                   use_flat=True,use_binned=True,use_poly=False,transit_zoom=2.5,plot_loc=None,custom_mask=None,**kwargs):
     if plot_loc is None:
         plot_loc = str(ID).zfill(11)+"_Monotransit_Search.pdf"
     elif plot_loc[-1]=='/':
         plot_loc = plot_loc+str(ID).zfill(11)+"_Monotransit_Search.pdf"
+    
     if use_flat and not use_poly:
         lc=tools.lcFlatten(lc,winsize=np.median(tdurs)*7.5,stepsize=0.2*np.median(tdurs))
-        lc=tools.lcBin(lc,30/1440,use_masked=True,use_flat=True)
+        lc=tools.lcBin(lc, 30/1440, use_masked=True, use_flat=True, extramask = custom_mask)
         flux_key='flux_flat'
     else:
         flux_key='flux'
         lc=tools.lcBin(lc,30/1440,use_masked=True,use_flat=False)
-
+    mask = lc['mask'] if custom_mask is None else custom_mask
     fig = plt.figure(figsize=(11.69,8.27))
     import seaborn as sns
     sns.set_palette(sns.set_palette("RdBu",14))
@@ -629,13 +636,13 @@ def PlotMonoSearch(lc,ID,monosearchparams,mono_dic,interpmodels,tdurs,
     axes[0].set_title(str(ID).zfill(7)+" - Monotransit Search")
     
     #rast=True if np.sum(lc['mask']>12000) else False
-    axes[0].plot(lc['time'][lc['mask']],lc[flux_key][lc['mask']],'.k',alpha=0.28,markersize=0.75, rasterized=True)
+    axes[0].plot(lc['time'][mask],lc[flux_key][mask],'.k',alpha=0.28,markersize=0.75, rasterized=True)
     if use_flat:
         axes[0].plot(lc['bin_time'],lc['bin_flux_flat'],'.k',alpha=0.7,markersize=1.75, rasterized=True)
     else:
         axes[0].plot(lc['bin_time'],lc['bin_flux'],'.k',alpha=0.7,markersize=1.75, rasterized=True)
 
-    axes[0].set_ylim(np.percentile(lc[flux_key][lc['mask']],(0.25,99.75)))
+    axes[0].set_ylim(np.percentile(lc[flux_key][mask],(0.25,99.75)))
     axes[0].set_ylabel("flux")
     axes[0].set_xticks([])
     axes[0].set_xticklabels([])
@@ -709,7 +716,7 @@ def PlotMonoSearch(lc,ID,monosearchparams,mono_dic,interpmodels,tdurs,
             axes +=[fig.add_subplot(4,len(mono_dic),nm+3*len(mono_dic)+1)]
             
             nmod=np.arange(len(tdurs))[np.argmin(abs(tdurs-tdur))]
-            round_tr=lc['mask']&(abs(lc['time']-tcen)<(transit_zoom*tdur))
+            round_tr=mask&(abs(lc['time']-tcen)<(transit_zoom*tdur))
             x=(lc['time'][round_tr]-tcen)
             y=lc[flux_key][round_tr]
             
@@ -894,7 +901,7 @@ def PeriodicPlanetSearch(lc, ID, planets, use_binned=False, use_flat=True, binsi
         if 'FAP' in results[-1] and 'snr' in results[-1] and np.sum(abs(phase_nr_trans)<0.5*np.clip(results[-1]['duration'],0.2,2))>3:
             plparams = QuickMonoFit(deepcopy(lc),results[-1]['T0'],np.clip(results[-1]['duration'],0.15,3),
                                     init_period=results[-1]['period'],how='periodic',ndurs=4.5,Teff=Teff,Rs=Rs,Ms=Ms,
-                                    fluxindex=prefix+'flux'+suffix,mask=~plmask&anommask)
+                                    fluxindex=prefix+'flux'+suffix,mask=~plmask&anommask, **kwargs)
             SNR=np.max([plparams['snr'],results[-1].snr])
             FAP=results[-1]['FAP']
         else:
@@ -1045,6 +1052,12 @@ def dipmodel_step(params,x,npolys):
     return np.hstack((np.polyval( params[1:1+npolys[0]], x[x<params[0]]),
                       np.polyval( params[-npolys[1]:], x[x>=params[0]]) ))
     
+def log_likelihood_step(params,x,y,yerr,npolys):
+    model=dipmodel_step(params,x,npolys)
+    sigma2 = yerr ** 2
+    return -0.5 * np.sum((y - model) ** 2 / sigma2 + np.log(sigma2))
+
+
 def Step_neg_lnprob(params, x, y, yerr, priors, polyorder,npolys):
     #Getting log prior - we'll leave the polynomials to wander and us:
     lnprior=0
@@ -1054,12 +1067,31 @@ def Step_neg_lnprob(params, x, y, yerr, priors, polyorder,npolys):
     elif lnp<-20:
         lnprior+=1e6*lnp
     #Getting log likelihood:
-    
-    model=dipmodel_step(params,x,npolys)
-    sigma2 = yerr ** 2
-    llk = -0.5 * np.sum((y - model) ** 2 / sigma2 + np.log(sigma2))
-
+    llk=log_likelihood_step(params,x,y,yerr,npolys)
     return -1*(lnprior + llk)
+
+
+def Poly_neg_lnprob(params,x,y,yerr,priors,polyorder):
+    return -1*Poly_lnprob(params, x, y, yerr, priors, polyorder=polyorder)
+
+def Poly_lnprob(params, x, y, yerr, priors, polyorder=2):
+    # Trivial improper prior: uniform in the log.
+    lnprior=0
+    for p in np.arange(polyorder+1):
+        #Simple log gaussian prior here:
+        lnp=log_gaussian(params[p], 0.0, priors[p],weight=1)
+        if lnp<-0.5 and lnp>-20:
+            lnprior+=3*lnp
+        elif lnp<-20:
+            lnprior+=1e6*lnp
+    llk = log_likelihood_poly(params, x, y, yerr)
+    return lnprior + llk
+
+def log_likelihood_poly(params, x, y, yerr):
+    model=np.polyval(params,x)
+    sigma2 = yerr ** 2
+    return -0.5 * np.sum((y - model) ** 2 / sigma2 + np.log(sigma2))
+
 
 def Sinusoid_neg_lnprob(params, x, y, yerr, priors, polyorder):
     return -1*Sinusoid_lnprob(params, x, y, yerr, priors, polyorder=polyorder)
@@ -1128,7 +1160,7 @@ def centroid_lnprob(params, t, x, y, xerr, yerr, priors, interpmodel, order=3):
     for p in np.arange(2):
         #Simple log gaussian prior here:
         gauss=log_gaussian(params[p], priors[p,0], priors[p,1],weight=1)
-        gauss=0.0 if gauss>-0.5 else gauss
+        #gauss=0.0 if gauss>-0.5 else gauss
         lnprior+=gauss
         
     llk = log_likelihood_centroid(params, t, x, y, xerr,yerr, interpmodel, order)
@@ -1144,47 +1176,95 @@ def log_likelihood_centroid(params, t, x, y, xerr, yerr, interpmodel, order):
 
 def dipmodel_centroid(params,t,interpmodel,order):
     #params=xdep, ydep, xpolyvals, ypolyvals
-    xdip = 1.0+params[0]*interpmodel(t)
-    ydip = 1.0+params[1]*interpmodel(t)
-    xmod = np.polyval(params[2:2+(order+1)],t)*xdip
-    ymod = np.polyval(params[2+(order+1):],t)*ydip
+    xdip = params[0]*interpmodel(t)
+    ydip = params[1]*interpmodel(t)
+    xmod = np.polyval(params[2:2+(order+1)],t)+xdip
+    ymod = np.polyval(params[2+(order+1):],t)+ydip
     return xmod,ymod
 
 
-def AsteroidCheck(lc,monoparams,interpmodel,ID,order=3,dur_region=3.5,plot=False,plot_loc=None, **kwargs):
+def AsteroidCheck(lc,monoparams,interpmodel,ID,order=3,dur_region=3.5,
+                  plot=False,plot_loc=None, return_fit_lcs=False, remove_earthshine=True, **kwargs):
     # Checking lightcure for background flux boost during transit due to presence of bright asteroid
     # Performing two model fits 
     # - one with a gaussian "dip" roughly corresponding to the transit combined with a polynomial trend for out-of-transit
     # - one with only a polynomial trend
     # These are then compared, and the BIC returned to judge model fit
     
-    nearTrans=(abs(lc['time']-monoparams['tcen'])<monoparams['tdur']*dur_region)&lc['mask']
-
-    if 'bg_flux' in lc and np.sum(np.isfinite(lc['bg_flux'][nearTrans]))>0:
+    #Need the region around the model to be at least 1.5d, otherwise the polynomial will absorb it:
+    dur_region=np.clip(dur_region,2/monoparams['tdur'],5/monoparams['tdur'])
+    
+    nearish_region=np.max([4.5,monoparams['tdur']*dur_region]) #For the background fit, we'll take a region 9d long
+    nearishTrans=(abs(lc['time']-monoparams['tcen'])<nearish_region)&lc['mask']
+    cad=np.nanmedian(np.diff(lc['time'][nearishTrans]))
+    
+    if 'bg_flux' in lc and np.sum(np.isfinite(lc['bg_flux'][nearishTrans]))>0:
         # Fits two models - one with a 2D polynomial spline and the interpolated "dip" model from the fit, and one with only a spline
-        
         #If there's a big gap, we'll remove the far side of that
-        if np.max(np.diff(lc['time'][nearTrans]))>0.4:
-            jump_n=np.argmax(np.diff(lc['time'][nearTrans]))
-            jump_time=np.average(lc['time'][nearTrans][jump_n:jump_n+1])
+        if np.max(np.diff(lc['time'][nearishTrans]))>0.4:
+            jump_n=np.argmax(np.diff(lc['time'][nearishTrans]))
+            jump_time=np.average(lc['time'][nearishTrans][jump_n:jump_n+1])
             if jump_time < monoparams['tcen']:
-                nearTrans=(lc['time']>jump_time)&((lc['time']-monoparams['tcen'])<monoparams['tdur']*dur_region)&lc['mask']
+                nearishTrans=(lc['time']>jump_time)&((lc['time']-monoparams['tcen'])<nearish_region)&lc['mask']
             elif jump_time > monoparams['tcen']:
-                nearTrans=((lc['time']-monoparams['tcen'])>(-1*monoparams['tdur']*dur_region))&(lc['time']<jump_time)&lc['mask']
-        
-        bg_lc=np.column_stack((lc['time'][nearTrans],
-                               lc['bg_flux'][nearTrans],
-                               np.tile(np.nanstd(lc['bg_flux'][nearTrans]),np.sum(nearTrans))
+                nearishTrans=((lc['time']-monoparams['tcen'])>(-1*nearish_region))&(lc['time']<jump_time)&lc['mask']
+                
+        nearishTrans[nearishTrans]=np.isfinite(lc['bg_flux'][nearishTrans])
+
+        bg_lc=np.column_stack((lc['time'][nearishTrans],
+                               lc['bg_flux'][nearishTrans],
+                               np.tile(np.nanstd(lc['bg_flux'][nearishTrans]),np.sum(nearishTrans))
                               ))
-        bg_lc=bg_lc[np.isfinite(np.sum(bg_lc,axis=1))]
+        
         bg_lc[:,0]-=monoparams['tcen']
+        nearTrans=(abs(bg_lc[:,0])<monoparams['tdur']*dur_region)
+        sigma2 = bg_lc[nearTrans,2]**2
         outTransit=(abs(bg_lc[:,0])>monoparams['tdur']*0.75)
         inTransit=(abs(bg_lc[:,0])<monoparams['tdur']*0.35)
-        #print(bg_lc)
+        
+        
         bg_lc[:,1:]/=np.nanmedian(bg_lc[outTransit,1])
+
+        if remove_earthshine and lc['cadence'][np.argmin(abs(lc['time']-monoparams['tcen']))].lower()[0]=='t':
+            #Removing Earthshine with a filter on frequencies of 1/0.5/0.33 days (for TESS lightcurves only):
+            newt=np.arange(bg_lc[0,0],bg_lc[-1,0],cad)
+            
+            #Preparing the signal timeseries:            
+            init_poly=np.polyfit(bg_lc[outTransit,0],bg_lc[outTransit,1],order) #do polynomial fit to make time series flat 
+            news = (bg_lc[:,1]-np.polyval(init_poly,bg_lc[:,0]))[np.argmin(abs(bg_lc[:,0][:,np.newaxis]-newt[np.newaxis,:]),axis=0)] #Making sure the timeseries is uniform
+
+            # Doing an FFT fit for the known frequencies associated with Earth rotation:
+            n=news.size
+            fr=np.fft.fftfreq(n,cad)  # a nice helper function to get the frequencies  
+            fou=np.fft.fft(news) 
+            freqs=[1,2,3] #Frequencies to filter - all multiples of 1
+
+            #make up a narrow bandpass with a Gaussian
+            df=0.066
+            gpl= np.sum([np.exp(- ((fr-f)/(2*df))**2) for f in freqs],axis=0) # pos. frequencies
+            gmn= np.sum([np.exp(- ((fr+f)/(2*df))**2) for f in freqs],axis=0) # neg. frequencies
+            g=gpl+gmn    
+
+            #ifft
+            s2=np.fft.ifft(fou*g) #filtered spectrum = spectrum * bandpass 
+            fft_bg_model = np.real(s2)[np.argmin(abs(newt[:,np.newaxis] - bg_lc[:,0][np.newaxis,:]),axis=0)]
+            #fft_bg_model += np.polyval(init_poly, bg_lc[nearTrans,0]
+            print(len(fft_bg_model),len(bg_lc[nearTrans,0]))
+            
+            #Checking model is actually a good fit around transit by doing 1D poly + FFT model vs 2D poly:
+            bg_model     = np.polyval(np.polyfit(bg_lc[nearTrans&outTransit,0],bg_lc[nearTrans&outTransit,1]-fft_bg_model[nearTrans&outTransit],0), bg_lc[nearTrans,0]) + fft_bg_model[nearTrans]
+            llk_bg_model = -0.5 * np.sum((bg_lc[nearTrans,1] - bg_model) ** 2 / sigma2)
+            llk_polyfit  = -0.5 * np.sum((bg_lc[nearTrans,1] - np.polyval(np.polyfit(bg_lc[nearTrans&outTransit,0],bg_lc[nearTrans&outTransit,1],2),bg_lc[nearTrans,0])) ** 2 / sigma2)
+            if llk_polyfit > llk_bg_model+1:
+                print("Earthshine model not useful in this case - polynomial model is better by", llk_polyfit - llk_bg_model)
+                fft_bg_model=np.tile(0,len(bg_lc[:,0]))
+        else:
+            fft_bg_model=np.tile(0,len(bg_lc[:,0]))
+            
+        outTransit*=nearTrans
+        
         #print(bg_lc)
-        log_height_guess=np.log(2*np.clip((np.nanmedian(bg_lc[inTransit,1])-np.nanmedian(bg_lc[outTransit,1])),0.00001,1000))
-        cad=np.nanmedian(np.diff(lc['time']))
+        log_height_guess=np.log(2*np.clip((np.nanmedian(bg_lc[inTransit,1])-np.nanmedian(bg_lc[nearTrans&outTransit,1])),0.00001,1000))
         priors= np.column_stack(([log_height_guess,np.log(np.clip(1.4*monoparams['tdur'],6*cad,3.0)),0.0],[3.0,0.25,0.75*monoparams['tdur']]))
         best_nodip_res={'fun':1e30,'bic':1e9}
 
@@ -1198,12 +1278,14 @@ def AsteroidCheck(lc,monoparams,interpmodel,ID,order=3,dur_region=3.5,plot=False
             #non-dip is simple poly fit. Including 10% cut in points to add some randomness over n samples
             
             rand_choice=np.random.random(len(bg_lc))<0.9
-            nodip_res={'x':np.polyfit(bg_lc[rand_choice,0],bg_lc[rand_choice,1],order)}
-            sigma2 = bg_lc[:,2]**2
-            nodip_res['fun'] = -1*(-0.5 * np.sum((bg_lc[:,1] - np.polyval(nodip_res['x'],bg_lc[:,0])) ** 2 / sigma2 + np.log(sigma2)))
+            nodip_res={'x':np.polyfit(bg_lc[nearTrans&rand_choice,0],
+                                      bg_lc[nearTrans&rand_choice,1]-fft_bg_model[nearTrans&rand_choice],
+                                      order)}
+            
+            nodip_res['fun'] = -1*(-0.5 * np.sum((bg_lc[nearTrans,1] - fft_bg_model[nearTrans] - np.polyval(nodip_res['x'],bg_lc[nearTrans,0])) ** 2 / sigma2 + np.log(sigma2)))
 
             #BIC = 2*(neg_log_likelihood-log_prior) + log(n_points)*n_params 
-            nodip_res['bic']=(2*nodip_res['fun'] + np.log(len(bg_lc[:,1]))*len(nodip_res['x']))
+            nodip_res['bic']=(2*nodip_res['fun'] + np.log(len(bg_lc[nearTrans,1]))*len(nodip_res['x']))
             #print('no dip:',nodip_args,nodip_res,nodip_bic)
             if nodip_res['bic']<best_nodip_res['bic']:
                 best_nodip_res=nodip_res
@@ -1213,16 +1295,17 @@ def AsteroidCheck(lc,monoparams,interpmodel,ID,order=3,dur_region=3.5,plot=False
                                   np.log10(1.5*monoparams['tdur'])+abs(np.random.normal(0.0,0.5)),
                                   np.random.normal(0.0,0.5*monoparams['tdur'])],
                                   np.polyfit(bg_lc[outTransit&rand_choice,0],
-                                             bg_lc[outTransit&rand_choice,1],order)))
+                                             bg_lc[outTransit&rand_choice,1]-fft_bg_model[outTransit&rand_choice],
+                                             order)))
 
             dip_res=optim.minimize(Gaussian_neg_lnprob, dip_args,
-                                     args=(bg_lc[:,0],
-                                           bg_lc[:,1],
-                                           bg_lc[:,2],
+                                     args=(bg_lc[nearTrans,0],
+                                           bg_lc[nearTrans,1]-fft_bg_model[nearTrans],
+                                           bg_lc[nearTrans,2],
                                            priors,
                                            interpmodel,
                                            order),method=methods[n%3])
-            dip_res['bic']=(2*dip_res.fun + np.log(len(bg_lc[:,1]))*len(dip_args))
+            dip_res['bic']=(2*dip_res.fun + np.log(np.sum(nearTrans))*len(dip_args))
             
             #print('dip:',dip_args,dip_res,dip_bic)
             if dip_res['bic']<best_dip_res['bic']:
@@ -1238,11 +1321,26 @@ def AsteroidCheck(lc,monoparams,interpmodel,ID,order=3,dur_region=3.5,plot=False
                 break
             n+=1
             
+        fit_dict={'asteroid_dip_'+col:best_dip_res[col] for col in best_dip_res}
+        fit_dict.update({'asteroid_nodip_'+col:best_nodip_res[col] for col in best_nodip_res})
+            
         if (best_dip_res['fun']<1e30) and (best_nodip_res['fun']<1e30):
-            DeltaBIC=best_dip_res['bic']-best_nodip_res['bic']
+            fit_dict['asteroid_DeltaBIC']=best_dip_res['bic']-best_nodip_res['bic']
+            fit_dict['asteroid_log_llk_ratio']=(-1*best_dip_res['fun'])-(-1*best_nodip_res['fun'])
+            fit_dict['asteroid_ampl']=np.exp(best_dip_res['x'][0])
+            fit_dict['asteroid_dur']=np.exp(best_dip_res['x'][1])
+            best_model_resids = bg_lc[nearTrans&outTransit,1] - \
+                       (fft_bg_model[nearTrans&outTransit] + dipmodel_gaussian(best_dip_res['x'],bg_lc[nearTrans&outTransit,0]))
+            fit_dict['asteroid_bg_stdw']=np.nanmedian(abs(np.diff(best_model_resids)))
+            fit_dict['asteroid_bg_stdr']=np.nanstd(best_model_resids)
+            fit_dict['asteroid_snrw'] = fit_dict['asteroid_ampl'] / \
+                                       ( fit_dict['asteroid_bg_stdw'] / np.sqrt(fit_dict['asteroid_dur']/cad) )
+            fit_dict['asteroid_snrr'] = fit_dict['asteroid_ampl'] / \
+                                       ( fit_dict['asteroid_bg_stdr'] / np.sqrt(fit_dict['asteroid_dur']/cad) )
             #print(ID,"| Ran Asteroid fitting "+str(n)+" times, and DeltaBIC="+str(DeltaBIC),
             #      "| params:",best_dip_res['x'],best_nodip_res['x'])
-        
+        else:
+            print(lc['bg_flux'][nearTrans]-fft_bg_model[nearTrans])
         if plot:
             if plot_loc is not None and type(plot_loc)!=str:
                 ax = plot_loc
@@ -1253,10 +1351,14 @@ def AsteroidCheck(lc,monoparams,interpmodel,ID,order=3,dur_region=3.5,plot=False
                     plot_loc=str(ID)+"_asteroid_check.pdf"
                 elif plot_loc[-1]=='/':
                     plot_loc=plot_loc+str(ID)+"_asteroid_check.pdf"
-                print("Plotting asteroid",ID, np.sum(bg_lc[:,1]/bg_lc[:,1]==1.0),len(bg_lc[:,1]),plot_loc,best_nodip_res)
+                print("Plotting asteroid",ID, np.sum(bg_lc[nearTrans,1]/bg_lc[nearTrans,1]==1.0),
+                      len(bg_lc[nearTrans,1]),plot_loc,best_nodip_res)
             if plot:
                 #### PLOTTING ###
-                ax.scatter(bg_lc[:,0],bg_lc[:,1],s=2,alpha=0.75,rasterized=True)
+                ax.scatter(bg_lc[nearTrans,0],bg_lc[nearTrans,1],s=2,alpha=0.75,rasterized=True)
+                
+                ax.plot(bg_lc[nearTrans,0],np.nanmedian(bg_lc[nearTrans,1])+fft_bg_model[nearTrans],':k',
+                        alpha=0.2,linewidth=4,label='ft model of earthshine')
 
                 ax.plot([-0.5*monoparams['tdur'],-0.5*monoparams['tdur']],[-2.0,2.0],':k',alpha=0.6,rasterized=True)
                 ax.plot([0.0,0.0],[-2.0,2.0],'--k',linewidth=3,alpha=0.8,rasterized=True)
@@ -1264,36 +1366,49 @@ def AsteroidCheck(lc,monoparams,interpmodel,ID,order=3,dur_region=3.5,plot=False
                 ax.set_ylabel("Relative background flux")
 
                 if (best_nodip_res['fun']<1e30):
-                    ax.plot(bg_lc[:,0],
-                             np.polyval(best_nodip_res['x'],bg_lc[:,0]),c='C3',linewidth=2,
+                    ax.plot(bg_lc[nearTrans,0],fft_bg_model[nearTrans]+
+                             np.polyval(best_nodip_res['x'],bg_lc[nearTrans,0]),c='C3',linewidth=2,
                              label='pure trend',alpha=0.6,rasterized=True)
                 if (best_dip_res['fun']<1e30):
-                    ax.plot(bg_lc[:,0],
-                             dipmodel_gaussian(best_dip_res.x,bg_lc[:,0]),c='C4',linewidth=2,
+                    ax.plot(bg_lc[nearTrans,0],
+                             fft_bg_model[nearTrans]+dipmodel_gaussian(best_dip_res.x,bg_lc[nearTrans,0]),c='C4',linewidth=2,
                              label='trend+asteroid',alpha=0.6,rasterized=True)
                 try:
-                    ax.set_ylim(np.nanmin(bg_lc[:,1]),np.nanmax(bg_lc[:,1]))
+                    ax.set_ylim(np.nanmin(fft_bg_model[nearTrans]+bg_lc[nearTrans,1]),np.nanmax(fft_bg_model[nearTrans]+bg_lc[nearTrans,1]))
                 except:
                     b=0
                 #plt.ylim(np.percentile(bg_lc[inTransit,1],[0.2,99.8]))
                 ax.legend()
                 if (best_dip_res['fun']<1e30) and (best_nodip_res['fun']<1e30):
-                    ax.set_title(str(ID)+" Asteroid. - "+["pass","fail"][int(DeltaBIC<0)])
+                    ax.set_title(str(ID)+" Asteroid. - "+["pass","fail"][int(fit_dict['asteroid_DeltaBIC']<0)])
                 else:
                     ax.set_title(str(ID)+" Asteroid. No fit ???")
                 if type(plot_loc)==str:
                     fig.savefig(plot_loc, dpi=400)
-                return DeltaBIC, ax
-
-                return DeltaBIC, ax
+                if return_fit_lcs:
+                    return fit_dict, ax, np.column_stack((bg_lc[:,0],bg_lc[:,1],fft_bg_model,
+                                                         np.polyval(best_nodip_res['x'],bg_lc[:,0]),
+                                                         dipmodel_gaussian(best_dip_res.x,bg_lc[:,0])))
+                else:
+                    return fit_dict, ax
         elif (best_dip_res['fun']<1e30) and (best_nodip_res['fun']<1e30):
-            return DeltaBIC, None
+            if return_fit_lcs:
+                return fit_dict, None, None
+            else:
+                return fit_dict, None
         else:
-            return 0.0, None
+            if return_fit_lcs:
+                return None, None, None
+            else:
+                return None, None
     else:
-        return 0.0, None
+        if return_fit_lcs:
+            return None, None, None
+        else:
+            return None, None
 
-def VariabilityCheck(lc, params, ID, modeltype='both',plot=False,plot_loc=None,ndurs=2.4, polyorder=1, **kwargs):
+def VariabilityCheck(lc, params, ID, modeltype='all',plot=False,plot_loc=None,ndurs=2.4, 
+                     polyorder=1, return_fit_lcs=False, **kwargs):
     # Checking lightcure for variability flux boost during transit due to presence of bright asteroid
     # Performs two potential models:
     # - 1) 'sin': Variability sinusoid+polynomial model
@@ -1308,31 +1423,34 @@ def VariabilityCheck(lc, params, ID, modeltype='both',plot=False,plot_loc=None,n
     y = params['monofit_y'][round_trans]
     yerr = params['monofit_yerr'][round_trans]
     y_trans = params['monofit_ymodel'][round_trans]
-    
-    outTransit=abs(x)>0.7*params['tdur']
+    sigma2 = yerr ** 2
+    outTransit=abs(x)>0.6*params['tdur']
     yspan=np.diff(np.percentile(y,[5,95]))[0]
     priors={}
     best_mod_res={}
     mods=[]
-    if modeltype=='sin' or modeltype=='both':
+    if modeltype=='sin' or modeltype=='both' or modeltype=='all':
         priors['sin']= np.column_stack(([0.0,np.log(params['tdur']),np.log(yspan)],
-                                 [0.5*params['tdur'],3.0,4.0]))
+                                        [0.5*params['tdur'],3.0,4.0]))
         best_mod_res['sin']={'fun':1e30,'bic':1e9,'sin_llk':-1e9}
         mods+=['sin']
-    if modeltype=='step' or modeltype=='both':
+    if modeltype=='step' or modeltype=='both' or modeltype=='all':
         priors['step']= [0.0,0.5*params['tdur']]
         best_mod_res['step']={'fun':1e30,'bic':1e9,'sin_llk':-1e9,'npolys':[]}
         mods+=['step']
+    if modeltype=='poly' or modeltype=='both' or modeltype=='all':
+        best_mod_res['poly']={'fun':1e30,'bic':1e9,'sin_llk':-1e9,'npolys':[]}
+        mods+=['poly']
     if modeltype!='none':
         methods=['L-BFGS-B','Nelder-Mead','Powell']
         n=0
         while n<21:
             #Running the minimization 7 times with different initial params to make sure we get the best fit
 
-            rand_choice=np.random.random(len(x))<0.9
+            rand_choice=np.random.random(len(x))<0.925
             #non-dip is simple poly fit. Including 10% cut in points to add some randomness over n samples
             #log10(height), log10(dur), tcen
-            if modeltype=='sin' or modeltype=='both':
+            if modeltype=='sin' or modeltype=='both' or modeltype=='all':
                 mod_args= np.hstack(([np.random.normal(0.0,0.5*params['tdur']),
                                       np.log(params['tdur'])+np.random.normal(0.0,0.5)],
                                       np.log(params['depth'])+np.random.normal(0.0,0.5),
@@ -1350,7 +1468,7 @@ def VariabilityCheck(lc, params, ID, modeltype='both',plot=False,plot_loc=None,n
                 if mod_res_sin['bic']<best_mod_res['sin']['bic']:
                     best_mod_res['sin']=mod_res_sin
 
-            if modeltype=='step' or modeltype=='both':
+            if modeltype=='step' or modeltype=='both' or modeltype=='all':
                 points_either_side=False
                 #Making sure we start off with a position that has points both before and afer the step:
                 step_guess=np.random.normal(0.0,0.5*params['tdur'])
@@ -1380,8 +1498,19 @@ def VariabilityCheck(lc, params, ID, modeltype='both',plot=False,plot_loc=None,n
                 if mod_res_step['bic']<best_mod_res['step']['bic']:
                     best_mod_res['step']=mod_res_step
                     best_mod_res['step']['npolys']=npolys
+            if modeltype=='poly' or modeltype=='all':
+                priors['poly'] = 10.0 ** -np.arange(polyorder+1)[::-1]
+                mod_res_poly=optim.minimize(Poly_neg_lnprob, np.polyfit(x,y,polyorder),
+                                            args=(x,y,yerr,priors['poly'],polyorder),
+                                            method=methods[n%3])
+                mod_res_poly['bic']=(2*mod_res_poly.fun + np.log(len(x))*len(mod_res_poly.x))
+                mod_res_poly['llk']=-1*mod_res_poly.fun
 
-
+                #print('dip:',dip_args,dip_res,dip_bic)
+                if mod_res_poly['bic']<best_mod_res['poly']['bic']:
+                    best_mod_res['poly']=mod_res_poly
+                    best_mod_res['poly']['npolys']=npolys
+                
             #Increasing the polynomial order every odd number if we haven't yet found a good solution:
             if n>7 and n%2==1:
                 polyorder+=1
@@ -1393,14 +1522,27 @@ def VariabilityCheck(lc, params, ID, modeltype='both',plot=False,plot_loc=None,n
             n+=1
 
         best_mod_res['trans']={}
-        best_mod_res['trans']['llk']= -0.5 * np.sum((y - y_trans)**2 / yerr**2 + 2*np.log(yerr))
+        best_mod_res['trans']['llk']= -0.5 * np.sum((y - y_trans)**2 / sigma2 + np.log(sigma2))
+    
+        if 'sin' in best_mod_res and best_mod_res['sin']['bic']<1e9:
+            best_mod_res['sin']['llk_ratio']=log_likelihood_sinusoid(best_mod_res['sin']['x'], x, y, yerr) - best_mod_res['trans']['llk']
+            best_mod_res['sin']['DeltaBIC']=(8-len(best_mod_res['sin']['x'])) - (best_mod_res['trans']['llk'] - best_mod_res['sin']['llk'])
+        elif 'sin' in best_mod_res:
+            best_mod_res['sin']['DeltaBIC']=np.nan;best_mod_res['sin']['llk_ratio']=np.nan
+        if 'step' in best_mod_res and best_mod_res['step']['bic']<1e9:
+            best_mod_res['step']['llk_ratio']=log_likelihood_step(best_mod_res['step']['x'], x, y, yerr,best_mod_res['step']['npolys']) - best_mod_res['trans']['llk']
+            best_mod_res['step']['DeltaBIC']=(8-len(best_mod_res['step']['x'])) - (best_mod_res['trans']['llk'] - best_mod_res['step']['llk'])
+        elif 'step' in best_mod_res:
+            best_mod_res['step']['DeltaBIC']=np.nan;best_mod_res['step']['llk_ratio']=np.nan
+        if 'poly' in best_mod_res and best_mod_res['poly']['bic']<1e9:
+            best_mod_res['poly']['llk_ratio']=log_likelihood_poly(best_mod_res['poly']['x'], x, y, yerr) - best_mod_res['trans']['llk']
+            best_mod_res['poly']['DeltaBIC']=(8-len(best_mod_res['poly']['x'])) - (best_mod_res['trans']['llk'] - best_mod_res['poly']['llk'])
+        elif 'poly' in best_mod_res:
+            best_mod_res['poly']['DeltaBIC']=np.nan;best_mod_res['poly']['llk_ratio']=np.nan
 
-        if 'sin' in best_mod_res:
-            best_mod_res['sin']['llk_ratio']=best_mod_res['sin']['llk'] - best_mod_res['trans']['llk']
-        if 'step' in best_mod_res:
-            best_mod_res['step']['llk_ratio']=best_mod_res['step']['llk'] - best_mod_res['trans']['llk']
     else:
         best_mod_res={}
+    #print("Variability models:",best_mod_res)
     #print("sin:", best_mod_res['sin_llk'], "trans:", best_mod_res['trans_llk'], "llk_ratio:", best_mod_res['llk_ratio'])
     #print("plot:",plot,kwargs)
     if plot:
@@ -1432,9 +1574,11 @@ def VariabilityCheck(lc, params, ID, modeltype='both',plot=False,plot_loc=None,n
         if 'step' in best_mod_res and best_mod_res['step']['fun']<1e30:
             ax.plot(x[np.argsort(x)],dipmodel_step(best_mod_res['step']['x'],x[np.argsort(x)],best_mod_res['step']['npolys']),
                     c='C4',alpha=0.5,label='step model',linewidth=2.25,zorder=10,rasterized=True)
-        
-        ax.plot(x,y_trans,c='C2',label='transit',linewidth=3.0,alpha=0.5,zorder=11)
-        
+        if 'poly' in best_mod_res and best_mod_res['poly']['fun']<1e30:
+            ax.plot(x, np.polyval(best_mod_res['poly']['x'],x),
+                    c='C2',alpha=0.5,label='polynomial model',linewidth=2.25,zorder=2,rasterized=True)
+        ax.plot(x, y_trans, '--', c='C1', alpha=0.5, label='transit model', linewidth=2.25, zorder=2, rasterized=True)
+
         try:
             ax.set_ylim(np.nanmin(y),np.nanmax(y))
         except:
@@ -1442,19 +1586,32 @@ def VariabilityCheck(lc, params, ID, modeltype='both',plot=False,plot_loc=None,n
         #plt.ylim(np.percentile(bg_lc[inTransit,1],[0.2,99.8]))
         ax.legend()
         if len(best_mod_res.keys())>0 and np.all([best_mod_res[mod]['fun']<1e30 for mod in mods]):
-            ax.set_title(str(ID)+" Variability - "+["pass","fail"][int(np.any([best_mod_res[mod]['llk_ratio']>0 for mod in mods]))])
+            ax.set_title(str(ID)+" ' - "+["pass","fail"][int(np.any([best_mod_res[mod]['llk_ratio']>0 for mod in mods]))])
         else:
             ax.set_title(str(ID)+" Variability. Bad fits ???")
         if plot_loc is not None and type(plot_loc)==str:
             fig.savefig(plot_loc, dpi=400)
             print("Saved varble plot to",plot_loc)
-            return best_mod_res, plot_loc
+            if return_fit_lcs:
+                return best_mod_res, plot_loc, np.column_stack((x[np.argsort(x)],y,y_trans,
+                                                          dipmodel_sinusoid(best_mod_res['sin']['x'],x[np.argsort(x)]),
+                                  dipmodel_step(best_mod_res['step']['x'],x[np.argsort(x)],best_mod_res['step']['npolys']),
+                                                          np.polyval(best_mod_res['poly']['x'],x)))
+            else:
+                return best_mod_res, plot_loc
         else:
-            return best_mod_res, ax
+            if return_fit_lcs:
+                return best_mod_res, ax, np.column_stack((x[np.argsort(x)],y,y_trans,
+                                                          dipmodel_sinusoid(best_mod_res['sin']['x'],x[np.argsort(x)]),
+                                  dipmodel_step(best_mod_res['step']['x'],x[np.argsort(x)],best_mod_res['step']['npolys']),
+                                                          np.polyval(best_mod_res['poly']['x'],x)))
+            else:
+                return best_mod_res, ax
     elif np.all([best_mod_res[mod]['fun']<1e30 for mod in mods]):
-        return best_mod_res, None
+        
+        return best_mod_res, None, None
     else:
-        return None, None
+        return None, None, None
 
 def CheckInstrumentalNoise(lc,monodic,jd_base=None, **kwargs):
     '''# Using the processed "number of TCEs per cadence" array, we try to use this as a proxy for Instrumental noise in TESS
@@ -1501,7 +1658,7 @@ def GapCull(t0,t,dat,std_thresh=7,boolean=None,time_jump_thresh=0.4):
                 boolean*=(t<jump_time)
     return boolean
 
-def CentroidCheck(lc,monoparams,interpmodel,ID,order=2,dur_region=3.5, plot=True,plot_loc=None, **kwargs):
+def CentroidCheck(lc,monoparams,interpmodel,ID,order=2,dur_region=3.5, plot=True,plot_loc=None, return_fit_lcs=False, **kwargs):
     # Checking lightcure for centroid shift during transit.
     # Performing two model fits 
     # - one with a "dip" correlated to the transit combined with a polynomial trend
@@ -1564,51 +1721,58 @@ def CentroidCheck(lc,monoparams,interpmodel,ID,order=2,dur_region=3.5, plot=True
             xerr=np.std(x)
             x-=np.median(x)
             if len(x[inTransit])>0 and len(x[outTransit])>0:
-                xdep_guess=np.median(x[inTransit])-np.median(x[outTransit])
+                #Calculating candidate shift. Setting as ratio to depth
+                xdep_guess=(np.median(x[inTransit])-np.median(x[outTransit]))/monoparams['depth']
                 init_poly_x=np.polyfit(t[outTransit],x[outTransit],order)
             else:
                 xdep_guess=0.0
                 if len(x[inTransit])>0:
-                    init_poly_x=np.polyfit(t,x,order)
+                    init_poly_x=np.polyfit(t,x,np.clip(order-1,0,10))
                 else:
-                    init_poly_x=np.zeros(polyorder+1)
+                    init_poly_x=np.zeros(np.clip(order,1,11))
                 
             y-=np.median(y)
             yerr=np.std(y)
             if len(y[inTransit])>0 and len(y[outTransit])>0:
-                ydep_guess=np.median(y[inTransit])-np.median(y[outTransit])
+                #Calculating candidate shift. Setting as ratio to depth
+                ydep_guess=(np.median(y[inTransit])-np.median(y[outTransit]))/monoparams['depth']
                 init_poly_y=np.polyfit(t[outTransit],y[outTransit],order)
             else:
                 ydep_guess=0.0
                 if len(y[inTransit])>0:
-                    init_poly_y=np.polyfit(t,y,order)
+                    init_poly_y=np.polyfit(t,x,np.clip(order-1,0,10))
                 else:
-                    init_poly_y=np.zeros(polyorder+1)
+                    init_poly_y=np.zeros(np.clip(order,1,11))
         else:
-            return None, None
+            return None, None, None
         
-        priors= np.column_stack(([0,0],[abs(xerr)*5,abs(yerr)*5]))
-        
+        #Prior on centroid shifts such that values within 4sigma of 0.0 are enhanced.
+        n_sig = [4*xerr/np.sqrt(np.sum(inTransit)),4*yerr/np.sqrt(np.sum(inTransit))]
+        #priors= np.column_stack(([0,0],[n_sig[0]/monoparams['depth'],n_sig[1]/monoparams['depth']]))
+        priors = np.column_stack(([0,0],[xdep_guess,ydep_guess]))
+        poly_priors = 10.0 ** -np.arange(order+1)[::-1]
+
         best_nodip_res={'fun':1e30,'bic':1e6}
         best_dip_res={'fun':1e30,'bic':1e6}
         methods=['L-BFGS-B','Nelder-Mead','Powell']
         for n in range(7):
             #Doing simple polynomial fits for non-dips. Excluding 10% of data each time to add some randomness
             rand_choice=np.random.choice(len(x),int(0.9*len(x)),replace=False)
-            xfit=np.polyfit(t[rand_choice],x[rand_choice],order)
-            xsigma2=xerr**2
-            xlogprob=-0.5 * np.sum((x - np.polyval(xfit,t)) ** 2 / xsigma2 + np.log(xsigma2))
-            yfit=np.polyfit(t[rand_choice],y[rand_choice],order)
-            ysigma2=yerr**2
-            ylogprob=-0.5 * np.sum((y - np.polyval(yfit,t)) ** 2 / ysigma2 + np.log(ysigma2))
-            nodip_res={'fun':-1*(xlogprob+ylogprob)}
-            nodip_res['x']=[xfit,yfit]
-            nodip_res['bic']=2*nodip_res['fun'] + np.log(np.sum(roundTransit))*(len(xfit)+len(yfit))
+            xfit=optim.minimize(Poly_neg_lnprob, np.polyfit(t[rand_choice],x[rand_choice],order),
+                                        args=(t,x,xerr,poly_priors,
+                                        order),method=methods[n%3])
+            yfit=optim.minimize(Poly_neg_lnprob, np.polyfit(t[rand_choice],y[rand_choice],order),
+                                        args=(t,y,yerr,poly_priors,
+                                        order),method=methods[n%3])
+            nodip_res={'fun':yfit.fun+xfit.fun}
+            nodip_res['x']=[xfit.x,yfit.x]
+            nodip_res['bic']=2*nodip_res['fun'] + np.log(2*np.sum(roundTransit))*(len(xfit)+len(yfit))
+            nodip_res['llk']=-1*nodip_res['fun']
             if nodip_res['bic']<best_nodip_res['bic']:
                 best_nodip_res=nodip_res
 
-            dip_args= np.hstack(([np.random.normal(xdep_guess,abs(0.25*xdep_guess)),
-                                  np.random.normal(ydep_guess,abs(0.25*ydep_guess))],
+            dip_args= np.hstack((np.random.normal(xdep_guess,abs(0.25*xdep_guess)),
+                                 np.random.normal(ydep_guess,abs(0.25*ydep_guess)),
                                  init_poly_x,init_poly_y ))
 
             dip_res=optim.minimize(centroid_neg_lnprob, dip_args,
@@ -1616,14 +1780,33 @@ def CentroidCheck(lc,monoparams,interpmodel,ID,order=2,dur_region=3.5, plot=True
                                            priors,
                                            interpmodel,
                                            order),method=methods[n%3])
-
-            dip_res['bic']=2*dip_res.fun + np.log(np.sum(roundTransit))*len(dip_res['x'])
+            dip_res['llk']=-1*dip_res['fun']
+            dip_res['bic']=2*dip_res.fun + np.log(2*np.sum(roundTransit))*len(dip_res['x'])
             if dip_res['bic']<best_dip_res['bic']:
                 best_dip_res=dip_res
-
+            
         #Computing difference in Bayesian Information Criterium - DeltaBIC -  between "dip" and "no dip models"
-        DeltaBIC=best_dip_res['bic']-best_nodip_res['bic']
+        centinfo={}
+        centinfo['centroid_DeltaBIC']   = best_dip_res['bic'] - best_nodip_res['bic']
+        centinfo['centroid_llk_ratio']  = best_dip_res['fun'] - best_nodip_res['fun']
+        print(best_dip_res)
+        if 'x' in best_dip_res:
+            centinfo['x_centroid'] = best_dip_res['x'][0]*monoparams['depth']
+            centinfo['y_centroid'] = best_dip_res['x'][1]*monoparams['depth']
+            centinfo['x_centroid_SNR'] = np.sqrt(np.sum(inTransit))*abs(centinfo['x_centroid']) / \
+                                         np.nanmedian(1.06*abs(np.diff(x[outTransit])))
+            centinfo['y_centroid_SNR'] = np.sqrt(np.sum(inTransit))*abs(centinfo['y_centroid']) / \
+                                         np.nanmedian(1.06*abs(np.diff(y[outTransit])))
+        
+        #print("init_guesses:",xdep_guess,ydep_guess,"best_fits:",best_dip_res['x'][0],best_dip_res['x'][1])
         #print("with centroid:",best_dip_res,"| without:",best_nodip_res)
+        if 'x' in best_dip_res and return_fit_lcs:
+            arrs=np.column_stack((t,x,np.polyval(best_nodip_res['x'][0],t),
+                                 dipmodel_centroid(best_dip_res.x,t,interpmodel,order)[0],
+                                 y,np.polyval(best_nodip_res['x'][1],t),
+                                 dipmodel_centroid(best_dip_res.x,t,interpmodel,order)[1]))
+        else:
+            arrs=None
         if plot: 
             if plot_loc is not None and type(plot_loc)!=str:
                 ax = plot_loc
@@ -1663,7 +1846,7 @@ def CentroidCheck(lc,monoparams,interpmodel,ID,order=2,dur_region=3.5, plot=True
                         linewidth=2.25,alpha=0.6,label='trend+centroid - y',rasterized=True)
                 ax.legend()
 
-                ax.set_title(str(ID)+" Centroid  - "+["pass","fail"][int(DeltaBIC<2)])
+                ax.set_title(str(ID)+" Centroid  - "+["pass","fail"][int(centinfo['centroid_llk_ratio']<-6)])
             else:
                 ax.set_title(str(ID)+" Centroid  - No fit ???")
             
@@ -1674,11 +1857,11 @@ def CentroidCheck(lc,monoparams,interpmodel,ID,order=2,dur_region=3.5, plot=True
 
             if plot_loc is not None and type(plot_loc)==str:
                 fig.savefig(plot_loc, dpi=400)
-                return DeltaBIC, plot_loc
+                return centinfo, plot_loc, arrs
             else:
-                return DeltaBIC, ax
+                return centinfo, ax, arrs
         elif not plot:
-            return DeltaBIC, None
+            return centinfo, None,arrs
     else:
         return None, None
 
@@ -2266,7 +2449,7 @@ def CutAnomDiff(flux,thresh=4.2):
     return anoms
 
 
-def get_interpmodels(Rs,Ms,Teff,lc_time,lc_flux_unit,mission='tess',n_durs=3,texp=None):
+def get_interpmodels(Rs,Ms,Teff,lc_time,lc_flux_unit,mission='tess',n_durs=3,gap_thresh=2.0,texp=None):
     #Uses radius, mass and lightcurve duration to create fake transit models to use in monotransit search
 
     if texp is None:
@@ -2276,14 +2459,16 @@ def get_interpmodels(Rs,Ms,Teff,lc_time,lc_flux_unit,mission='tess',n_durs=3,tex
     
     #Computing monotransit minimum P from which to estimate durations:
     cadence=np.nanmedian(np.diff(lc_time))
-    jumps=np.hstack((0,np.where(np.diff(lc_time)>5.0)[0],len(lc_time)-1))
-    P_guess=np.clip(lc_time[jumps[1+np.argmax(np.diff(jumps))]]-lc_time[jumps[np.argmax(np.diff(jumps))]],5.0,250)
+    jumps=np.hstack((0,np.where(np.diff(lc_time)>gap_thresh)[0],len(lc_time)-1))
+    
+    #Using the maximum uninterupted patch of lightcurve as the period guess:
+    P_guess=np.clip(np.max(lc_time[jumps[1:]]-lc_time[jumps[:-1]]),5.0,250)
     
     #print(jumps,jumps[np.argmax(np.diff(jumps))],jumps[1+np.argmax(np.diff(jumps))],P_guess)
 
     # Orbit models - for every n_dur over 4, we add longer durations to check:
     per_steps=np.logspace(np.log10(0.4),np.log10(2.5+0.33*np.clip(n_durs-4,0.0,2.0)),n_durs)
-    b_steps=np.linspace(0.85,0,n_durs)
+    b_steps=np.linspace(0.88,0,n_durs)
     orbits = xo.orbits.KeplerianOrbit(r_star=Rs,m_star=Ms,period=P_guess*per_steps,t0=np.tile(0.0,n_durs),b=b_steps)
     
     vx, vy, vz = orbits.get_relative_velocity(0.0)
@@ -2303,13 +2488,17 @@ def get_interpmodels(Rs,Ms,Teff,lc_time,lc_flux_unit,mission='tess',n_durs=3,tex
     return interpmodels,tdurs
 
 
-def VetCand(pl_dic,pl,ID,lc,Rs=1.0,Ms=1.0,Teff=5800,
+def VetCand(pl_dic,pl,ID,lc,mission,Rs=1.0,Ms=1.0,Teff=5800,
             mono_SNR_thresh=6.5,mono_SNR_r_thresh=4.75,variable_llk_thresh=5,
-            plot=False,file_loc=None,vet_do_fit=True,**kwargs):
+            plot=False,file_loc=None,vet_do_fit=True,return_fit_lcs=False,**kwargs):
     #Best-fit model params for the mono transit:
     if pl_dic['orbit_flag']=='mono' and vet_do_fit:
+        #Making sure our lightcurve mask isn't artificially excluding in-transit points:
+        in_trans=abs(lc['time']-pl_dic['tcen'])<(0.6*pl_dic['tdur'])
+        lc['mask'][in_trans]=np.isfinite(lc['flux'][in_trans])&np.isfinite(lc['flux_err'][in_trans])
+        
         monoparams = QuickMonoFit(deepcopy(lc),pl_dic['tcen'],np.clip(pl_dic['tdur'],0.1,2.5),
-                                               Rs=Rs,Ms=Ms,Teff=Teff,how='mono')
+                                               Rs=Rs,Ms=Ms,Teff=Teff,how='mono',**kwargs)
         #if not bool(monoparams['model_success']):
         #    #Redoing without fitting the polynomial if the fit fails:
         #    monoparams = QuickMonoFit(deepcopy(lc),pl_dic['tcen'],pl_dic['tdur'],
@@ -2317,10 +2506,15 @@ def VetCand(pl_dic,pl,ID,lc,Rs=1.0,Ms=1.0,Teff=5800,
 
         #Keeping detection tcen/tdur:
         monoparams['init_tdur']=pl_dic['tdur']
-        monoparams['init_depth']=pl_dic['depth']
+        if 'depth' in pl_dic:
+            monoparams['init_depth']=pl_dic['depth']
         monoparams['orbit_flag']='mono'
         
     elif pl_dic['orbit_flag']=='periodic' and vet_do_fit:
+        #Making sure our lightcurve mask isn't artificially excluding in-transit points:
+        in_trans=abs((lc['time']-pl_dic['tcen']-0.5*pl_dic['period'])%pl_dic['period']-0.5*pl_dic['period'])<(0.6*pl_dic['tdur'])
+        lc['mask'][in_trans]=np.isfinite(lc['flux'][in_trans])
+
         monoparams = QuickMonoFit(deepcopy(lc),pl_dic['tcen'],
                                       pl_dic['tdur'], init_period=pl_dic['period'],how='periodic',
                                       Teff=Teff,Rs=Rs,Ms=Ms)
@@ -2346,86 +2540,101 @@ def VetCand(pl_dic,pl,ID,lc,Rs=1.0,Ms=1.0,Teff=5800,
     if vet_do_fit:
         pl_dic.update(monoparams)
     pl_dic['flag']='planet'
+    #Compares log likelihood of variability fit to that for transit model
+    #print("doing variability check")
+    if pl_dic['orbit_flag']=='mono':
+        #In the Mono case, we will fit both a sin and a step model:
+        outs=VariabilityCheck(deepcopy(lc), pl_dic, plot=plot,modeltype='all',return_fit_lcs=return_fit_lcs,
+                                        ID=str(ID).zfill(11)+'_'+pl, plot_loc=var_ax, **kwargs)
+    else:
+        #Only doing the sinusoidal model in the periodic case
+        outs=VariabilityCheck(deepcopy(lc), pl_dic, plot=plot,modeltype='sin',return_fit_lcs=return_fit_lcs,
+                                        ID=str(ID).zfill(11)+'_'+pl, plot_loc=var_ax, **kwargs)
+    varfits=outs[0]
+    varfig=outs[1]
+    
+    if return_fit_lcs:
+        print(return_fit_lcs,outs[2])
+        pl_dic["variability_vetting_models"]=outs[2]
+    for key1 in varfits:
+        for key2 in varfits[key1]:
+            #print(key1+"_"+key2,varfits[key1][key2],type(varfits[key1][key2]))
+            if (type(varfits[key1][key2])==float or type(varfits[key1][key2])==np.float64) and key1+"_"+key2 not in pl_dic:
+                pl_dic[key1+"_"+key2]=varfits[key1][key2]
+
     if pl_dic['snr']<mono_SNR_thresh or pl_dic['snr_r']<(mono_SNR_r_thresh):
         pl_dic['flag']='lowSNR'
-        if plot:
-            #Using modeltype='none' simply plots the transit without doing models:
-            _,_=VariabilityCheck(deepcopy(lc), pl_dic, plot=plot,modeltype='none',
-                                 ID=str(ID).zfill(11)+'_'+pl, plot_loc=var_ax, **kwargs)
-        cent_ax.set_title("Centroids not checked - low-SNR")
-        print(pl,"lowSNR, SNR=",pl_dic['snr'],"SNR_r=",pl_dic['snr_r'],"depth:",pl_dic['depth'],"fit:",pl_dic["model_success"])
-    elif pl_dic['b']>0.98 and pl_dic['snr']<(mono_SNR_thresh+2):
-        pl_dic['flag']='lowSNR/V-shaped'
-        if plot:
-            #Using modeltype='none' simply plots the transit without doing models:
-            _,_=VariabilityCheck(deepcopy(lc), pl_dic, plot=plot,modeltype='none',
-                                 ID=str(ID).zfill(11)+'_'+pl, plot_loc=var_ax, **kwargs)
-        cent_ax.set_title("Centroids not checked - V-shaped")
-        print(pl,"lowSNR, SNR=",pl_dic['snr'],"SNR_r=",pl_dic['snr_r'],"b=",pl_dic['b'])
-    else:
-
-        #Compares log likelihood of variability fit to that for transit model
-        #print("doing variability check")
-        if pl_dic['orbit_flag']=='mono':
-            #In the Mono case, we will fit both a sin and a step model:
-            varfits,varfig=VariabilityCheck(deepcopy(lc), pl_dic, plot=plot,modeltype='both',
-                                            ID=str(ID).zfill(11)+'_'+pl, plot_loc=var_ax, **kwargs)
-            pl_dic['stepLogLik']=varfits['step']['llk_ratio']
-            if pl_dic['stepLogLik']>variable_llk_thresh:
-                pl_dic['flag']='step'
-                print(pl,"step. LogLik=",pl_dic['stepLogLik'])
-
-        else:
-            #Only doing the sinusoidal model in the periodic case
-            varfits,varfig=VariabilityCheck(deepcopy(lc), pl_dic, plot=plot,modeltype='sin',
-                                            ID=str(ID).zfill(11)+'_'+pl, plot_loc=var_ax, **kwargs)
+    elif 'step_llk_ratio' in pl_dic and pl_dic['step_llk_ratio']>variable_llk_thresh:
+        pl_dic['flag']='step'
+        print(pl,"step. LogLik=",pl_dic['step_llk_ratio'])
+    elif pl_dic['sin_llk_ratio']>variable_llk_thresh:
         #print("Vetted after variability:",pl_dic['snr'],pl_dic['snr_r'],
         #      pl_dic['depth'],pl_dic['stepLogLik'],variable_llk_thresh,varfits['sin']['llk_ratio'])
         #print(pl_dic['flag']) if 'flag' in pl_dic else ''
-        pl_dic['variableLogLik']=varfits['sin']['llk_ratio']
-
         #>1 means variability fits the data ~2.7 times better than a transit.
-        if pl_dic['variableLogLik']>variable_llk_thresh:
-            pl_dic['flag']='variability'
-            print(pl,"variability. LogLik=",pl_dic['variableLogLik'])
-        if pl_dic['orbit_flag']=='mono':
-            #Checks to see if dip is due to background asteroid and if that's a better fit than the transit model:
-            pl_dic['asteroidDeltaBIC'], astfig=AsteroidCheck(deepcopy(lc), pl_dic, 
-                                                                   pl_dic['interpmodel'], plot=plot,
-                                                                   ID=str(ID).zfill(11)+'_'+pl, 
-                                                                   plot_loc=ast_ax, **kwargs)
-            if pl_dic['asteroidDeltaBIC'] is not None and pl_dic['asteroidDeltaBIC']<pl_dic['poly_DeltaBIC']:
-                pl_dic['flag']='asteroid'
-                print(pl,"asteroid. DeltaBic=",pl_dic['asteroidDeltaBIC'])
+        pl_dic['flag']='variability'
+        print(pl,"variability. LogLik=",pl_dic['sin_llk_ratio'])
+        
+    if pl_dic['orbit_flag']=='mono' and mission.lower()!='k2':
+        #Checks to see if dip is due to background asteroid and if that's a better fit than the transit model:
+        outs=AsteroidCheck(deepcopy(lc), pl_dic, pl_dic['interpmodel'], plot=plot,
+                           return_fit_lcs=return_fit_lcs,ID=str(ID).zfill(11)+'_'+pl, 
+                                                               plot_loc=ast_ax, **kwargs)
+        if outs[0] is not None:
+            for col in outs[0]:
+                if 'steroid' in col and type(outs[0][col]) in [str,int,float,np.float64]:
+                    pl_dic[col] = outs[0][col]
+        else:
+            pl_dic['asteroid_DeltaBIC']=0.0
+            pl_dic['asteroid_snrw']=0.0
+            pl_dic['asteroid_snrr']=0.0
+            
+        astfig=outs[1]
+        if return_fit_lcs:
+            print(return_fit_lcs,outs[2])
+            pl_dic["asteroid_model"]=outs[2]
+        if pl_dic['asteroid_DeltaBIC'] is not None and pl_dic['asteroid_DeltaBIC']<pl_dic['poly_DeltaBIC'] and pl_dic['asteroid_snrr']>pl_dic['snr']:
+            pl_dic['flag']='asteroid'
+            print(pl,"asteroid. DeltaBic=",pl_dic['asteroid_DeltaBIC'])
+    #Checks to see if dip is combined with centroid
+    outs = CentroidCheck(deepcopy(lc), pl_dic, pl_dic['interpmodel'], plot=plot,
+                                                        return_fit_lcs=return_fit_lcs,ID=str(ID).zfill(11)+'_'+pl,
+                                                        plot_loc=cent_ax, **kwargs)
 
-        #Checks to see if dip is combined with centroid
-        pl_dic['centroidDeltaBIC'],centfig = CentroidCheck(deepcopy(lc), pl_dic, pl_dic['interpmodel'], plot=plot,
-                                                       ID=str(ID).zfill(11)+'_'+pl, plot_loc=cent_ax, **kwargs)
-        if pl_dic['centroidDeltaBIC'] is not None and pl_dic['centroidDeltaBIC']<-10:
-            pl_dic['flag']='EB'
-            print(pl,"EB - centroid. DeltaBic=",pl_dic['centroidDeltaBIC'])
+    if outs is None or outs[0] is None:
+        pl_dic['centroid_llk_ratio']=None
+    else:
+        for col in outs[0]:
+            pl_dic[col]=outs[0][col]
+        centfig=outs[1]
+        if return_fit_lcs:
+            print(return_fit_lcs,outs[2])
+            pl_dic['centroid_models']=outs[2]
+    if pl_dic['centroid_llk_ratio'] is not None and pl_dic['centroid_llk_ratio']<-6:
+        pl_dic['flag']='EB'
+        print(pl,"EB - centroid. log lik ratio=",pl_dic['centroid_llk_ratio'])
 
-        pl_dic['instrumental_snr_ratio']=CheckInstrumentalNoise(deepcopy(lc),pl_dic)
-        if pl_dic['snr']>mono_SNR_thresh and pl_dic['instrumental_snr_ratio']<(mono_SNR_thresh*0.66):
-            pl_dic['flag']='instrumental'
-            print(pl,"planet SNR / instrumental SNR =",pl_dic['instrumental_snr_ratio'])
+    pl_dic['instrumental_snr_ratio']=CheckInstrumentalNoise(deepcopy(lc),pl_dic)
+    if pl_dic['snr']>mono_SNR_thresh and pl_dic['instrumental_snr_ratio']<(mono_SNR_thresh*0.66):
+        pl_dic['flag']='instrumental'
+        print(pl,"planet SNR / instrumental SNR =",pl_dic['instrumental_snr_ratio'])
 
-        '''if pl_dic['flag'] in ['asteroid','EB','instrumental']:
-            monos.remove(pl)'''
-        if pl_dic['orbit_flag']=='mono':
-            print(str(pl)+" - Checks complete.",
-                  " SNR:",str(pl_dic['snr'])[:8],
-                  " SNR_r:",str(pl_dic['snr_r'])[:8],
-                  " variability:",str(pl_dic['variableLogLik'])[:8],
-                  " centroid:",str(pl_dic['centroidDeltaBIC'])[:8],
-                  "| flag:",pl_dic['flag'])
-        elif pl_dic['orbit_flag']=='periodic':
-            print(pl,"Checks complete.",
-                  " SNR:",str(pl_dic['snr'])[:8],
-                  " SNR_r:",str(pl_dic['snr_r'])[:8],
-                  " variability:",str(pl_dic['variableLogLik'])[:8],
-                  " centroid:",str(pl_dic['centroidDeltaBIC'])[:8],
-                  "| flag:",pl_dic['flag'])
+    '''if pl_dic['flag'] in ['asteroid','EB','instrumental']:
+        monos.remove(pl)'''
+    if pl_dic['orbit_flag']=='mono':
+        print(str(pl)+" - Checks complete.",
+              " SNR:",str(pl_dic['snr'])[:8],
+              " SNR_r:",str(pl_dic['snr_r'])[:8],
+              " variability:",str(pl_dic['sin_llk_ratio'])[:8],
+              " centroid:",str(pl_dic['centroid_llk_ratio'])[:8],
+              "| flag:",pl_dic['flag'])
+    elif pl_dic['orbit_flag']=='periodic':
+        print(pl,"Checks complete.",
+              " SNR:",str(pl_dic['snr'])[:8],
+              " SNR_r:",str(pl_dic['snr_r'])[:8],
+              " variability:",str(pl_dic['sin_llk_ratio'])[:8],
+              " centroid:",str(pl_dic['centroid_llk_ratio'])[:8],
+              "| flag:",pl_dic['flag'])
 
     if 'flag' not in pl_dic:
         pl_dic['flag']='planet'
@@ -2491,22 +2700,16 @@ def MonoVetting(ID, mission, tcen=None, tdur=None, overwrite=None, do_search=Tru
             overwrites['model_plots']=True
         print(overwrite,overwrites)
         
-    if file_loc is None:
-        #Creating a ID directory in the current directory for the planet fits/docs
-        file_loc=MonoData_savepath+'/'+tools.id_dic[mission]+str(ID).zfill(11)
-    elif file_loc[-1]=='/':
-        #If we're given a directory, we'll create a ID directory in there for the planet fits/docs
-        file_loc=file_loc+tools.id_dic[mission]+str(ID).zfill(11)
-    #print(file_loc,kwargs)
-    kwargs['file_loc']=file_loc
+    ID_string=tools.id_dic[mission]+str(ID).zfill(11)
+    kwargs['file_loc']=MonoData_savepath+'/'+ID_string if file_loc is not None else file_loc
     
     if 'mono_SNR_thresh' not in kwargs:
         kwargs['mono_SNR_thresh']=6.5
     if 'mono_SNR_r_thresh' not in kwargs:
         kwargs['mono_SNR_r_thresh']=4.75
     
-    if not os.path.isdir(file_loc):
-        os.system('mkdir '+file_loc)
+    if not os.path.isdir(MonoData_savepath+'/'+ID_string):
+        os.system('mkdir '+MonoData_savepath+'/'+ID_string)
         '''#Special set-up for Theano to compile directly in this directory
         if 'compiledir' not in os.environ["THEANO_FLAGS"]:
             if not os.path.exists(os.path.join(file_loc,".theano_compile_dir")):
@@ -2528,15 +2731,15 @@ def MonoVetting(ID, mission, tcen=None, tdur=None, overwrite=None, do_search=Tru
         
         radec=SkyCoord(float(coords.split(',')[0])*u.deg,float(coords.split(',')[1])*u.deg) if coords is not None else None
         #loading Rstar,Tess, logg and rho from csvs:
-        if not os.path.isfile(file_loc+"/"+file_loc.split('/')[-1]+'_starpars.csv') or overwrites['starpars']:
+        if not os.path.isfile(MonoData_savepath+'/'+ID_string+"/"+ID_string+'_starpars.csv') or overwrites['starpars']:
             from . import starpars
             #from .stellar import starpars
             #Gets stellar info
             info,_,_=starpars.getStellarInfoFromCsv(ID,mission,radec=radec)
-            info.to_csv(file_loc+"/"+file_loc.split('/')[-1]+'_starpars.csv')
+            info.to_csv(MonoData_savepath+'/'+ID_string+"/"+ID_string+'_starpars.csv')
         else:
-            print("loading from ",file_loc+"/"+file_loc.split('/')[-1]+'_starpars.csv')
-            info=pd.read_csv(file_loc+"/"+file_loc.split('/')[-1]+'_starpars.csv', index_col=0, header=0).T.iloc[0]
+            print("loading from ",MonoData_savepath+'/'+ID_string+"/"+ID_string+'_starpars.csv')
+            info=pd.read_csv(MonoData_savepath+'/'+ID_string+"/"+ID_string+'_starpars.csv', index_col=0, header=0).T.iloc[0]
         if 'ra' in info.index and radec is None:
             radec=SkyCoord(float(info['ra'])*u.deg,float(info['dec'])*u.deg)
         Rstar=[float(info['rad']),float(info['eneg_rad']),float(info['epos_rad'])]
@@ -2558,31 +2761,31 @@ def MonoVetting(ID, mission, tcen=None, tdur=None, overwrite=None, do_search=Tru
         radec=None
         
     #opening lightcurve:
-    if not os.path.isfile(file_loc+"/"+file_loc.split('/')[-1]+'_lc.pickle') or overwrites['lc']:
+    if not os.path.isfile(MonoData_savepath+'/'+ID_string+"/"+ID_string+'_lc.pickle') or overwrites['lc']:
         #Gets Lightcurve
         lc,hdr=tools.openLightCurve(ID,mission,coor=radec,use_ppt=False,**kwargs)
-        pickle.dump(lc,open(file_loc+"/"+file_loc.split('/')[-1]+'_lc.pickle','wb'))
+        pickle.dump(lc,open(MonoData_savepath+'/'+ID_string+"/"+ID_string+'_lc.pickle','wb'))
         #lc=lcFlatten(lc,winsize=9*tdur,stepsize=0.1*tdur)
     else:
-        lc=pickle.load(open(file_loc+"/"+file_loc.split('/')[-1]+'_lc.pickle','rb'))
+        lc=pickle.load(open(MonoData_savepath+'/'+ID_string+"/"+ID_string+'_lc.pickle','rb'))
     
     #####################################
     #  DOING MONOTRANSIT PLANET SEARCH:
     #####################################
-    if not os.path.isfile(file_loc+"/"+file_loc.split('/')[-1]+'_monos.pickle') or overwrites['monos']:
-        if do_search and (not os.path.exists(file_loc+"/"+file_loc.split('/')[-1]+'_monos.pickle') or overwrites['monos']):
+    if not os.path.isfile(MonoData_savepath+'/'+ID_string+"/"+ID_string+'_monos.pickle') or overwrites['monos']:
+        if do_search and (not os.path.exists(MonoData_savepath+'/'+ID_string+"/"+ID_string+'_monos.pickle') or overwrites['monos']):
             #Doing search if we dont have a mono pickle file or we want to overwrite one:
             both_dic, monosearchparams, monofig = MonoTransitSearch(deepcopy(lc),ID,mission,
                                                                     Rs=Rstar[0],Ms=Ms,Teff=Teff[0],
-                                                                    plot_loc=file_loc+"/", plot=plot, **kwargs)
-            pickle.dump(monosearchparams,open(file_loc+"/"+file_loc.split('/')[-1]+'_monosearchpars.pickle','wb'))
+                                                                    plot_loc=MonoData_savepath+'/'+ID_string+"/", plot=plot, **kwargs)
+            pickle.dump(monosearchparams,open(MonoData_savepath+'/'+ID_string+"/"+ID_string+'_monosearchpars.pickle','wb'))
             
             if plot:
                 figs['mono']=monofig
-        elif os.path.exists(file_loc+"/"+file_loc.split('/')[-1]+'_monos.pickle'):
-            both_dic=pickle.load(open(file_loc+"/"+file_loc.split('/')[-1]+'_monos.pickle','rb'))
-            if plot and os.path.isfile(file_loc+"/"+str(ID).zfill(11)+'_Monotransit_Search.pdf'):
-                figs['mono']= file_loc+"/"+str(ID).zfill(11)+'_Monotransit_Search.pdf'
+        elif os.path.exists(MonoData_savepath+'/'+ID_string+"/"+ID_string+'_monos.pickle'):
+            both_dic=pickle.load(open(MonoData_savepath+'/'+ID_string+"/"+ID_string+'_monos.pickle','rb'))
+            if plot and os.path.isfile(MonoData_savepath+'/'+ID_string+"/"+ID_string+'_Monotransit_Search.pdf'):
+                figs['mono']= MonoData_savepath+'/'+ID_string+"/"+ID_string+'_Monotransit_Search.pdf'
         elif tcen is not None and tdur is not None:
             intr=lc['mask']&(abs(lc['time']-tcen)<0.45*tdur)
             outtr=lc['mask']&(abs(lc['time']-tcen)<1.25*tdur)&(~intr)
@@ -2598,17 +2801,17 @@ def MonoVetting(ID, mission, tcen=None, tdur=None, overwrite=None, do_search=Tru
         for pl in both_dic:
             if len(both_dic)>0:
                 #Best-fit model params for the mono transit:
-                pl_dic, vet_fig = VetCand(both_dic[pl],pl,ID,lc,Rs=Rstar[0],Ms=Ms,Teff=Teff[0],
+                pl_dic, vet_fig = VetCand(both_dic[pl],pl,ID,lc,mission,Rs=Rstar[0],Ms=Ms,Teff=Teff[0],
                                           variable_llk_thresh=variable_llk_thresh,plot=plot,
                                           vet_do_fit=True,**kwargs)
                 if plot:
                     figs[pl]=vet_fig
-        pickle.dump(both_dic,open(file_loc+"/"+file_loc.split('/')[-1]+'_monos.pickle','wb'))
+        pickle.dump(both_dic,open(MonoData_savepath+'/'+ID_string+"/"+ID_string+'_monos.pickle','wb'))
 
     else:
-        both_dic=pickle.load(open(file_loc+"/"+file_loc.split('/')[-1]+'_monos.pickle','rb'))
-        if plot and os.path.isfile(file_loc+"/"+str(ID).zfill(11)+'_Monotransit_Search.pdf'):
-            figs['mono'] = file_loc+"/"+str(ID).zfill(11)+'_Monotransit_Search.pdf'
+        both_dic=pickle.load(open(MonoData_savepath+'/'+ID_string+"/"+ID_string+'_monos.pickle','rb'))
+        if plot and os.path.isfile(MonoData_savepath+'/'+ID_string+"/"+ID_string+'_Monotransit_Search.pdf'):
+            figs['mono'] = MonoData_savepath+'/'+ID_string+"/"+ID_string+'_Monotransit_Search.pdf'
     
     #print("monos:",{pl:{'tcen':mono_dic[pl]['tcen'],'depth':mono_dic[pl]['depth']} for pl in mono_dic})
 
@@ -2616,16 +2819,17 @@ def MonoVetting(ID, mission, tcen=None, tdur=None, overwrite=None, do_search=Tru
     ###################################
     #   DOING PERIODIC PLANET SEARCH:
     ###################################
-    if not os.path.isfile(file_loc+"/"+file_loc.split('/')[-1]+'_multis.pickle') or overwrites['multis']:
-        if do_search and (not os.path.exists(file_loc+"/"+file_loc.split('/')[-1]+'_multis.pickle') or overwrites['multis']):
-            both_dic, perfig = PeriodicPlanetSearch(deepcopy(lc),ID,deepcopy(both_dic),plot_loc=file_loc+"/",plot=plot,
+    if not os.path.isfile(MonoData_savepath+'/'+ID_string+"/"+ID_string+'_multis.pickle') or overwrites['multis']:
+        if do_search and (not os.path.exists(MonoData_savepath+'/'+ID_string+"/"+ID_string+'_multis.pickle') or overwrites['multis']):
+            both_dic, perfig = PeriodicPlanetSearch(deepcopy(lc),ID,deepcopy(both_dic),
+                                                    plot_loc=MonoData_savepath+'/'+ID_string+"/",plot=plot,
                                                     rhostar=rhostar[0], Mstar=Ms, Rstar=Rstar[0], Teff=Teff[0], **kwargs)
             if plot:
                 figs['multi']=perfig
-        elif os.path.exists(file_loc+"/"+file_loc.split('/')[-1]+'_monos.pickle'):
-            both_dic=pickle.load(open(file_loc+"/"+file_loc.split('/')[-1]+'_multis.pickle','rb'))
-            if plot and os.path.isfile(file_loc+"/"+str(ID).zfill(11)+'_multi_search.pdf'):
-                figs['multi']= file_loc+"/"+str(ID).zfill(11)+'_multi_search.pdf'
+        elif os.path.exists(MonoData_savepath+'/'+ID_string+"/"+ID_string+'_multis.pickle'):
+            both_dic=pickle.load(open(MonoData_savepath+'/'+ID_string+"/"+ID_string+'_multis.pickle','rb'))
+            if plot and os.path.isfile(MonoData_savepath+'/'+ID_string+"/"+ID_string+'_multi_search.pdf'):
+                figs['multi']= MonoData_savepath+'/'+ID_string+"/"+ID_string+'_multi_search.pdf'
         else:
             raise InputError("Must either specify do_search or include tdur and tcen")
         ###################################
@@ -2633,21 +2837,21 @@ def MonoVetting(ID, mission, tcen=None, tdur=None, overwrite=None, do_search=Tru
         ###################################
         if np.sum([both_dic[pl]['orbit_flag']=='periodic' for pl in both_dic])>0:
             for pl in [pl for pl in both_dic if both_dic[pl]['orbit_flag']=='periodic']:
-                pl_dic, pl_fig = VetCand(both_dic[pl],pl,ID,lc,Rs=Rstar[0],Ms=Ms,Teff=Teff[0],
+                pl_dic, pl_fig = VetCand(both_dic[pl],pl,ID,lc,mission,Rs=Rstar[0],Ms=Ms,Teff=Teff[0],
                                          variable_llk_thresh=variable_llk_thresh,plot=plot,**kwargs)
                 if plot:
                     figs[pl]=pl_fig
-        pickle.dump(both_dic,open(file_loc+"/"+file_loc.split('/')[-1]+'_multis.pickle','wb'))
+        pickle.dump(both_dic,open(MonoData_savepath+'/'+ID_string+"/"+ID_string+'_multis.pickle','wb'))
     else:
-        both_dic=pickle.load(open(file_loc+"/"+file_loc.split('/')[-1]+'_multis.pickle','rb'))
-        if plot and os.path.isfile(file_loc+"/"+str(ID).zfill(11)+'_multi_search.pdf'):
-            figs['multi']= file_loc+"/"+str(ID).zfill(11)+'_multi_search.pdf'
+        both_dic=pickle.load(open(MonoData_savepath+'/'+ID_string+"/"+ID_string+'_multis.pickle','rb'))
+        if plot and os.path.isfile(MonoData_savepath+'/'+ID_string+"/"+ID_string+'_multi_search.pdf'):
+            figs['multi']= MonoData_savepath+'/'+ID_string+"/"+ID_string+'_multi_search.pdf'
     
     #######################################
     #  IDENTIFYING CONFUSED CANDIDATES:
     #######################################
     if len(both_dic)>0:
-        if not os.path.isfile(file_loc+"/"+file_loc.split('/')[-1]+'_allpls.pickle') or overwrites['vet']:
+        if not os.path.isfile(MonoData_savepath+'/'+ID_string+"/"+ID_string+'_allpls.pickle') or overwrites['vet']:
             #Loading candidates from file:
             # Removing any monos or multis which are confused (e.g. a mono which is in fact in a multi)
             both_dic,monos,multis = CheckPeriodConfusedPlanets(deepcopy(lc), deepcopy(both_dic), mono_multi=False)
@@ -2677,16 +2881,16 @@ def MonoVetting(ID, mission, tcen=None, tdur=None, overwrite=None, do_search=Tru
                     if 'rp_rs' in both_dic[pl] and (both_dic[pl]['rp_rs']>PL_ror_thresh or Rs[0]*both_dic[pl]['rp_rs']>PL_ror_thresh):
                         #Likely EB
                         both_dic[pl]['flag']='EB'
-            pickle.dump(both_dic,open(file_loc+"/"+file_loc.split('/')[-1]+'_allpls.pickle','wb'))
-        elif os.path.isfile(file_loc+"/"+file_loc.split('/')[-1]+'_allpls.pickle'):
+            pickle.dump(both_dic,open(MonoData_savepath+'/'+ID_string+"/"+ID_string+'_allpls.pickle','wb'))
+        elif os.path.isfile(MonoData_savepath+'/'+ID_string+"/"+ID_string+'_allpls.pickle'):
             #Loading candidates from file:
-            both_dic = pickle.load(open(file_loc+"/"+file_loc.split('/')[-1]+'_allpls.pickle','rb'))
+            both_dic = pickle.load(open(MonoData_savepath+'/'+ID_string+"/"+ID_string+'_allpls.pickle','rb'))
         monos=[pl for pl in both_dic if both_dic[pl]['orbit_flag']=='mono']
         duos=[pl for pl in both_dic if both_dic[pl]['orbit_flag']=='duo']
         multis=[pl for pl in both_dic if both_dic[pl]['orbit_flag']=='periodic']
         if plot:
             for obj in both_dic:
-                initname=file_loc+"/"+str(ID).zfill(11)+'_'+obj
+                initname=MonoData_savepath+'/'+ID_string+"/"+ID_string+'_'+obj
                 if os.path.exists(initname+'_variability_check.pdf'):
                     figs[obj]=initname+'_variability_check.pdf'
                 elif os.path.exists(initname+'_vetting.pdf'):
@@ -2733,7 +2937,7 @@ def MonoVetting(ID, mission, tcen=None, tdur=None, overwrite=None, do_search=Tru
         if plot:
             #Chcking if values in df are different:
             new_df=True
-            if not os.path.exists(file_loc+"/"+file_loc.split('/')[-1]+'_candidates.csv') or np.any([overwrites[col] for col in overwrites]):
+            if not os.path.exists(MonoData_savepath+'/'+ID_string+"/"+ID_string+'_candidates.csv') or np.any([overwrites[col] for col in overwrites]):
                 # Making table a plot for PDF:
                 fig=plt.figure(figsize=(11.69,2+0.5*len(both_dic)))
                 ax=fig.add_subplot(111)
@@ -2753,12 +2957,12 @@ def MonoVetting(ID, mission, tcen=None, tdur=None, overwrite=None, do_search=Tru
                 tab.auto_set_column_width(col=range(len(cols))) # Provide integer list of columns to adjust
 
                 fig.tight_layout()
-                fig.savefig(file_loc+"/"+str(ID).zfill(11)+'_table.pdf')
-                figs['tab']=file_loc+"/"+str(ID).zfill(11)+'_table.pdf'
+                fig.savefig(MonoData_savepath+'/'+ID_string+"/"+ID_string+'_table.pdf')
+                figs['tab']=MonoData_savepath+'/'+ID_string+"/"+ID_string+'_table.pdf'
             else:
-                figs['tab']=file_loc+"/"+str(ID).zfill(11)+'_table.pdf'
-        if not os.path.isfile(file_loc+"/"+file_loc.split('/')[-1]+'_candidates.csv') or overwrites['vet']:
-            df.to_csv(file_loc+"/"+file_loc.split('/')[-1]+'_candidates.csv')
+                figs['tab']=MonoData_savepath+'/'+ID_string+"/"+ID_string+'_table.pdf'
+        if not os.path.isfile(MonoData_savepath+'/'+ID_string+"/"+ID_string+'_candidates.csv') or overwrites['vet']:
+            df.to_csv(MonoData_savepath+'/'+ID_string+"/"+ID_string+'_candidates.csv')
         #all_cands_df.to_csv("all_cands.csv")
         
         '''
@@ -2788,12 +2992,13 @@ def MonoVetting(ID, mission, tcen=None, tdur=None, overwrite=None, do_search=Tru
             # PLANET MODELLING:
             print({pl:{'tcen':both_dic[pl]['tcen'],'depth':both_dic[pl]['depth'],'period':both_dic[pl]['period'],'orbit_flag':both_dic[pl]['orbit_flag'],'flag':both_dic[pl]['flag']} for pl in both_dic})
             print("Planets to model:",[obj for obj in both_dic if both_dic[obj]['flag']=='planet'])
-            if len(glob.glob(file_loc+"/"+file_loc.split('/')[-1]+'*_model.pickle'))==0 or overwrites['fit']:
+            if len(glob.glob(MonoData_savepath+'/'+ID_string+"/"+ID_string+'*_model.pickle'))==0 or overwrites['fit']:
                 
                 if mission=='kepler' and cutDistance not in kwargs and bin_oot not in kwargs:
-                    mod=fit.monoModel(ID, mission, lc, {}, savefileloc=file_loc+'/',cutDistance=2.0,bin_oot=False)
+                    mod=fit.monoModel(ID, mission, lc, {}, savefileloc=MonoData_savepath+'/'+ID_string+"/",
+                                      cutDistance=2.0,bin_oot=False)
                 else:
-                    mod=fit.monoModel(ID, mission, lc, {}, savefileloc=file_loc+'/')
+                    mod=fit.monoModel(ID, mission, lc, {}, savefileloc=MonoData_savepath+'/'+ID_string+"/")
                 #If not, we have a planet.
                 #Checking if monoplanet is single, double-with-gap, or periodic.
                 multis=[]
@@ -2818,11 +3023,11 @@ def MonoVetting(ID, mission, tcen=None, tdur=None, overwrite=None, do_search=Tru
                             mod.add_duo(deepcopy(both_dic[obj]),obj)
                 mod.init_starpars(Rstar=Rstar,rhostar=rhostar,Teff=Teff,logg=logg)
                 mod.SaveModelToFile()
-                #pickle.dump(mod,open(file_loc+"/"+file_loc.split('/')[-1]+'_model.pickle','wb'))
+                #pickle.dump(mod,open(MonoData_savepath+'/'+ID_string+"/"+ID_string+'_model.pickle','wb'))
                 mod.init_model(useL2=useL2,FeH=FeH,**kwargs)
                 mod.SaveModelToFile()
-                #pickle.dump(mod,open(file_loc+"/"+file_loc.split('/')[-1]+'_model.pickle','wb'))
-            elif len(glob.glob(file_loc+"/"+file_loc.split('/')[-1]+'*_model.pickle'))>0:
+                #pickle.dump(mod,open(MonoData_savepath+'/'+ID_string+"/"+ID_string+'_model.pickle','wb'))
+            elif len(glob.glob(MonoData_savepath+'/'+ID_string+"/"+ID_string+'*_model.pickle'))>0:
                 print("#Loading model from file")
                 mod = fit.monoModel(ID, mission, LoadFromFile=True)
             else:
@@ -2831,29 +3036,29 @@ def MonoVetting(ID, mission, tcen=None, tdur=None, overwrite=None, do_search=Tru
                 print("Running MCMC")
                 mod.RunMcmc(**kwargs)
                 mod.SaveModelToFile()
-                #pickle.dump(mod,open(file_loc+"/"+file_loc.split('/')[-1]+'_model.pickle','wb'))
+                #pickle.dump(mod,open(MonoData_savepath+'/'+ID_string+"/"+ID_string+'_model.pickle','wb'))
 
             if mod is not None and plot:
                 print("Gathering plots, overwrite:",overwrites['model_plots'])
                 #Gathering plots if they exist:
-                if not os.path.exists(file_loc+"/"+str(ID).zfill(11)+'_model_plot.pdf') or overwrites['model_plots']:
-                    mod.Plot(n_samp=1,plot_loc=file_loc+"/"+str(ID).zfill(11)+'_model_plot.pdf',interactive=False)
+                if not os.path.exists(MonoData_savepath+'/'+ID_string+"/"+ID_string+'_model_plot.pdf') or overwrites['model_plots']:
+                    mod.Plot(n_samp=1,plot_loc=MonoData_savepath+'/'+ID_string+"/"+ID_string+'_model_plot.pdf',interactive=False)
                     mod.SaveModelToFile()
-                    #pickle.dump(mod,open(file_loc+"/"+file_loc.split('/')[-1]+'_model.pickle','wb'))
-                figs['mcmc_mod']=file_loc+"/"+str(ID).zfill(11)+'_model_plot.pdf'
-                if not os.path.exists(file_loc+"/"+str(ID).zfill(11)+'_model_plot.html') or overwrites['model_plots']:
-                    mod.Plot(n_samp=1,plot_loc=file_loc+"/"+str(ID).zfill(11)+'_model_plot.html',interactive=True)
+                    #pickle.dump(mod,open(MonoData_savepath+'/'+ID_string+"/"+ID_string+'_model.pickle','wb'))
+                figs['mcmc_mod']=MonoData_savepath+'/'+ID_string+"/"+ID_string+'_model_plot.pdf'
+                if not os.path.exists(MonoData_savepath+'/'+ID_string+"/"+ID_string+'_model_plot.html') or overwrites['model_plots']:
+                    mod.Plot(n_samp=1,plot_loc=MonoData_savepath+'/'+ID_string+"/"+ID_string+'_model_plot.html',interactive=True)
                     mod.SaveModelToFile()
-                    #pickle.dump(mod,open(file_loc+"/"+file_loc.split('/')[-1]+'_model.pickle','wb'))
+                    #pickle.dump(mod,open(MonoData_savepath+'/'+ID_string+"/"+ID_string+'_model.pickle','wb'))
                 if hasattr(mod, 'trace'):
-                    if not os.path.exists(file_loc+"/"+str(ID).zfill(11)+'_model_periods.pdf') or overwrites['model_plots']:
-                        mod.PlotPeriods(plot_loc=file_loc+"/"+str(ID).zfill(11)+'_model_periods.pdf')
-                    figs['mcmc_pers']=file_loc+"/"+str(ID).zfill(11)+'_model_periods.pdf'
-                    if not os.path.exists(file_loc+"/"+str(ID).zfill(11)+'_model_table.pdf') or overwrites['model_plots']: 
-                        mod.PlotTable(plot_loc=file_loc+"/"+str(ID).zfill(11)+'_model_table.pdf')
-                    figs['mcmc_tab']=file_loc+"/"+str(ID).zfill(11)+'_model_table.pdf'
+                    if not os.path.exists(MonoData_savepath+'/'+ID_string+"/"+ID_string+'_model_periods.pdf') or overwrites['model_plots']:
+                        mod.PlotPeriods(plot_loc=MonoData_savepath+'/'+ID_string+"/"+ID_string+'_model_periods.pdf')
+                    figs['mcmc_pers']=MonoData_savepath+'/'+ID_string+"/"+ID_string+'_model_periods.pdf'
+                    if not os.path.exists(MonoData_savepath+'/'+ID_string+"/"+ID_string+'_model_table.pdf') or overwrites['model_plots']: 
+                        mod.PlotTable(plot_loc=MonoData_savepath+'/'+ID_string+"/"+ID_string+'_model_table.pdf')
+                    figs['mcmc_tab']=MonoData_savepath+'/'+ID_string+"/"+ID_string+'_model_table.pdf'
                     mod.SaveModelToFile()
-                    #pickle.dump(mod,open(file_loc+"/"+file_loc.split('/')[-1]+'_model.pickle','wb'))
+                    #pickle.dump(mod,open(MonoData_savepath+'/'+ID_string+"/"+ID_string+'_model.pickle','wb'))
 
         else:
             #NO EB OR PC candidates - likely low-SNR or FP.
@@ -2874,7 +3079,7 @@ def MonoVetting(ID, mission, tcen=None, tdur=None, overwrite=None, do_search=Tru
         for figname in figs:
             #print(figname,type(figs[figname]))
             output.addPage(PdfFileReader(open(figs[figname], "rb")).getPage(0))
-        outputStream = open(file_loc+"/"+file_loc.split('/')[-1]+'_report.pdf', "wb")
+        outputStream = open(MonoData_savepath+'/'+ID_string+"/"+ID_string+'_report.pdf', "wb")
         output.write(outputStream)
         outputStream.close()
 

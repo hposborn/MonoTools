@@ -874,18 +874,19 @@ def starpars(icid,mission,errboost=0.1,radec=None,return_best=True,
         while isoclass_dens_is_NaN and n_kw_to_remove<=len(order_of_kw_to_remove):
             kwars={order_of_kw_to_remove[nkw]:(True if nkw>=n_kw_to_remove else False) for nkw in range(len(order_of_kw_to_remove))}
             #print(n_kw_to_remove,'/',len(order_of_kw_to_remove),kwars)
-            #try:
-            if 1==1:
+            try:
                 isoclass_df, paras = Assemble_and_run_isoclassify(icid,coor,mission,survey_dat,exofop_dat,
                                                    errboost=errboost*(1+0.33*n_kw_to_remove),spec_dat=spec_dat,**kwars)
                 #print(isoclass_df[['rho_gcm3','rho_gcm3ep','rho_gcm3em']])
                 isoclass_dens_is_NaN=(np.isnan(isoclass_df[['rho_gcm3','rho_gcm3ep','rho_gcm3em']]).any())|(isoclass_df[['rho_gcm3','rho_gcm3ep','rho_gcm3em']]==0.0).all()
-            #except Exception as e:
-            #    exc_type, exc_obj, exc_tb = sys.exc_info()
-            #    print(exc_type, exc_tb.tb_lineno)
-            #    isoclass_df,paras=None,None
+            except Exception as e:
+                exc_type, exc_obj, exc_tb = sys.exc_info()
+                print(exc_type, exc_tb.tb_lineno)
+                isoclass_df,paras=None,None
                 #print(n_kw_to_remove,'|',isoclass_df)
             n_kw_to_remove+=1
+        if isoclass_df is None:
+            return None
         #Assessing which available data source is the *best* using lowest density error
     else:
         survey_dat=None
@@ -1016,25 +1017,21 @@ def IsoClass(icid,mission,coor,ic_info=None,return_best=True,errboost=0.05,
     while isoclass_dens_is_NaN and n_kw_to_remove<=len(order_of_kw_to_remove):
         kwars={order_of_kw_to_remove[nkw]:(True if nkw>=n_kw_to_remove else False) for nkw in range(len(order_of_kw_to_remove))}
         #print(n_kw_to_remove,'/',len(order_of_kw_to_remove),kwars)
-        #try:
-        if 1==1:
+        try:
             isoclass_df, paras = Assemble_and_run_isoclassify(icid,coor,mission,survey_dat,ic_info,
                                                errboost=errboost*(1+0.33*n_kw_to_remove),spec_dat=spec_dat,**kwars)
             #print(isoclass_df[['rho_gcm3','rho_gcm3ep','rho_gcm3em']])
             isoclass_dens_is_NaN=(np.isnan(isoclass_df[['rho_gcm3','rho_gcm3ep','rho_gcm3em']]).any())|(isoclass_df[['rho_gcm3','rho_gcm3ep','rho_gcm3em']]==0.0).all()
-        #except Exception as e:
-        #    exc_type, exc_obj, exc_tb = sys.exc_info()
-        #    print(exc_type, exc_tb.tb_lineno)
-        #    isoclass_df,paras=None,None
+        except Exception as e:
+            exc_type, exc_obj, exc_tb = sys.exc_info()
+            print(exc_type, exc_tb.tb_lineno)
+            isoclass_df,paras=None,None
             #print(n_kw_to_remove,'|',isoclass_df)
         n_kw_to_remove+=1
     #Assessing which available data source is the *best* using lowest density error
     
-    if isoclass_df is not None:
-        isoclass_err_rho=(0.5*(abs(isoclass_df['rho_gcm3ep'])+abs(isoclass_df['rho_gcm3em'])))/isoclass_df['rho_gcm3']
-    else:
-        isoclass_err_rho=100
-
+    if isoclass_df is None:
+        return None
     #selecting the best stellar parameter source from input cat vs isoclassify
     #Generated Density better constrained by isoclassify:
     col_names=['teff','teffep','teffem','logg','loggep','loggem','lum','lumep','lumem',
@@ -1122,7 +1119,8 @@ def MainSequenceFit(dist,V):
     #Loading fits of absolute V mag versus
     fits=pickle.load(open(os.path.join(MonoData_tablepath,"BolMag_interpolations.models"),"rb"))
     
-    M_V = V - 5*np.log(dist/10)
+    M_V = V - 5*np.log10(dist) + 5
+    print(V,dist,M_V)
     info={'rad':fits[0](M_V),'mass':fits[1](M_V),'teff':fits[2](M_V)}
     info['eneg_rad']=0.5*info['rad']
     info['epos_rad']=0.5*info['rad']
@@ -1137,7 +1135,7 @@ def RenameSeries(info):
         #Switching out capitals:
         if 'd' in info.index:
             info=info.rename(index={'d':'dist'})
-        for col in ['teff','rad','mass','dist','logg','rho']:
+        for col in ['teff','rad','mass','dist','logg','rho','lum']:
             captd=col[0].upper()+col[1:]
             if captd in info.index:
                 info=info.rename(index={captd:col})
@@ -1287,7 +1285,6 @@ def getStellarInfoFromCsv(ID,mission,radec=None,k2tab=None,keptabs=None,use_isoc
                 if len(info)!=0:
                     info=info[0].to_pandas().iloc[0]
                     info['mission']='Kepler'
-
                     info=info.rename(index={'KIC':'ID','Gaia':'GAIA',
                                              'Dist':'dist','E_Dist':'epos_dist','e_Dist':'eneg_dist',
                                              'R_':'rad','E_R_':'epos_Rad', 'e_R_':'eneg_Rad',
@@ -1357,7 +1354,8 @@ def getStellarInfoFromCsv(ID,mission,radec=None,k2tab=None,keptabs=None,use_isoc
                 #info['e_rad']=0.5*(abs(info['eneg_rad'])+abs(info['epos_rad']))
                 #info['e_mass']=0.5*(abs(info['eneg_mass'])+abs(info['epos_mass']))
                 #info['e_logg']=0.5*(abs(info['eneg_logg'])+abs(info['epos_logg']))
-                if not np.isnan(info['GAIA']):
+                print(info['GAIA'])
+                if not np.isnan(info['GAIA']) and radec is None:
                     gaiainfo=[]
                     #DR2:
                     gaiainfo=Gaia.launch_job_async("SELECT * \
@@ -1410,7 +1408,7 @@ def getStellarInfoFromCsv(ID,mission,radec=None,k2tab=None,keptabs=None,use_isoc
         if 'rad' not in info.index and use_isochrones==1:
             try:
                 print("#Using Isoclassify to attempt to get star parameters:")
-                Rstar, rhos, Teff, logg, src = getStellarInfo(ID,info,mission,radec=radec)
+                Rstar, rhos, Teff, logg, src = getStellarInfo(ID, info, mission, radec=radec)
                 info['rad']=Rstar[0]
                 info['eneg_rad']=Rstar[1]
                 info['epos_rad']=Rstar[2]
@@ -1426,18 +1424,11 @@ def getStellarInfoFromCsv(ID,mission,radec=None,k2tab=None,keptabs=None,use_isoc
                 info['source']='IsoClassify'
             except:
                 print("getStellarInfo fails")
-
-        if 'rad' not in info.index or np.isnan(info['rad']) or info['rad'] is None:
-            if 'dist' in info.index:
-                nm=0;nomag=True
-                mags=['Vmag','V','GAIAmag','kepmag','Tmag']
-                while nomag:
-                    if mags[nm] in info.index:
-                        msinfo=MainSequenceFit(info[mags[nm]],info['dist'])
-                        for col in msinfo:
-                            info[col]=msinfo[col]
-                            info['source']='MS_Fit'
-                        nomag=False
+        
+        if 'teff' not in info.index and 'rad' in info.index and 'lum' in info.index:
+            info['teff']=5800*(info['lum']/info['rad']**2)**(1/4)
+            info['epos_teff']=5800*((info['lum']+info['epos_lum'])/(info['rad']-info['eneg_rad'])**2)**(1/4)-info['teff']
+            info['eneg_teff']=info['teff'] - 5800*((info['lum']-info['eneg_lum'])/(info['rad']+info['epos_rad'])**2)**(1/4)
 
         if 'mass' not in info.index:
             #Problem here - need mass. Derive from Teff and Rs, plus Dist vs. mag?
@@ -1456,15 +1447,28 @@ def getStellarInfoFromCsv(ID,mission,radec=None,k2tab=None,keptabs=None,use_isoc
                 info['eneg_logg']=np.nan
                 info['epos_logg']=np.nan
         
-        if ('logg' not in info or np.isnan(info['logg'])) and ('mass' not in info or np.isnan(info['mass'])) and ('rho' not in info or np.isnan(info['rho'])):
-            #Problem here - not enough info for rho... Doing IsoClassify to get that info:
-            isoinfo = IsoClass(ID,mission,radec)
-            #Overwriting current info with isoclassify outputs:
-            for col in info.keys():
-                info[col] =  isoinfo[col] if col in isoinfo.keys() and not pd.isnull(isoinfo[col]) else info[col]
-            for col in isoinfo.keys():
-                info[col]=isoinfo[col]
-        
+        if ('logg' not in info or np.isnan(info['logg'])) and ('mass' not in info or np.isnan(info['mass'])):
+            if 'dist' in info.index and not np.isnan(info['dist']):
+                #Radius and distance - gives us a rough mass through bolometric luminosity
+                nm=0;nomag=True
+                mags=['Vmag','V','GAIAmag','kepmag','Tmag']
+                while nomag:
+                    if mags[nm] in info.index:
+                        msinfo=MainSequenceFit(info['dist'],info[mags[nm]])
+                        for col in msinfo:
+                            if col not in info or pd.isnull(info[col]):
+                                info[col]=msinfo[col]
+                        info['source']='MS_Fit'
+                        nomag=False
+            else:
+                #Problem here - not enough info for rho... Doing IsoClassify to get that info:
+                isoinfo = IsoClass(ID,mission,radec)
+                #Overwriting current info with isoclassify outputs:
+                for col in info.keys():
+                    info[col] =  isoinfo[col] if col in isoinfo.keys() and not pd.isnull(isoinfo[col]) else info[col]
+                for col in isoinfo.keys():
+                    info[col]=isoinfo[col]
+
         #Problem here - need rho. Derive from Teff and Rs, plus Dist vs. mag?
         allrhos={}
         if 'mass' in info.index and 'rad' in info.index:
