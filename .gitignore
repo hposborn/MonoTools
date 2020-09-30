@@ -1,10 +1,10 @@
 *.h5
 __pycache__/
 .ipynb_checkpoints/
-data/EPIC*
+data/EPIC*/*.pickle
 data/CorotLCs
-data/TIC*
-data/KIC*
+data/TIC*/*.pickle
+data/KIC*/*.pickle
 stellar/isoclassify/mesa.h5
 .DS_Store
 for_hugh.ipynb
