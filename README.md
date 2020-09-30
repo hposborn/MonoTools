@@ -1,4 +1,4 @@
-# MonoTools: A package for planets of uncertain period
+# MonoTools: A python package for planets of uncertain period
 
 MonoTools is a package specific to the detection, vetting and modelling of transiting exoplanets, with a specific emphasis on Monotransiting planets, and those with unknown periods.
 
