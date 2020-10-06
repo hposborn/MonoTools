@@ -209,8 +209,9 @@ class monoModel():
         # split_gap_size = Duration at which to cut the lightcurve and compute in loops
         # n_steps_per_dur = number of steps with which to cut up each duration. Odd numbers work most uniformly
         
-        if not hasattr(self.lc,'flux_flat'):
-            self.lc=tools.lcFlatten(self.lc,winsize=tdur*9,stepsize=tdur/n_steps_per_dur)
+        if not hasattr(self.lc,'flux_flat') or len(self.lc['flux_flat'])!=len(self.lc['flux_err']):
+            self.lc = tools.lcFlatten(self.lc, winsize=tdur*9, 
+                                      stepsize=tdur/n_steps_per_dur)
         
         rms_series=np.zeros((len(self.lc['time'])))
         binsize=(1/n_steps_per_dur)*tdur
@@ -221,15 +222,19 @@ class monoModel():
         rms_series_sh=[]
         bins=[]
         for sh_time in loop_blocks:
-            bins+=[np.arange(np.nanmin(self.lc['time'][sh_time])-tdur,np.nanmax(self.lc['time'][sh_time])+tdur+binsize,binsize)]
-            rms_series_sh=[]
-            for b in bins[-1]:
-                ix=abs(b-self.lc['time'])<(0.5*tdur)
-                ix[ix]=self.lc['mask'][ix]
+            thesebins=np.arange(np.nanmin(self.lc['time'][sh_time])-tdur,
+                                np.nanmax(self.lc['time'][sh_time])+tdur+binsize, binsize)
+            theserms=np.zeros_like(thesebins)
+            for n,b in enumerate(thesebins):
+                ix=(abs(b-self.lc['time'][sh_time])<(0.5*tdur))*self.lc['mask'][sh_time]
                 if np.sum(ix)>1:
-                    rms_series_sh+=[tools.weighted_avg_and_std(self.lc['flux_flat'][ix],self.lc['flux_err'][ix])[1]]
+                    theserms[n]=tools.weighted_avg_and_std(self.lc['flux_flat'][sh_time][ix],
+                                                           self.lc['flux_err'][sh_time][ix])[1]
                 else:
-                    rms_series_sh+=[np.nan]
+                    theserms[n]=np.nan
+            bins+=[thesebins]
+            rms_series_sh+=[np.array(theserms)]
+
             '''
             lc_segment=np.column_stack((self.lc['time'][sh_time],self.lc['flux_flat'][sh_time],
                                         self.lc['flux_err'][sh_time],self.lc['mask'][sh_time].astype(int)))
@@ -247,7 +252,7 @@ class monoModel():
             rms_series_sh[digis==-1]=1000.
             rms_series[sh_time] = np.sqrt(np.sum(rms_series_sh**2,axis=0))
             '''
-        return np.column_stack((np.hstack(bins),np.array(rms_series_sh)))
+        return np.column_stack((np.hstack(bins),np.hstack(rms_series_sh)))
 
     def compute_period_gaps(self,tcen,tdur,depth,max_per=8000,SNR_thresh=4):
         # Given the time array, the t0 of transit, and the fact that another transit is not observed, 
