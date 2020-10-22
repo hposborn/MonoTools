@@ -1835,21 +1835,24 @@ def CentroidCheck(lc,monoparams,interpmodel,ID,order=2,dur_region=3.5, plot=True
             ax.plot([0.0,0.0],[-2.0,2.0],'--k',linewidth=3,alpha=0.8,rasterized=True)
             ax.plot([0.5*monoparams['tdur'],0.5*monoparams['tdur']],[-2.0,2.0],':k',alpha=0.6,rasterized=True)
             ax.set_ylabel("Relative centroid [px]")
-            if best_dip_res['fun']<1e29 and best_nodip_res['fun']<1e29 and len(best_nodip_res['x'])==2:
-                ax.plot(t,np.polyval(best_nodip_res['x'][0],t),'--',c='C3',linewidth=2.25,alpha=0.6,
-                        label='pure trend - x',rasterized=True)
-                ax.plot(t,np.polyval(best_nodip_res['x'][1],t),'--',c='C4',linewidth=2.25,alpha=0.6,
-                        label='pure trend - y',rasterized=True)
-                ax.plot(t,dipmodel_centroid(best_dip_res.x,t,interpmodel,order)[0],c='C3',
-                        linewidth=2.25,alpha=0.6,label='trend+centroid - x',rasterized=True)
-                ax.plot(t,dipmodel_centroid(best_dip_res.x,t,interpmodel,order)[1],c='C4',
-                        linewidth=2.25,alpha=0.6,label='trend+centroid - y',rasterized=True)
-                ax.legend()
+            try:
+                if best_dip_res['fun']<1e29 and best_nodip_res['fun']<1e29 and len(best_nodip_res['x'])==2:
+                    ax.plot(t,np.polyval(best_nodip_res['x'][0],t),'--',c='C3',linewidth=2.25,alpha=0.6,
+                            label='pure trend - x',rasterized=True)
+                    ax.plot(t,np.polyval(best_nodip_res['x'][1],t),'--',c='C4',linewidth=2.25,alpha=0.6,
+                            label='pure trend - y',rasterized=True)
+                    ax.plot(t,dipmodel_centroid(best_dip_res.x,t,interpmodel,order)[0],c='C3',
+                            linewidth=2.25,alpha=0.6,label='trend+centroid - x',rasterized=True)
+                    ax.plot(t,dipmodel_centroid(best_dip_res.x,t,interpmodel,order)[1],c='C4',
+                            linewidth=2.25,alpha=0.6,label='trend+centroid - y',rasterized=True)
+                    ax.legend()
 
-                ax.set_title(str(ID)+" Centroid  - "+["pass","fail"][int(centinfo['centroid_llk_ratio']<-6)])
-            else:
+                    ax.set_title(str(ID)+" Centroid  - "+["pass","fail"][int(centinfo['centroid_llk_ratio']<-6)])
+                else:
+                    ax.set_title(str(ID)+" Centroid  - No fit ???")
+            except:
                 ax.set_title(str(ID)+" Centroid  - No fit ???")
-            
+
             xlim=np.percentile(x,[0.2,99.8])
             ylim=np.percentile(y,[0.2,99.8])
             ax.set_ylim(np.min([xlim[0],ylim[0]]),np.max([xlim[1],ylim[1]]))
@@ -2019,8 +2022,13 @@ def CheckMonoPairs(lc_time, all_pls,prox_thresh=3.5, **kwargs):
                     Npts_in_tr=np.sum(abs(phase)<0.35*newm1['tdur'])
                     check_pers_ix[nper]=Npts_in_tr<1.075*Npts_from_known_transits #Less than 15% of another eclipse is covered
                 newm1['period_aliases']=check_pers[check_pers_ix]
-                P_mins=check_pers[check_pers_ix]
-                newm1['P_min']=P_mins if type(P_mins)==float else np.min(P_mins)
+                if len(newm1['period_aliases'])>1:
+                    newm1['P_min'] = newm1['period_aliases'] if type(newm1['period_aliases'])==float else np.min(newm1['period_aliases'])
+                elif len(newm1['period_aliases'])==1:
+                    newm1['P_min'] = newm1['period_aliases'][0]
+                else:
+                    newm1['P_min'] = 999
+
                 print("period aliases:",newm1['period_aliases'],"P_min:",newm1['P_min'])
                 all_pls[m1]=newm1
                 all_pls[m2]['orbit_flag']='FP - Confusion with '+m1
@@ -2650,7 +2658,7 @@ def VetCand(pl_dic,pl,ID,lc,mission,Rs=1.0,Ms=1.0,Teff=5800,
     else:
         return pl_dic, None
 
-def MonoVetting(ID, mission, tcen=None, tdur=None, overwrite=None, do_search=True, do_fit=False, coords=None,
+def MonoVetting(ID, mission, tcen=None, tdur=None, overwrite=None, do_search=True, do_fit=False, coords=None, lc=None,
                 useL2=False,PL_ror_thresh=0.2,variable_llk_thresh=5,file_loc=None, plot=True, **kwargs):
     '''#Here we're going to initialise the Monotransit fitting by searching for other planets/transits/secondaries and filtering out binaries.
     INPUTS:
@@ -2761,13 +2769,14 @@ def MonoVetting(ID, mission, tcen=None, tdur=None, overwrite=None, do_search=Tru
         radec=None
         
     #opening lightcurve:
-    if not os.path.isfile(MonoData_savepath+'/'+ID_string+"/"+ID_string+'_lc.pickle') or overwrites['lc']:
-        #Gets Lightcurve
-        lc,hdr=tools.openLightCurve(ID,mission,coor=radec,use_ppt=False,**kwargs)
-        pickle.dump(lc,open(MonoData_savepath+'/'+ID_string+"/"+ID_string+'_lc.pickle','wb'))
-        #lc=lcFlatten(lc,winsize=9*tdur,stepsize=0.1*tdur)
-    else:
-        lc=pickle.load(open(MonoData_savepath+'/'+ID_string+"/"+ID_string+'_lc.pickle','rb'))
+    if lc is None:
+        if not os.path.isfile(MonoData_savepath+'/'+ID_string+"/"+ID_string+'_lc.pickle') or overwrites['lc']:
+            #Gets Lightcurve
+            lc,hdr=tools.openLightCurve(ID,mission,coor=radec,use_ppt=False,**kwargs)
+            pickle.dump(lc,open(MonoData_savepath+'/'+ID_string+"/"+ID_string+'_lc.pickle','wb'))
+            #lc=lcFlatten(lc,winsize=9*tdur,stepsize=0.1*tdur)
+        else:
+            lc=pickle.load(open(MonoData_savepath+'/'+ID_string+"/"+ID_string+'_lc.pickle','rb'))
     
     #####################################
     #  DOING MONOTRANSIT PLANET SEARCH:

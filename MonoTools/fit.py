@@ -183,6 +183,37 @@ class monoModel():
         if name in self.duos:
             _=self.duos.remove(name)
 
+    def add_planet(self, pltype, pl_dic, name):
+        # A flexible input function to the model, which is able to fill in gaps.
+        # pl_dic needs: depth, tdur, tcen, period (if multi), tcen_2 (if duo)
+        #Making sure we have the necessary info:
+        if 'log_ror' not in pl_dic:
+            if 'ror' in pl_dic:
+                pl_dic['log_ror']=np.log(pl_dic['ror'])
+            elif 'depth' in pl_dic:
+                pl_dic['ror']=pl_dic['depth']**0.5
+                pl_dic['log_ror']=np.log(pl_dic['ror'])
+        if 'ror' not in pl_dic:
+            pl_dic['ror']=np.exp(pl_dic['log_ror'])
+        
+        if 'r_pl' not in pl_dic and hasattr(self,'Rstar'):
+            pl_dic['r_pl']=pl_dic['ror']*self.Rstar[0]*11.2
+        
+        #Adding dict as planet:
+        if pltype=='multi':
+            self.add_multi(pl_dic, name)
+        else:
+            if 'period_err' not in pl_dic:
+                pl_dic['period_err']=999
+            if pltype=='duo':
+                if 'period' not in pl_dic:
+                    pl_dic['period']=abs(pl_dic['tcen_2']-pl_dic['tcen'])
+                self.add_duo(pl_dic, name)
+            elif pltype=='mono':
+                if 'period' not in pl_dic:
+                    pl_dic['period']=999
+                self.add_mono(pl_dic, name)
+
     def add_multi(self, pl_dic, name):
         assert name not in self.planets
         #Adds planet with multiple eclipses
@@ -201,6 +232,13 @@ class monoModel():
                                             -5/3*(p_gaps[:,1]**(-5/3)-p_gaps[:,0]**(-5/3))))
         pl_dic['per_gaps'][:,-1]/=np.sum(pl_dic['per_gaps'][:,-1])
         pl_dic['P_min']=p_gaps[0,0]
+        
+        if 'log_ror' not in pl_dic:
+            if 'ror' in pl_dic:
+                pl_dic['log_ror']=np.log(pl_dic['ror'])
+            elif 'depth' in pl_dic:
+                pl_dic['ror']=pl_dic['depth']**0.5
+                pl_dic['log_ror']=np.log(pl_dic['ror'])
         self.planets[name]=pl_dic
         self.monos+=[name]
         
@@ -316,8 +354,11 @@ class monoModel():
         check_pers_ix = self.CheckPeriodsHaveGaps(duo['period']/check_pers_ints,duo['tdur'],duo['tcen'],tcen_2=duo['tcen_2'])
         
         duo['period_int_aliases']=check_pers_ints[check_pers_ix]
-        duo['period_aliases']=duo['period']/duo['period_int_aliases']
-        duo['P_min']=np.min(duo['period_aliases'])
+        if duo['period_int_aliases']==[]:
+            print("problem")
+        else:
+            duo['period_aliases']=duo['period']/duo['period_int_aliases']
+            duo['P_min']=np.min(duo['period_aliases'])
         return duo
     
     def add_duo(self, pl_dic,name):
@@ -1967,7 +2008,7 @@ class monoModel():
         masks=[]
     
     def Plot(self, interactive=False, n_samp=None, overwrite=False,return_fig=False, max_gp_len=20000,
-             bin_gp=True, plot_loc=None, palette=None, pointcol="k"):
+             bin_gp=True, plot_loc=None, palette=None, pointcol="k", plottype='png'):
         ################################################################
         #       Varied plotting function for MonoTransit model
         ################################################################
@@ -2668,20 +2709,26 @@ class monoModel():
                 lastcol+=[f_trans[r]]
             p = gridplot([cols+[column(lastcol)]])
             save(p)
+            print("interactive table at:",savename)
+            
             if return_fig:
                 return p
             
         else:
-            if plot_loc is None:
+            if plot_loc is None and plottype=='png':
                 plt.savefig(self.savenames[0]+'_model_plot.png',dpi=350,transparent=True)
                 #plt.savefig(self.savenames[0]+'_model_plot.pdf')
+            elif plot_loc is None and plottype=='pdf':
+                plt.savefig(self.savenames[0]+'_model_plot.pdf')
             else:
                 plt.savefig(plot_loc)
 
-    def PlotPeriods(self, plot_loc=None,log=True,nbins=25,pmax=None):
+    def PlotPeriods(self, plot_loc=None,log=True,nbins=25,pmax=None,ymin=None,xlog=False):
         assert hasattr(self,'trace')
         import seaborn as sns
         plot_pers=self.duos+self.monos
+        if ymin is None:
+            ymin=np.min(np.nanmedian(self.trace['logprob_marg_'+pl],axis=0))/np.log(10)-2.0
         
         if len(plot_pers)>0:
             plt.figure(figsize=(8.5,4.2))
@@ -2689,13 +2736,18 @@ class monoModel():
                 plt.subplot(1,len(plot_pers),npl+1)
                 if pl in self.duos:
                     #Plotting lines
-                    for n in range(len(self.trace['duo_periods_01'][0,:])):
+                    for n in range(len(self.trace['duo_periods_'+pl][0,:])):
                         # Density Plot and Histogram of all arrival delays                        
                         plt.plot([np.nanmedian(self.trace['duo_periods_'+pl][:,n]),np.nanmedian(self.trace['duo_periods_'+pl][:,n])],
-                                 [-20.0,np.nanmedian(self.trace['logprob_marg_'+pl][:,n])/np.log(10)],linewidth=5.0)
+                                 [ymin,np.nanmedian(self.trace['logprob_marg_'+pl][:,n])/np.log(10)],linewidth=5.0)
                     print(np.min(np.nanmedian(self.trace['logprob_marg_'+pl],axis=0)))
-                    plt.title("Duo - ",pl)
-                    plt.ylim(np.min(np.nanmedian(self.trace['logprob_marg_'+pl],axis=0))/np.log(10)-2.0,0.1)
+                    plt.title("Duo - "+str(pl))
+                    plt.ylim(ymin,0.1)
+                    if xlog:
+                        plt.xscale('log')
+                        plt.xticks([20,40,60,80,100,150,200,250,300,350,400,450,500,600,700],
+                                   np.array([20,40,60,80,100,150,200,250,300,350,400,450,500,600,700]).astype(str))
+                        #plt.xticklabels([20,40,60,80,100,150,200,250])
                     plt.ylabel("$\log_{10}{p}$")
                     plt.xlabel("Period [d]")
                 elif pl in self.monos:
@@ -2735,13 +2787,17 @@ class monoModel():
                                                   'bw':self.planets[pl]['per_gaps'][ngap,2]*0.1,'color':sns.color_palette()[1]})
                         '''
                     plt.title("Mono - "+str(pl))
-
                     if log:
                         plt.yscale('log')
                         plt.ylabel("$\log_{10}{\\rm prob}$")
                     else:
                         plt.ylabel("prob")
                     plt.xlim(0,pmax)
+                    if xlog:
+                        plt.xscale('log')
+                        plt.xticks([20,40,60,80,100,150,200,250],np.array([20,40,60,80,100,150,200,250]).astype(str))
+                        #plt.xticklabels([20,40,60,80,100,150,200,250])
+
                     #plt.xlim(60,80)
                     plt.ylim(1e-12,1.0)
                     plt.xlabel("Period [d]")
@@ -2808,7 +2864,7 @@ class monoModel():
         
         fig.savefig(self.savenames[0]+'_corner.pdf',dpi=400,rasterized=True)
         
-    def PlotTable(self,plot_loc=None):
+    def PlotTable(self,plot_loc=None,return_table=False):
         new_df=True
         assert hasattr(self,'trace')
         cols_to_remove=['gp_', '_gp', 'light_curve','__','mono_uniform_index',
@@ -2844,6 +2900,8 @@ class monoModel():
             fig.savefig(self.savenames[0]+'_table.pdf')
         else:
             plt.savefig(plot_loc)
+        if return_table:
+            return df
     
 
         

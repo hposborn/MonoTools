@@ -52,7 +52,7 @@ id_dic={'TESS':'TIC','tess':'TIC','Kepler':'KIC','kepler':'KIC','KEPLER':'KIC',
 #goto='/Users/hosborn' if 'Users' in os.path.dirname(os.path.realpath(__file__)).split('/') else '/home/hosborn'
 
 
-def openFits(f,fname,mission,cut_all_anom_lim=4.0,use_ppt=True):
+def openFits(f,fname,mission,cut_all_anom_lim=4.0,use_ppt=True,force_raw_flux=False,**kwargs):
     '''
     # opens and processes all lightcurve files (especially, but not only, fits files).
     # Processing involvesd iteratively masking anomlaous flux values
@@ -164,6 +164,11 @@ def openFits(f,fname,mission,cut_all_anom_lim=4.0,use_ppt=True):
         print('cannot identify fits type to identify with')
         #logging.debug('Found fits file but cannot identify fits type to identify with')
         return None
+    
+    if force_raw_flux and 'raw_flux' in lc:
+        #Here we'll force ourselves to use raw flux, and not the detrended flux, if it exists:
+        lc['detrended_flux']=lc.pop('flux')
+        lc['flux']=lc['raw_flux'][:]
     
     lc['mask']=maskLc(lc,fname,cut_all_anom_lim=cut_all_anom_lim,use_ppt=use_ppt,end_of_orbit=end_of_orbit,input_mask=mask)
     
@@ -291,7 +296,7 @@ def maskLc(lc,fhead,cut_all_anom_lim=5.0,use_ppt=False,end_of_orbit=True,
     else:
         return mask
 
-def openPDC(epic,camp,use_ppt=True):
+def openPDC(epic,camp,use_ppt=True,**kwargs):
     if camp == '10':
     #https://archive.stsci.edu/missions/k2/lightcurves/c1/201500000/69000/ktwo201569901-c01_llc.fits
         urlfilename1='https://archive.stsci.edu/missions/k2/lightcurves/c102/'+str(epic)[:4]+'00000/'+str(epic)[4:6]+'000/ktwo'+str(epic)+'-c102_llc.fits'
@@ -299,13 +304,13 @@ def openPDC(epic,camp,use_ppt=True):
         urlfilename1='https://archive.stsci.edu/missions/k2/lightcurves/c'+str(int(camp))+'/'+str(epic)[:4]+'00000/'+str(epic)[4:6]+'000/ktwo'+str(epic)+'-c'+str(camp).zfill(2)+'_llc.fits'
     if requests.get(urlfilename1, timeout=600).status_code==200:
         with fits.open(urlfilename1,show_progress=False) as hdus:
-            lc=openFits(hdus,urlfilename1,mission='kepler',use_ppt=use_ppt)
+            lc=openFits(hdus,urlfilename1,mission='kepler',use_ppt=use_ppt,**kwargs)
             lc['src']['K2']='K2_pdc'
         return lc
     else:
         return None
 
-def openVand(epic,camp,v=1,use_ppt=True):
+def openVand(epic,camp,v=1,use_ppt=True,**kwargs):
     lcvand=[]
     #camp=camp.split(',')[0] if len(camp)>3
     if camp=='10' or camp==10 or camp=='10.0':
@@ -321,7 +326,7 @@ def openVand(epic,camp,v=1,use_ppt=True):
         print("Vanderburg LC at ",url1)
         if requests.get(url1, timeout=600).status_code==200:
             with fits.open(url1,show_progress=False) as hdus:
-                lcvand+=[openFits(hdus,url1,mission='k2',use_ppt=use_ppt)]
+                lcvand+=[openFits(hdus,url1,mission='k2',use_ppt=use_ppt,**kwargs)]
         url2='http://archive.stsci.edu/missions/hlsp/k2sff/c'+str(int(camp))+'2/'+str(epic)[:4]+'00000/'+str(epic)[4:]+'/hlsp_k2sff_k2_lightcurve_'+str(epic)+'-c'+str(int(camp))+'2_kepler_v1_llc.fits'
         if requests.get(url1, timeout=600).status_code==200:
             with fits.open(url1,show_progress=False) as hdus:
@@ -335,12 +340,12 @@ def openVand(epic,camp,v=1,use_ppt=True):
         lc={'time':df['BJD - 2454833'].values,
             'flux':df[' Corrected Flux'].values,
             'flux_err':np.tile(np.median(abs(np.diff(df[' Corrected Flux'].values))),df.shape[0])}
-        lcvand+=[openFits(lc,url,mission='k2',use_ppt=use_ppt)]
+        lcvand+=[openFits(lc,url,mission='k2',use_ppt=use_ppt,**kwargs)]
     else:
         urlfitsname='http://archive.stsci.edu/missions/hlsp/k2sff/c'+str(camp)+'/'+str(epic)[:4]+'00000/'+str(epic)[4:]+'/hlsp_k2sff_k2_lightcurve_'+str(epic)+'-c'+str(camp)+'_kepler_v'+str(int(v))+'_llc.fits'.replace(' ','')
         if requests.get(urlfitsname, timeout=600).status_code==200:
             with fits.open(urlfitsname,show_progress=False) as hdus:
-                lcvand+=[openFits(hdus,urlfitsname,mission='k2',use_ppt=use_ppt)]
+                lcvand+=[openFits(hdus,urlfitsname,mission='k2',use_ppt=use_ppt,**kwargs)]
             print("Extracted vanderburg LC from ",urlfitsname)
         else:
             print("Cannot find vanderburg LC at ",urlfitsname)
@@ -348,7 +353,7 @@ def openVand(epic,camp,v=1,use_ppt=True):
     lc['src']='K2_vand'
     return lc
  
-def openEverest(epic,camp,pers=None,durs=None,t0s=None,use_ppt=True):
+def openEverest(epic,camp,pers=None,durs=None,t0s=None,use_ppt=True,**kwargs):
     import everest
     if camp in [10,11,10.0,11.0,'10','11','10.0','11.0']:
         camp=[int(str(int(float(camp)))+'1'),int(str(int(float(camp)))+'2')]
@@ -383,7 +388,7 @@ def openEverest(epic,camp,pers=None,durs=None,t0s=None,use_ppt=True):
                       'raw_flux_err':np.vstack((lcev['raw_flux_err'],st1.fraw_err,st1.fraw_err)),
                       'quality':np.vstack((lcev['quality'],st1.quality))}
             hdr={'cdpp':st1.cdpp,'ID':st1.ID,'Tmag':st1.mag,'mission':'K2','name':st1.name,'campaign':camp,'lcsource':'everest'}
-            lcs+=[openFits(lcev,hdr,mission='k2',use_ppt=use_ppt)]
+            lcs+=[openFits(lcev,hdr,mission='k2',use_ppt=use_ppt,**kwargs)]
         except:
             print(c,"not possible to load")
             return None
@@ -435,7 +440,7 @@ def K2_lc(epic,pers=None,durs=None,t0s=None, use_ppt=True):
     return lcs,df
 
 
-def getKeplerLC(kic,cadence='long',use_ppt=True):
+def getKeplerLC(kic,cadence='long',use_ppt=True,**kwargs):
     '''
     This module uses the KIC of a planet candidate to download lightcurves
     
@@ -470,7 +475,7 @@ def getKeplerLC(kic,cadence='long',use_ppt=True):
             resp = h.request(lcloc, 'HEAD')
             if int(resp[0]['status']) < 400:
                 with fits.open(lcloc,show_progress=False) as hdu:
-                    ilc=openFits(hdu,lcloc,mission='kepler',use_ppt=use_ppt)
+                    ilc=openFits(hdu,lcloc,mission='kepler',use_ppt=use_ppt,**kwargs)
                     if ilc is not None:
                         lcs+=[ilc]
                     hdr=hdu[1].header
@@ -481,7 +486,7 @@ def getKeplerLC(kic,cadence='long',use_ppt=True):
             resp = h.request(lcloc, 'HEAD')
             if int(resp[0]['status']) < 400:
                 with fits.open(lcloc,show_progress=False) as hdu:
-                    ilc=openFits(hdu,lcloc,mission='kepler',use_ppt=use_ppt)
+                    ilc=openFits(hdu,lcloc,mission='kepler',use_ppt=use_ppt,**kwargs)
                     if ilc is not None:
                         lcs+=[ilc]
                     hdr=hdu[1].header
@@ -540,10 +545,10 @@ def observed(tic):
     #print(out_dic)
     return out_dic
 
-def getCorotLC(corid,use_ppt=True):
+def getCorotLC(corid,use_ppt=True,**kwargs):
     #These are pre-computed CoRoT LCs I have lying around. There is no easy API as far as I can tell.
     lc=openFits(np.load('/'.join(MonoData_tablepath.split('/')[:-1]+["CorotLCs","CoRoT"+str(corid)+".npy"])),
-                        "CorotLCs/CoRoT"+str(corid)+".npy",mission="Corot",use_ppt=use_ppt)
+                        "CorotLCs/CoRoT"+str(corid)+".npy",mission="Corot",use_ppt=use_ppt,**kwargs)
     
     #Some of these arrays have flux errors of zoer, so we need to nip that in the bud:
     lc['flux_err'][lc['flux_err']==0]=np.nanmedian(abs(np.diff(lc['flux'][lc['flux_err']==0])))
@@ -597,7 +602,7 @@ def TESS_lc(tic, sectors='all',use_ppt=True, coords=None, use_eleanor=True, data
             resp = h.request(fitsloc, 'HEAD')
             if int(resp[0]['status']) < 400:
                 with fits.open(fitsloc,show_progress=False) as hdus:
-                    lcs+=[openFits(hdus,fitsloc,mission='tess',use_ppt=use_ppt)]
+                    lcs+=[openFits(hdus,fitsloc,mission='tess',use_ppt=use_ppt,**kwargs)]
                     lchdrs+=[hdus[0].header]
             else:
                 raise Exception('No TESS lightcurve')
@@ -622,7 +627,7 @@ def TESS_lc(tic, sectors='all',use_ppt=True, coords=None, use_eleanor=True, data
                     elen_hdr={'ID':star.tic,'GaiaID':star.gaia,'Tmag':star.tess_mag,
                               'RA':star.coords[0],'dec':star.coords[1],'mission':'TESS','campaign':key,'source':'eleanor',
                               'ap_masks':elen_obj.all_apertures,'ap_image':np.nanmedian(elen_obj.tpf[50:80],axis=0)}
-                    elen_lc=openFits(elen_obj,elen_hdr,mission='tess',use_ppt=use_ppt)
+                    elen_lc=openFits(elen_obj,elen_hdr,mission='tess',use_ppt=use_ppt,**kwargs)
                     lcs+=[elen_lc]
                     lchdrs+=[elen_hdr]
                 except Exception as e:
@@ -635,8 +640,8 @@ def TESS_lc(tic, sectors='all',use_ppt=True, coords=None, use_eleanor=True, data
         for orbit in glob.glob(data_loc+"/*.h5"):
             f=h5py.File(orbit)
             if len(lcs)==0 or np.nanmin(abs(np.nanmedian(f['LightCurve']['BJD'])-np.hstack([l['time'] for l in lcs])))>5:
-                # This speciic QLP orbit does not have a SPOC lightcurve attached (i.e. no other obs within 5days)
-                lcs+=[openFits(f,orbit,mission='tess',use_ppt=use_ppt)]
+                # This specific QLP orbit does not have a SPOC lightcurve attached (i.e. no other obs within 5days)
+                lcs+=[openFits(f,orbit,mission='tess',use_ppt=use_ppt,**kwargs)]
                 lchdrs+=[{'source':'qlp'}]
     if len(lcs)>1:
         lc=lcStack(lcs)
@@ -647,7 +652,8 @@ def TESS_lc(tic, sectors='all',use_ppt=True, coords=None, use_eleanor=True, data
     else:
         return None,None
 
-def openLightCurve(ID,mission,coor=None,use_ppt=True,other_data=True,jd_base=2457000,**kwargs):
+def openLightCurve(ID,mission,coor=None,use_ppt=True,other_data=True,
+                   jd_base=2457000,save=True,**kwargs):
     #from ..stellar import tess_stars2px_mod
     if coor is None:
         #Doing this to get coordinates:
@@ -703,7 +709,7 @@ def openLightCurve(ID,mission,coor=None,use_ppt=True,other_data=True,jd_base=245
     #Opening using url search:
     lcs={};hdrs={}
     if IDs['tess'] is not None:
-        lcs['tess'],hdrs['tess'] = TESS_lc(IDs['tess'], use_ppt=use_ppt, coords=coor,**kwargs)
+        lcs['tess'],hdrs['tess'] = TESS_lc(IDs['tess'], use_ppt=use_ppt, coords=coor, **kwargs)
         if lcs['tess'] is not None:
             lcs['tess']['time']-=(jd_base-2457000)
     if IDs['k2'] is not None:
@@ -739,7 +745,20 @@ def openLightCurve(ID,mission,coor=None,use_ppt=True,other_data=True,jd_base=245
                 lc[key]=lc[key][:][np.argsort(lc['time'][~np.isnan(lc['time'])])]
         lc['time']=np.sort(lc['time'][~np.isnan(lc['time'])])
     
+    if save:
+        ID_string=id_dic[mission]+str(ID).zfill(11)
+        pickle.dump(lc,open(MonoData_savepath+'/'+ID_string+'/'+ID_string+'_lc.pickle','wb'))
+    
     return lc,hdrs[mission.lower()]
+
+def LoadLc(lcid,mission='tess',file_loc=None):
+    # Quick tool to load pickled lightcurve dict.
+    # lcid = ID
+    # mission = 'tess'. mission string (TESS, K2, Kepler, etc)
+    # file_loc = None ; loction of pickle. If None defaults to $MONOTOOLSPATH
+    ID_string=id_dic[mission]+str(lcid).zfill(11)
+    file_loc=MonoData_savepath+'/'+ID_string if file_loc is not None else file_loc
+    return pickle.load(open(MonoData_savepath+'/'+ID_string+'/'+ID_string+'_lc.pickle','rb'))
 
 def cutLc(lctimes,max_len=10000,return_bool=True,transit_mask=None):
     # Naturally cut the lightcurve time into chunks smaller than max_len (e.g. for GP computations)
