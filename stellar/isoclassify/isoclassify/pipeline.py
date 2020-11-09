@@ -31,6 +31,8 @@ CONSTRAINTS = [
 
 COORDS = ['ra','dec']
 
+DATADIR = "/Users/hosborn/.isoclassify"
+
 def run(**kw):
     if kw['method']=='direct':
         pipe = PipelineDirect(**kw)
@@ -128,7 +130,10 @@ class Pipeline(object):
         self.const['band'] = star['band']
 
         self.pdffn = os.path.join(self.outdir,'output.pdf')
-        self.csvfn = os.path.join(self.outdir,'output.csv')
+        if "output_file" not in kw:
+            self.csvfn = os.path.join(self.outdir,'output.csv')
+        else:
+            self.csvfn = os.path.join(self.outdir,kw['output_file'])
 
     def addspec(self,x):
         keys = 'teff logg feh'.split()
@@ -259,6 +264,7 @@ class PipelineDirect(Pipeline):
         #pdb.set_trace()
 
         fn = os.path.join(DATADIR,'bcgrid.h5')
+        print(fn)
         bcmodel = h5py.File(fn,'r', driver='core', backing_store=False)
 
         if self.dust == 'allsky':
@@ -341,6 +347,7 @@ class PipelineGrid(Pipeline):
         'avs':np.zeros(len(np.array(file['gamag']))),\
         'dis':np.zeros(len(np.array(file['gamag'])))}
 
+        print("N_grid_points:",len(model['rho']))
         #ebf.read(os.path.join(DATADIR,'mesa.ebf'))
         # prelims to manipulate some model variables (to be automated soon ...)
         #pdb.set_trace()

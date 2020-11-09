@@ -326,14 +326,16 @@ class monoModel():
         trans=abs(self.lc['time'][self.lc['mask']]-tcen)<0.45*tdur
         if np.sum(trans)==0:
             trans=abs(self.lc['time'][self.lc['mask']]-tcen)<0.5*tdur
-
-        days_in_known_transits = np.sum(trans)*float(self.lc['cadence'][self.lc['mask']][trans][0][1:])/1440
+        print(np.sum(trans),"points in transit")
+        #Adding up in-transit cadences to give days in transit:
+        days_in_known_transits = np.sum(np.array([cad[1:] for cad in self.lc['cadence'][self.lc['mask']][trans]]).astype(float))/1440
         if tcen_2 is not None:
             trans2=abs(self.lc['time'][self.lc['mask']]-tcen_2)<0.45*tdur
-            days_in_known_transits += np.sum(trans2)*float(self.lc['cadence'][self.lc['mask']][trans2][0][1:])/1440
+            days_in_known_transits += np.sum(np.array([cad[1:] for cad in self.lc['cadence'][self.lc['mask']][trans2]]).astype(float))/1440
             coverage_thresh*=0.5 #Two transits already in number count, so to compensate we must decrease the thresh
             
         check_pers_ix=[]
+        #Looping through periods
         for per in pers:
             phase=(self.lc['time'][self.lc['mask']]-tcen-per*0.5)%per-per*0.5
             intr=abs(phase)<0.45*tdur
