@@ -1292,14 +1292,15 @@ def AsteroidCheck(lc,monoparams,ID,order=3,dur_region=3.5,
                                       bg_lc[nearTrans&rand_choice,1] - fft_model[nearTrans&rand_choice],
                                       order+1)}
             nodip_model = fft_model[nearTrans] + np.polyval(nodip_res['x'],bg_lc[nearTrans,0])
-            nodip_res['llk'] = log_likelihood_gaussian_dip(np.hstack((-30,-30,0,nodip_res['x'])),bg_lc[nearTrans,0],
-                                                                     bg_lc[nearTrans,1],bg_lc[nearTrans,2])
+            nodip_res['llk'] = log_likelihood_gaussian_dip(np.hstack((-30,-30,0,nodip_res['x'])),
+                                                           bg_lc[nearTrans,0], bg_lc[nearTrans,1], bg_lc[nearTrans,2])
             #nodip_res['llk'] = -0.5 * np.sum((bg_lc[nearTrans,1] - nodip_model)**2 / sigma2[nearTrans])
             nodip_res['prior']=0
             #np.sum((y - model) ** 2 / sigma2 + np.log(sigma2))
             #BIC = 2*(neg_log_likelihood-log_prior) + log(n_points)*n_params 
             nodip_res['bic'] = np.log(np.sum(nearTrans))*len(nodip_res['x']) - 2 * nodip_res['llk']
-            #print('no dip:',nodip_args,nodip_res,nodip_bic)
+            
+            print('no dip:',nodip_res['bic'])
             if nodip_res['bic']<best_nodip_res['bic']:
                 best_nodip_res=nodip_res
                 
@@ -1792,7 +1793,7 @@ def CentroidCheck(lc,monoparams,interpmodel,ID,order=2,dur_region=3.5, plot=True
             nodip_res['x']=[xfit.x,yfit.x]
             #nodip_res['bic']=2*nodip_res['fun'] + np.log(2*np.sum(roundTransit))*(len(xfit)+len(yfit))
             nodip_res['llk']=log_likelihood_poly(xfit.x, t,y,yerr)+log_likelihood_poly(yfit.x, t,y,yerr)
-            nodip_res['bic']=np.log(len(x)+len(y))*(len(xfit.x)+len(xfit.y)) - 2 * nodip_res['llk']
+            nodip_res['bic']=np.log(len(x)+len(y))*(len(xfit.x)+len(xfit.x)) - 2 * nodip_res['llk']
             if nodip_res['bic']<best_nodip_res['bic']:
                 best_nodip_res=nodip_res
 
@@ -1807,7 +1808,7 @@ def CentroidCheck(lc,monoparams,interpmodel,ID,order=2,dur_region=3.5, plot=True
                                            order),method=methods[n%3])
             dip_res['llk']=log_likelihood_centroid(dip_res['x'], t, x, y, xerr, yerr, interpmodel, order)
             #-1*dip_res['fun']
-            dip_res['bic']=np.log(len(x)+len(y))*(dip_res['x']) - 2 * dip_res['llk']
+            dip_res['bic']=np.log(len(x)+len(y))*len(dip_res['x']) - 2 * dip_res['llk']
             #2*dip_res.fun + np.log(2*np.sum(roundTransit))*len(dip_res['x'])
             if dip_res['bic']<best_dip_res['bic']:
                 best_dip_res=dip_res

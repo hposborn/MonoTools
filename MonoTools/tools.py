@@ -103,17 +103,25 @@ def openFits(f,fname,mission,cut_all_anom_lim=4.0,use_ppt=True,force_raw_flux=Fa
                 #logging.debug("no file type for "+str(f))
                 return None
         elif f[0].header['TELESCOP']=='TESS':
-            print("TESS file")
-            time = f[1].data['TIME']
-            sap = f[1].data['SAP_FLUX']/np.nanmedian(f[1].data['SAP_FLUX'])
-            pdcsap = f[1].data['PDCSAP_FLUX']/np.nanmedian(f[1].data['PDCSAP_FLUX'])
-            pdcsap_err = f[1].data['PDCSAP_FLUX_ERR']/np.nanmedian(f[1].data['PDCSAP_FLUX'])
-            lc={'time':time,'flux':pdcsap,'flux_err':pdcsap_err,'raw_flux':f[1].data['SAP_FLUX'],
-                'bg_flux':f[1].data['SAP_BKG']}
-            if ~np.isnan(np.nanmedian(f[1].data['PSF_CENTR2'])):
-                lc['cent_1']=f[1].data['PSF_CENTR1'];lc['cent_2']=f[1].data['PSF_CENTR2']
+            lc   = {'time':f[1].data['TIME'],
+                    'raw_flux':f[1].data['SAP_FLUX']/np.nanmedian(f[1].data['SAP_FLUX']),
+                    'bg_flux':f[1].data['SAP_BKG'],
+                    'quality':f[1].data['QUALITY']}
+            if 'ORIGIN' in f[0].header and f[0].header['ORIGIN']=='MIT/QLP':
+                lc['flux']=f[1].data['KSPSAP_FLUX']/np.nanmedian(f[1].data['KSPSAP_FLUX'])
+                lc['flux_err']= f[1].data['KSPSAP_FLUX_ERR']/np.nanmedian(f[1].data['KSPSAP_FLUX'])
+                lc['cent_1']  = f[1].data['SAP_X']
+                lc['cent_2']  = f[1].data['SAP_Y']
+                lc['flux_xl_ap']=f[1].data['KSPSAP_FLUX_LAG']
+                lc['flux_sm_ap']=f[1].data['KSPSAP_FLUX_SML']            
             else:
-                lc['cent_1']=f[1].data['MOM_CENTR1'];lc['cent_2']=f[1].data['MOM_CENTR2']
+                lc['flux'] = f[1].data['PDCSAP_FLUX']/np.nanmedian(f[1].data['PDCSAP_FLUX'])
+                lc['flux_err'] = f[1].data['PDCSAP_FLUX_ERR']/np.nanmedian(f[1].data['PDCSAP_FLUX'])
+                if ~np.isnan(np.nanmedian(f[1].data['PSF_CENTR2'])):
+                    lc['cent_1']=f[1].data['PSF_CENTR1'];lc['cent_2']=f[1].data['PSF_CENTR2']
+                else:
+                    lc['cent_1']=f[1].data['MOM_CENTR1'];lc['cent_2']=f[1].data['MOM_CENTR2']
+                
     elif type(f)==h5py._hl.files.File:
         #QLP is defined in mags, so lets
         def mag2flux(mags):
@@ -594,7 +602,7 @@ def getCorotLC(corid,use_ppt=True,**kwargs):
     lc['jd_base']=2451545
     return lc
 
-def TESS_lc(tic, sectors='all',use_ppt=True, coords=None, use_qlp=None,use_eleanor=None, data_loc=None,**kwargs):
+def TESS_lc(tic, sectors='all',use_ppt=True, coords=None, use_qlp=None, use_eleanor=None, data_loc=None,**kwargs):
     #Downloading TESS lc     
     if data_loc is None:
         data_loc=MonoData_savepath+"/TIC"+str(int(tic)).zfill(11)
@@ -643,30 +651,31 @@ def TESS_lc(tic, sectors='all',use_ppt=True, coords=None, use_qlp=None,use_elean
                 lchdrs+=[hdus[0].header]
 
         if use_qlp is None or use_qlp is True:
-            qlpfiles=[data_loc+"/TIC"+str(tic).zfill(11)+"_orbit-"+str(sect_to_orbit[key][n])+"_qlplc.h5" for n in range(2)]
+            qlpfiles=[data_loc+"/orbit-"+str(int(sect_to_orbit[key][n]))+"_qlplc.h5" for n in range(2)]
+            print(key,
+                  qlpfiles[0],os.path.isfile(qlpfiles[0]),
+                  qlpfiles[1],os.path.isfile(qlpfiles[1]))
             if os.path.isfile(qlpfiles[0]) and os.path.isfile(qlpfiles[1]):
                 
                 f1=h5py.File(qlpfiles[0])
                 f2=h5py.File(qlpfiles[1])
-                qlplcs[key]=lcStack([openFits(f1,orbit,mission='tess',use_ppt=use_ppt,**kwargs),
-                                     openFits(f2,orbit,mission='tess',use_ppt=use_ppt,**kwargs)])
+                qlplcs[key]=lcStack([openFits(f1,sect_to_orbit[key][0],mission='tess',use_ppt=use_ppt,**kwargs),
+                                     openFits(f2,sect_to_orbit[key][1],mission='tess',use_ppt=use_ppt,**kwargs)])
                 lchdrs+=[{'source':'qlp'}]
             else:
                 strtid=str(int(tic)).zfill(16)
-                fitsloc="https://mast.stsci.edu/hslp/qlp/s"+str(int(key)).zfill(4) + \
+                fitsloc='https://mast.stsci.edu/api/v0.1/Download/file?uri=mast:HLSP/qlp/s'+str(int(key)).zfill(4) + \
                         "/"+strtid[:4]+"/"+strtid[4:8]+"/"+strtid[8:12]+"/"+strtid[12:] + \
                         "/hlsp_qlp_tess_ffi_s"+str(int(key)).zfill(4)+"-"+strtid+"_tess_v01_llc.fits"
-                print("QLP:",fitsloc)
+                #print("QLP:",fitsloc)
                 h = httplib2.Http()
                 resp = h.request(fitsloc, 'HEAD')
                 if int(resp[0]['status']) < 400:
                     with fits.open(fitsloc,show_progress=False) as hdus:
-                        print(hdus.type)
-                        print(hdus[0].header)
                         qlplcs[key]=openFits(hdus,fitsloc,mission='tess',use_ppt=use_ppt,**kwargs)
                         lchdrs+=[hdus[0].header]
         elif use_eleanor is None or use_eleanor is True:
-            print("No QLP files at",data_loc,"Loading Eleanor Lightcurve")
+            print("Loading Eleanor Lightcurve")
             try:
                 #Getting eleanor lightcurve:
                 try:
