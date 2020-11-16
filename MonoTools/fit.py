@@ -35,6 +35,7 @@ import glob
 import warnings
 warnings.filterwarnings("ignore")
 
+
 MonoData_tablepath = os.path.join('/'.join(os.path.dirname( __file__ ).split('/')[:-1]),'data','tables')
 if os.environ.get('MONOTOOLSPATH') is None:
     MonoData_savepath = os.path.join(os.path.dirname(os.path.dirname( __file__ )),'data')
@@ -42,6 +43,7 @@ else:
     MonoData_savepath = os.environ.get('MONOTOOLSPATH')
 if not os.path.isdir(MonoData_savepath):
     os.mkdir(MonoData_savepath)
+
 
 from . import tools
 from . import starpars
@@ -56,24 +58,30 @@ theano_dir=MonoData_savepath+'/.theano_dir_'+str(np.random.randint(8))
 if not os.path.isdir(theano_dir):
     os.mkdir(theano_dir)
 
-theano_pars={'device':'cpu','floatX':'float32',
+theano_pars={'device':'cpu',
+             'floatX':'float64',
              'base_compiledir':theano_dir,"gcc.cxxflags":"-fbracket-depth=1024"}
 '''if MonoData_savepath=="/Users/hosborn/python/MonoToolsData" or MonoData_savepath=="/Volumes/LUVOIR/MonoToolsData":
     theano_pars['cxx']='/usr/local/Cellar/gcc/9.3.0_1/bin/g++-9'
-'''
+
 if MonoData_savepath=="/Users/hosborn/python/MonoToolsData" or MonoData_savepath=="/Volumes/LUVOIR/MonoToolsData":
     theano_pars['cxx']='cxx=/Library/Developer/CommandLineTools/usr/bin/g++'
+'''
 if os.environ.get('THEANO_FLAGS') is None:
     os.environ["THEANO_FLAGS"]=''
 for key in theano_pars:
     if key not in os.environ["THEANO_FLAGS"]:
-        os.environ["THEANO_FLAGS"] = os.environ["THEANO_FLAGS"]+key+theano_pars[key]+","
+        os.environ["THEANO_FLAGS"] = os.environ["THEANO_FLAGS"]+","+key+"="+theano_pars[key]
+
+#setting float type:
+floattype=np.float64
 
 import theano.tensor as tt
 import pymc3 as pm
 import theano
 theano.config.print_test_value = True
 theano.config.exception_verbosity='high'
+
 #print("theano config:",config)#['device'],config['floatX'],config['cxx'],config['compiledir'],config['base_compiledir'])
 
 
@@ -104,7 +112,11 @@ class monoModel():
                     if len(lc[key])==len(lc['time']):
                         lc[key]=lc[key][np.argsort(lc['time'])][:]
                 lc['time']=np.sort(lc['time'])
+            
+            #Making sure all lightcurve arrays match theano.floatX:
+            lc.update({key:lc[key].astype(floattype) for key in lc if type(lc[key])==np.ndarray and type(lc[key][0]) in [floattype,float,floattype]})
 
+            
             self.lc=lc
             self.planets={}
             self.multis=[];self.monos=[];self.duos=[]
@@ -120,7 +132,7 @@ class monoModel():
 
             self.savefileloc=savefileloc
             self.overwrite=overwrite
-
+            
             #self.
     
     def LoadModelFromFile(self, loadfile=None):
@@ -610,29 +622,32 @@ class monoModel():
         elif use_multinest:
             self.run_multinest(**kwargs)
         
-    def GP_training(self,n_draws=900,max_len_lc=25000):
+    def GP_training(self,n_draws=900,max_len_lc=25000,uselc=None):
+        print("initialising and training the GP")
+        if uselc is None:
+            uselc=self.lc
+            
         with pm.Model() as gp_train_model:
             #####################################################
             #     Training GP kernel on out-of-transit data
             #####################################################
-            
-            mean=pm.Normal("mean",mu=np.median(self.lc['flux'][self.lc['mask']]),
-                                  sd=np.std(self.lc['flux'][self.lc['mask']]))
+            mean=pm.Normal("mean",mu=np.median(uselc['flux'][uselc['mask']]),
+                                  sd=np.std(uselc['flux'][uselc['mask']]))
 
-            self.log_flux_std=np.array([np.log(np.nanstd(self.lc['flux'][self.lc['no_trans_mask']][self.lc['cadence'][self.lc['no_trans_mask']]==c])) for c in self.cads]).ravel().astype(np.float32)
+            self.log_flux_std=np.array([np.log(np.nanstd(uselc['flux'][uselc['no_trans_mask']][uselc['cadence'][uselc['no_trans_mask']]==c])) for c in self.cads]).ravel().astype(floattype)
             print(self.log_flux_std)
-            print(np.sum(self.lc['no_trans_mask']),len(self.lc['no_trans_mask']))
-            print(np.unique(self.lc['cadence'][self.lc['no_trans_mask']]))
-            print(self.cads,np.unique(self.lc['cadence']),self.lc['time'][self.lc['cadence']=='t'],
-                  self.log_flux_std,np.sum(self.lc['no_trans_mask']))
+            print(np.sum(uselc['no_trans_mask']),len(uselc['no_trans_mask']))
+            print(np.unique(uselc['cadence'][uselc['no_trans_mask']]))
+            print(self.cads,np.unique(uselc['cadence']),uselc['time'][uselc['cadence']=='t'],
+                  self.log_flux_std,np.sum(uselc['no_trans_mask']))
 
             logs2 = pm.Normal("logs2", mu = self.log_flux_std+1, 
                               sd = np.tile(1.0,len(self.log_flux_std)), shape=len(self.log_flux_std))
 
             # Transit jitter & GP parameters
             #logs2 = pm.Normal("logs2", mu=np.log(np.var(y[m])), sd=10)
-            lcrange=self.lc['time'][-1]-self.lc['time'][0]
-            #max_cad = np.nanmax([np.nanmedian(np.diff(self.lc['time'][self.lc['near_trans']&(self.lc['cadence']==c)])) for c in self.cads])
+            lcrange=uselc['time'][-1]-uselc['time'][0]
+            #max_cad = np.nanmax([np.nanmedian(np.diff(uselc['time'][uselc['near_trans']&(uselc['cadence']==c)])) for c in self.cads])
             av_dur = np.nanmean([self.planets[pl]['tdur'] for pl in self.planets])
             #freqs bounded from 2pi/minimum_cadence to to 2pi/(4x lc length)
             success=False;target=0.05
@@ -648,9 +663,9 @@ class monoModel():
                     target*=1.15
                     success=False
             print(success, target,lcrange,low,up)
-            maxpower=1.0*np.nanstd(self.lc['flux'][(~self.lc['no_trans_mask'])&self.lc['mask']])
-            minpower=0.02*np.nanmedian(abs(np.diff(self.lc['flux'][(~self.lc['no_trans_mask'])&self.lc['mask']])))
-            print(np.nanmedian(abs(np.diff(self.lc['flux'][self.lc['near_trans']]))),np.nanstd(self.lc['flux'][self.lc['near_trans']]),minpower,maxpower)
+            maxpower=1.0*np.nanstd(uselc['flux'][(~uselc['no_trans_mask'])&uselc['mask']])
+            minpower=0.02*np.nanmedian(abs(np.diff(uselc['flux'][(~uselc['no_trans_mask'])&uselc['mask']])))
+            print(np.nanmedian(abs(np.diff(uselc['flux'][uselc['near_trans']]))),np.nanstd(uselc['flux'][uselc['near_trans']]),minpower,maxpower)
             success=False;target=0.01
             while not success and target<0.2:
                 try:
@@ -667,24 +682,26 @@ class monoModel():
 
             # GP model for the light curve
             kernel = xo.gp.terms.SHOTerm(S0=S0, w0=w0, Q=1/np.sqrt(2))
-            
-            if len(self.lc['time']>max_len_lc):
-                mask=(~self.lc['no_trans_mask'])*(np.arange(0,len(self.lc['time']),1)<max_len_lc)
+
+            if len(uselc['time']>max_len_lc):
+                mask=(~uselc['no_trans_mask'])*(np.arange(0,len(uselc['time']),1)<max_len_lc)
             else:
-                mask=~self.lc['no_trans_mask']
-            
-            self.gp['train'] = xo.gp.GP(kernel, self.lc['time'][~self.lc['no_trans_mask']].astype(np.float32),
-                                   self.lc['flux_err'][~self.lc['no_trans_mask']].astype(np.float32)**2 + \
-                                   tt.dot(self.lc['flux_err_index'][~self.lc['no_trans_mask']],tt.exp(logs2)),
+                mask=~uselc['no_trans_mask']
+
+            self.gp['train'] = xo.gp.GP(kernel, uselc['time'][~uselc['no_trans_mask']].astype(floattype),
+                                   uselc['flux_err'][~uselc['no_trans_mask']].astype(floattype)**2 + \
+                                   tt.dot(uselc['flux_err_index'][~uselc['no_trans_mask']].astype(floattype),tt.exp(logs2)),
                                    J=2)
-            
-            self.gp['train'].log_likelihood(self.lc['flux'][~self.lc['no_trans_mask']]-mean)
+
+            self.gp['train'].log_likelihood(uselc['flux'][~uselc['no_trans_mask']].astype(floattype)-mean)
 
             self.gp_init_soln = xo.optimize(start=None, vars=[logs2, power, w0, mean],verbose=True)
-            
-            self.gp_init_trace = pm.sample(tune=int(n_draws*0.66), draws=n_draws, start=self.gp_init_soln, chains=4,
+
+            print("sampling init GP",int(n_draws*0.66),"times with",len(uselc['flux'][~uselc['no_trans_mask']]),"-point lightcurve") 
+
+            self.gp_init_trace = pm.sample(tune=int(n_draws*0.66), draws=n_draws, start=self.gp_init_soln, chains=2,
                                            step=xo.get_dense_nuts_step(target_accept=0.9),compute_convergence_checks=False)
-        
+
 
     def init_pymc3(self,ld_mult=1.5,):
         if self.bin_oot:
@@ -696,7 +713,9 @@ class monoModel():
         
         start=None
         with pm.Model() as model:            
-
+            
+            print("Forming Pymc3 model with: monos:",self.monos,"multis:",self.multis,"duos:",self.duos)
+            
             ######################################
             #   Intialising Stellar Params:
             ######################################
@@ -717,8 +736,6 @@ class monoModel():
                 mult=1.0
             
             BoundedBeta = pm.Bound(pm.Beta, lower=1e-5, upper=1-1e-5)
-
-            print("Forming Pymc3 model with: monos:",self.monos,"multis:",self.multis,"duos:",self.duos)
             
             ######################################
             #     Initialising Mono params
@@ -916,7 +933,7 @@ class monoModel():
             mean=pm.Normal("mean",mu=np.median(lc['flux'][lc['mask']]),
                                   sd=np.std(lc['flux'][lc['mask']]))
             if not hasattr(self,'log_flux_std'):
-                self.log_flux_std=np.array([np.log(np.nanstd(lc['flux'][lc['no_trans_mask']][lc['cadence'][lc['no_trans_mask']]==c])) for c in self.cads]).ravel().astype(np.float32)
+                self.log_flux_std=np.array([np.log(np.nanstd(lc['flux'][lc['no_trans_mask']][lc['cadence'][lc['no_trans_mask']]==c])) for c in self.cads]).ravel().astype(floattype)
             print(self.log_flux_std,np.sum(lc['no_trans_mask']),"/",len(lc['no_trans_mask']))
             
             logs2 = pm.Normal("logs2", mu = self.log_flux_std+1, 
@@ -929,12 +946,12 @@ class monoModel():
                 print(np.isnan(lc['time']),np.isnan(lc['flux']),np.isnan(lc['flux_err']))
                 if self.train_GP:
                     #Taking trained values from out-of-transit to use as inputs to GP:
-                    minmax=np.percentile(self.gp_init_trace["w0"],[0.5,99.5])
+                    minmax=np.percentile(self.gp_init_trace["w0"],[0.5,99.5]).astype(floattype)
                     w0=pm.Interpolated("w0", x_points=np.linspace(minmax[0],minmax[1],201)[1::2],
                                           pdf_points=np.histogram(self.gp_init_trace["w0"],
                                                                   np.linspace(minmax[0],minmax[1],101))[0]
                                          )
-                    minmax=np.percentile(self.gp_init_trace["power"],[0.5,99.5])
+                    minmax=np.percentile(self.gp_init_trace["power"],[0.5,99.5]).astype(floattype)
                     power=pm.Interpolated("power", x_points=np.linspace(minmax[0],minmax[1],201)[1::2],
                                           pdf_points=np.histogram(self.gp_init_trace["power"],
                                                                   np.linspace(minmax[0],minmax[1],101))[0]
@@ -978,18 +995,18 @@ class monoModel():
                 kernel = xo.gp.terms.SHOTerm(S0=S0, w0=w0, Q=1/np.sqrt(2))
                 
                 if hasattr(self.lc,'near_trans') and np.sum(lc['near_trans'])!=len(lc['time']):
-                    self.gp['use'] = xo.gp.GP(kernel, lc['time'][lc['near_trans']].astype(np.float32),
-                                       lc['flux_err'][lc['near_trans']].astype(np.float32)**2 + \
+                    self.gp['use'] = xo.gp.GP(kernel, lc['time'][lc['near_trans']].astype(floattype),
+                                       lc['flux_err'][lc['near_trans']].astype(floattype)**2 + \
                                        tt.dot(lc['flux_err_index'][lc['near_trans']],tt.exp(logs2)),
                                        J=2)
 
-                    self.gp['all'] = xo.gp.GP(kernel, lc['time'].astype(np.float32),
-                                           lc['flux_err'].astype(np.float32)**2 + \
+                    self.gp['all'] = xo.gp.GP(kernel, lc['time'].astype(floattype),
+                                           lc['flux_err'].astype(floattype)**2 + \
                                            tt.dot(lc['flux_err_index'],tt.exp(logs2)),
                                            J=2)
                 else:
-                    self.gp['use'] = xo.gp.GP(kernel, lc['time'][lc['mask']].astype(np.float32),
-                                           lc['flux_err'][lc['mask']].astype(np.float32)**2 + \
+                    self.gp['use'] = xo.gp.GP(kernel, lc['time'][lc['mask']].astype(floattype),
+                                           lc['flux_err'][lc['mask']].astype(floattype)**2 + \
                                            tt.dot(lc['flux_err_index'][lc['mask']],tt.exp(logs2)),
                                            J=2)
 
@@ -1014,21 +1031,21 @@ class monoModel():
                         cad_index+=[(lc['tele_index'][mask,0].astype(bool))&cadmask[mask]]
                         trans_pred+=[xo.LimbDarkLightCurve(u_star_tess).get_light_curve(
                                                                  orbit=i_orbit, r=i_r,
-                                                                 t=lc['time'][mask].astype(np.float32),
+                                                                 t=lc['time'][mask].astype(floattype),
                                                                  texp=np.nanmedian(np.diff(lc['time'][cadmask]))
                                                                  )/(lc['flux_unit']*mult)]
                     elif cad[0].lower()=='k':
                         cad_index+=[(lc['tele_index'][mask,1]).astype(bool)&cadmask[mask]]
                         trans_pred+=[xo.LimbDarkLightCurve(u_star_kep).get_light_curve(
                                                                  orbit=i_orbit, r=i_r,
-                                                                 t=lc['time'][mask].astype(np.float32),
+                                                                 t=lc['time'][mask].astype(floattype),
                                                                  texp=np.nanmedian(np.diff(lc['time'][cadmask]))
                                                                  )/(lc['flux_unit']*mult)]
                     elif cad[0].lower()=='c':
                         cad_index+=[(lc['tele_index'][mask,2]).astype(bool)&cadmask[mask]]
                         trans_pred+=[xo.LimbDarkLightCurve(u_star_corot).get_light_curve(
                                                                  orbit=i_orbit, r=i_r,
-                                                                 t=lc['time'][mask].astype(np.float32),
+                                                                 t=lc['time'][mask].astype(floattype),
                                                                  texp=np.nanmedian(np.diff(lc['time'][cadmask]))
                                                                  )/(lc['flux_unit']*mult)]
 
@@ -1087,10 +1104,10 @@ class monoModel():
                     pm.Potential("multi_obs",
                                  self.gp['oot'].log_likelihood(self.lc['flux'][self.lc['near_trans']]-(multi_mask_light_curve+ mean)))
                 else:
-                    new_yerr = self.lc['flux_err'][self.lc['near_trans']].astype(np.float32)**2 + \
+                    new_yerr = self.lc['flux_err'][self.lc['near_trans']].astype(floattype)**2 + \
                                tt.dot(self.lc['flux_err_index'][self.lc['near_trans']],tt.exp(logs2))
                     pm.Normal("multiplanet_obs",mu=(multi_mask_light_curve + mean),sd=new_yerr,
-                              observed=self.lc['flux_flat'][self.lc['near_trans']].astype(np.float32))
+                              observed=self.lc['flux_flat'][self.lc['near_trans']].astype(floattype))
                 '''
                 
             else:
@@ -1253,7 +1270,7 @@ class monoModel():
 
 
                 #For each combination we will create a combined model and compute the loglik
-                new_yerr = lc['flux_err'][lc['mask']].astype(np.float32)**2 + \
+                new_yerr = lc['flux_err'][lc['mask']].astype(floattype)**2 + \
                                tt.sum(lc['flux_err_index'][lc['mask']]*tt.exp(logs2).dimshuffle('x',0),axis=1)
 
                 if not self.use_GP:
@@ -1274,7 +1291,7 @@ class monoModel():
                         for n in range(iter_models[pl]['len']):
                             # For each model we compute residuals (subtract mean and multiplanets)
 
-                            resids[pl][n] = lc['flux'][lc['mask']].astype(np.float32) - \
+                            resids[pl][n] = lc['flux'][lc['mask']].astype(floattype) - \
                                      (iter_models[pl]['lcs'][lc['mask'],n] + multi_mask_light_curve[lc['mask']] + mean.dimshuffle('x'))
                             if self.use_GP:
                                 iter_models[pl]['logliks'][n]=self.gp['use'].log_likelihood(y=resids[pl][n])
@@ -1308,20 +1325,20 @@ class monoModel():
                 if self.use_GP:
                     total_llk = pm.Deterministic("total_llk",self.gp['use'].log_likelihood(lc['flux'][lc['mask']] - \
                                                                                     (marg_all_light_curve[lc['mask']] + mean)))
-                    gp_pred = pm.Deterministic("gp_pred", self.gp['use'].predict(lc['time'].astype(np.float32),
+                    gp_pred = pm.Deterministic("gp_pred", self.gp['use'].predict(lc['time'].astype(floattype),
                                                                                  return_var=False))
                     pm.Potential("llk_gp", total_llk)
                     #pm.Normal("all_obs",mu=(marg_all_light_curve + gp_pred + mean),sd=new_yerr,
-                    #          observed=self.lc['flux'][self.lc['near_trans']].astype(np.float32))
+                    #          observed=self.lc['flux'][self.lc['near_trans']].astype(floattype))
                 else:
                     pm.Normal("all_obs",mu=(marg_all_light_curve[lc['mask']] + mean),sd=new_yerr,
-                              observed=lc['flux'][lc['mask']].astype(np.float32))
+                              observed=lc['flux'][lc['mask']].astype(floattype))
 
             # Fit for the maximum a posteriori parameters, I've found that I can get
             # a better solution by trying different combinations of parameters in turn
             if start is None:
                 start = model.test_point
-            print(model.test_point)
+            print("optimizing model",model.test_point)
             map_soln = xo.optimize(start=start)
             ################################################
             #               Optimizing:
@@ -1392,22 +1409,29 @@ class monoModel():
             self.model = model
             self.init_soln = map_soln
     
-    def RunMcmc(self, n_draws=500, plot=True, n_burn_in=None, overwrite=False,**kwargs):
+    def RunMcmc(self, n_draws=500, plot=True, n_burn_in=None, overwrite=False, continuesampling=False, chains=4, **kwargs):
         if not overwrite:
             self.LoadPickle()
-            print("LOADED MCMC")
+            if hasattr(self,'trace'):
+                print("LOADED MCMC")
         
-        if not (hasattr(self,'trace') or hasattr(self,'trace_df')) or overwrite:
+        if not (hasattr(self,'trace') or hasattr(self,'trace_df')) or overwrite or continuesampling:
             if not hasattr(self,'init_soln'):
                 self.init_model()
             #Running sampler:
             np.random.seed(int(self.ID))
             with self.model:
-                n_burn_in=np.clip(int(n_draws*0.66),500,5000) if n_burn_in is None else n_burn_in
+                n_burn_in=np.clip(int(n_draws*0.66),400,5000) if n_burn_in is None else n_burn_in
                 print(type(self.init_soln))
                 print(self.init_soln.keys())
-                self.trace = pm.sample(tune=n_burn_in, draws=n_draws, start=self.init_soln, chains=4,
-                                       step=xo.get_dense_nuts_step(target_accept=0.9),compute_convergence_checks=False)
+                if hasattr(self,'trace') and continuesampling:
+                    print("Using already-generated MCMC trace as start point for new trace")
+                    self.trace = pm.sample(tune=n_burn_in, draws=n_draws, chains=chains, trace=self.trace,
+                                           step=xo.get_dense_nuts_step(target_accept=0.9),compute_convergence_checks=False)
+                else:
+                    self.trace = pm.sample(tune=n_burn_in, draws=n_draws, start=self.init_soln, chains=chains,
+                                           step=xo.get_dense_nuts_step(target_accept=0.9),compute_convergence_checks=False)
+
             self.SaveModelToFile()
         elif not (hasattr(self,'trace') or hasattr(self,'trace_df')):
             print("Trace or trace df exists...")
@@ -1850,14 +1874,14 @@ class monoModel():
                     i_kernel = terms.SHOTerm(log_S0=np.log(self.meds['S0']), log_omega0=np.log(self.meds['w0']), log_Q=np.log(1/np.sqrt(2)))
                     i_gp = celerite.GP(i_kernel,mean=self.meds['mean'],fit_mean=False)
 
-                    i_gp.compute(self.lc['time'][limit_mask_bool[n][nc]].astype(np.float32),
+                    i_gp.compute(self.lc['time'][limit_mask_bool[n][nc]].astype(floattype),
                                  np.sqrt(self.lc['flux_err'][limit_mask_bool[n][nc]]**2 + \
                                  np.dot(self.lc['flux_err_index'][limit_mask_bool[n][nc]],np.exp(self.meds['logs2']))))
                     #llk=i_gp.log_likelihood(mod.lc['flux'][mod.lc['mask']][self.lc['limits'][n][0]:self.lc['limits'][n][1]][c]-mod.trans_to_plot['all']['med'][mod.lc['mask']][self.lc['limits'][n][0]:self.lc['limits'][n][1]][c]-mod.meds['mean'])
                     #print(llk.eval())
                     i_gp_pred, i_gp_var= i_gp.predict(self.lc['flux'][limit_mask_bool[n][nc]] - \
                                         self.trans_to_plot['all']['med'][limit_mask_bool[n][nc]],
-                                        t=self.lc['time'][self.lc['limits'][n][0]:self.lc['limits'][n][1]][c].astype(np.float32),
+                                        t=self.lc['time'][self.lc['limits'][n][0]:self.lc['limits'][n][1]][c].astype(floattype),
                                         return_var=True,return_cov=False)
                     gp_pred+=[i_gp_pred]
                     gp_sd+=[np.sqrt(i_gp_var)]
@@ -1875,7 +1899,7 @@ class monoModel():
             self.gp_to_plot['gp_sd']=np.hstack(gp_sd)
             '''
             with self.model:
-                pred,var=xo.eval_in_model(self.gp['use'].predict(self.lc['time'].astype(np.float32),
+                pred,var=xo.eval_in_model(self.gp['use'].predict(self.lc['time'].astype(floattype),
                                                                  return_var=True,return_cov=False),self.meds)                    
             self.gp_to_plot['gp_pred']=pred
             self.gp_to_plot['gp_sd']=np.sqrt(var)
@@ -1914,7 +1938,7 @@ class monoModel():
                         
                         #marg_lc[self.lc['near_trans']]=sample['marg_all_light_curve'][self.lc['near_trans']]
                         ii_gp_pred, ii_gp_var= i_gp.predict(self.lc['flux'][limit_mask_bool[n][nc]] - marg_lc[limit_mask_bool[n][nc]],
-                                        t=self.lc['time'][self.lc['limits'][n][0]:self.lc['limits'][n][1]][c].astype(np.float32),
+                                        t=self.lc['time'][self.lc['limits'][n][0]:self.lc['limits'][n][1]][c].astype(floattype),
                                         return_var=True,return_cov=False)
 
                         i_gp_pred+=[ii_gp_pred]
@@ -2030,6 +2054,9 @@ class monoModel():
         
         if not hasattr(self,'trace'):
             n_samp==1
+        
+        if not hasattr(self,'savenames'):
+            self.GetSavename(how='save')
         
         if interactive:
             #Plots bokeh figure
@@ -2147,7 +2174,7 @@ class monoModel():
         '''
         with self.model:
             for i, sample in enumerate(xo.get_samples_from_trace(self.trace, size=n_samp)):
-                ii_gp_pred, ii_gp_var = xo.eval_in_model(self.gp['use'].predict(self.lc['time'].astype(np.float32),
+                ii_gp_pred, ii_gp_var = xo.eval_in_model(self.gp['use'].predict(self.lc['time'].astype(floattype),
                                                                                 return_var=True,return_cov=False),sample)
                 i_gp_pred+=[ii_gp_pred]
                 i_gp_var+=[ii_gp_var]
@@ -2730,7 +2757,7 @@ class monoModel():
         import seaborn as sns
         plot_pers=self.duos+self.monos
         if ymin is None:
-            ymin=np.min(np.nanmedian(self.trace['logprob_marg_'+pl],axis=0))/np.log(10)-2.0
+            ymin=np.min(np.hstack([np.nanmedian(self.trace['logprob_marg_'+pl],axis=0) for pl in self.duos]))/np.log(10)-2.0
         
         if len(plot_pers)>0:
             plt.figure(figsize=(8.5,4.2))
@@ -2817,7 +2844,7 @@ class monoModel():
         corner_vars=['logrho_S']
         
         for pl in self.duos:
-            corner_vars+=['duo_t0s_'+pl,'duo_logrors_'+pl,'duo_bs_'+pl,'tdur_marg_'+pl,
+            corner_vars+=['duo_t0s_'+pl,'duo_t0_2s_'+pl,'duo_logrors_'+pl,'duo_bs_'+pl,'tdur_marg_'+pl,
                            'period_marg_'+pl,'duo_eccs_'+pl,'duo_omegas_'+pl]
         for pl in self.monos:
             corner_vars+=['mono_t0s_'+pl,'mono_logrors_'+pl,'mono_bs_'+pl,'tdur_marg_'+pl,
@@ -2855,7 +2882,7 @@ class monoModel():
                     samples.loc[sampl_loc,'log_prob']=self.trace['logprob_marg_'+mpl][:,n_gap]
                     n_pos+=1
             for dpl in self.duos:
-                for n_per in np.arange(len(self.planets[mpl]['per_gaps'])):
+                for n_per in np.arange(len(self.planets[dpl]['period_aliases'])):
                     sampl_loc=np.in1d(np.arange(len(samples)),np.arange(n_pos*samples_len,(n_pos+1)*samples_len))
                     samples.loc[sampl_loc,'period_marg_'+dpl]=self.trace['duo_periods_'+dpl][:,n_per]
                     samples.loc[sampl_loc,'tdur_marg_'+dpl]=self.trace['duo_tdurs_'+dpl][:,n_per]

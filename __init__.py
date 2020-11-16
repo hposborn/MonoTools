@@ -1,5 +1,5 @@
 import os
-os.environ['THEANO_FLAGS'] = "device=cpu"
+os.environ['THEANO_FLAGS'] = "device=cpu,floatX=float64,gcc.cxxflags=-fbracket-depth=1024"
 MonoTools_tablepath = os.path.join(os.path.dirname(os.path.abspath( __file__ )),'data','table')
 if os.environ.get('MONOTOOLSPATH') is None:
     MonoData_savepath = os.environ.get('MONOTOOLSPATH')

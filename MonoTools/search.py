@@ -44,18 +44,19 @@ os.environ["CFLAGS"] = "-fbracket-depth=512" if not "CFLAGS" in os.environ else 
 #creating new hidden directory for theano compilations:
 theano_dir=MonoData_savepath+'/.theano_dir_'+str(np.random.randint(8))
 
-theano_pars={'device':'cpu','floatX':'float32',
+theano_pars={'device':'cpu','floatX':'float64',
              'base_compiledir':theano_dir,"gcc.cxxflags":"-fbracket-depth=1024"}
 '''if MonoData_savepath=="/Users/hosborn/python/MonoToolsData" or MonoData_savepath=="/Volumes/LUVOIR/MonoToolsData":
     theano_pars['cxx']='/usr/local/Cellar/gcc/9.3.0_1/bin/g++-9'
-'''
+
 if MonoData_savepath=="/Users/hosborn/python/MonoToolsData" or MonoData_savepath=="/Volumes/LUVOIR/MonoToolsData":
     theano_pars['cxx']='cxx=/Library/Developer/CommandLineTools/usr/bin/g++'
+'''
 if os.environ.get('THEANO_FLAGS') is None:
     os.environ["THEANO_FLAGS"]=''
 for key in theano_pars:
     if key not in os.environ["THEANO_FLAGS"]:
-        os.environ["THEANO_FLAGS"] = os.environ["THEANO_FLAGS"]+key+theano_pars[key]+","
+        os.environ["THEANO_FLAGS"] = os.environ["THEANO_FLAGS"]+','+key+"="+theano_pars[key]
 
 import theano.tensor as tt
 import pymc3 as pm
@@ -117,7 +118,7 @@ def QuickMonoFit(lc,it0,dur,Rs=None,Ms=None,Teff=None,useL2=False,fit_poly=True,
         y = lc[fluxindex][nearby&mask][np.argsort(x)]
         y-=np.nanmedian(y)
         yerr=lc[fluxerrindex][nearby&mask][np.argsort(x)]
-        x=np.sort(x).astype(np.float32)
+        x=np.sort(x).astype(np.float64)
 
         oot_flux=np.nanmedian(y[(abs(x-it0)>0.65*dur)])
         int_flux=np.nanmedian(y[(abs(x-it0)<0.35*dur)])
@@ -126,7 +127,7 @@ def QuickMonoFit(lc,it0,dur,Rs=None,Ms=None,Teff=None,useL2=False,fit_poly=True,
         init_poly=None
     else:
         #Mono case:
-        x=lc[timeindex][nearby&mask].astype(np.float32)
+        x=lc[timeindex][nearby&mask].astype(np.float64)
         yerr=lc[fluxerrindex][nearby&mask]
         if not fit_poly or np.sum(abs(x-it0)<0.6)==0.0:
             y=lc[fluxindex][nearby&mask]
@@ -665,7 +666,7 @@ def PlotMonoSearch(lc, ID, monosearchparams, mono_dic, interpmodels, tdurs,
             axes[1].plot(monosearchparams.loc[monosearchparams['init_dur']==dur,'tcen'],
                      monosearchparams.loc[monosearchparams['init_dur']==dur,'sin_DeltaBIC'],
                          c=sns.color_palette()[-1*(n+1)],alpha=0.6, rasterized=True)
-    axes[1].legend()
+    axes[1].legend(prop={'size': 5})
     ix=(np.isfinite(monosearchparams['sum_DeltaBICs']))&(monosearchparams['sin_DeltaBIC']<1e8)&(monosearchparams['poly_DeltaBIC']<1e8)
     min_bic=np.nanmin(monosearchparams.loc[ix,'poly_DeltaBIC'])
     maxylim=np.nanmax([np.percentile(monosearchparams.loc[ix,'poly_DeltaBIC'],98),
@@ -990,11 +991,11 @@ def PeriodicPlanetSearch(lc, ID, planets, use_binned=False, use_flat=True, binsi
         elif plot_loc[-1]=='/':
             plot_loc = plot_loc+str(ID).zfill(11)+"_multi_search.pdf"
         plt.subplot(311)
-        plt.legend()
+        plt.legend(prop={'size': 5})
         plt.subplot(312)        
         plt.plot(results[-1]['model_lightcurve_time']+t_zero,results[-1]['model_lightcurve_model'],
                  alpha=0.5,c=sns.color_palette()[n_pl-init_n_pl],label=planet_name+'/det_'+str(n_pl),linewidth=4)
-        plt.legend()
+        plt.legend(prop={'size': 5})
         if 'jd_base' in lc:
             plt.xlabel("time [BJD-"+str(lc['jd_base'])+"]")
         else:
@@ -1120,10 +1121,10 @@ def dipmodel_sinusoid(params,x):
     newt=(x-params[0])/(4.5*np.exp(params[1]))*2*np.pi-np.pi*0.5
     return np.polyval(params[3:],x) + np.exp(params[2])*(np.sin(newt))
 
-def Gaussian_neg_lnprob(params, x, y, yerr, priors, interpmodel, order=3):
-    return -1*Gaussian_lnprob(params, x, y, yerr, priors, interpmodel, order=order)
+def Gaussian_neg_lnprob(params, x, y, yerr, priors, order=3):
+    return -1*Gaussian_lnprob(params, x, y, yerr, priors, order=order)
 
-def Gaussian_lnprob(params, x, y, yerr, priors, interpmodel, order=3):
+def Gaussian_lnprob(params, x, y, yerr, priors, order=3):
     # Trivial improper prior: uniform in the log.
     lnprior=0
     for p in np.arange(3):
@@ -1133,16 +1134,16 @@ def Gaussian_lnprob(params, x, y, yerr, priors, interpmodel, order=3):
             lnprior+=3*lnp
         elif lnp<-20:
             lnprior+=1e6*lnp
-    llk = log_likelihood_gaussian_dip(params, x, y, yerr, interpmodel)
+    llk = log_likelihood_gaussian_dip(params, x, y, yerr)
     return lnprior + llk
 
 def log_gaussian(x, mu, sig, weight=0.1):
     return -1*weight*np.power(x - mu, 2.) / (2 * np.power(sig, 2.))
 
-def log_likelihood_gaussian_dip(params, x, y, yerr, interpmodel):
+def log_likelihood_gaussian_dip(params, x, y, yerr):
     model=dipmodel_gaussian(params,x)
     sigma2 = yerr ** 2
-    return -0.5 * np.sum((y - model) ** 2 / sigma2 + np.log(sigma2))
+    return -0.5 * np.sum((y - model) ** 2 / sigma2)
 
 def dipmodel_gaussian(params,x):
     dip=1.0+np.exp(params[0])*np.exp(-1*np.power(x - params[2], 2.) / (2 * np.power((0.075*np.exp(params[1])), 2.)))
@@ -1183,7 +1184,7 @@ def dipmodel_centroid(params,t,interpmodel,order):
     return xmod,ymod
 
 
-def AsteroidCheck(lc,monoparams,interpmodel,ID,order=3,dur_region=3.5,
+def AsteroidCheck(lc,monoparams,ID,order=3,dur_region=3.5,
                   plot=False,plot_loc=None, return_fit_lcs=False, remove_earthshine=True, **kwargs):
     # Checking lightcure for background flux boost during transit due to presence of bright asteroid
     # Performing two model fits 
@@ -1203,7 +1204,7 @@ def AsteroidCheck(lc,monoparams,interpmodel,ID,order=3,dur_region=3.5,
         #If there's a big gap, we'll remove the far side of that
         if np.max(np.diff(lc['time'][nearishTrans]))>0.4:
             jump_n=np.argmax(np.diff(lc['time'][nearishTrans]))
-            jump_time=np.average(lc['time'][nearishTrans][jump_n:jump_n+1])
+            jump_time=0.5*(lc['time'][nearishTrans][jump_n]+lc['time'][nearishTrans][jump_n+1])
             if jump_time < monoparams['tcen']:
                 nearishTrans=(lc['time']>jump_time)&((lc['time']-monoparams['tcen'])<nearish_region)&lc['mask']
             elif jump_time > monoparams['tcen']:
@@ -1218,7 +1219,7 @@ def AsteroidCheck(lc,monoparams,interpmodel,ID,order=3,dur_region=3.5,
         
         bg_lc[:,0]-=monoparams['tcen']
         nearTrans=(abs(bg_lc[:,0])<monoparams['tdur']*dur_region)
-        sigma2 = bg_lc[nearTrans,2]**2
+        sigma2 = bg_lc[:,2]**2
         outTransit=(abs(bg_lc[:,0])>monoparams['tdur']*0.75)
         inTransit=(abs(bg_lc[:,0])<monoparams['tdur']*0.35)
         
@@ -1247,30 +1248,39 @@ def AsteroidCheck(lc,monoparams,interpmodel,ID,order=3,dur_region=3.5,
 
             #ifft
             s2=np.fft.ifft(fou*g) #filtered spectrum = spectrum * bandpass 
-            fft_bg_model = np.real(s2)[np.argmin(abs(newt[:,np.newaxis] - bg_lc[:,0][np.newaxis,:]),axis=0)]
-            #fft_bg_model += np.polyval(init_poly, bg_lc[nearTrans,0]
-            print(len(fft_bg_model),len(bg_lc[nearTrans,0]))
+            fft_model = np.real(s2)[np.argmin(abs(newt[:,np.newaxis] - bg_lc[:,0][np.newaxis,:]),axis=0)]
+            #fft_model += np.polyval(init_poly, bg_lc[nearTrans,0]
+            print(len(fft_model),len(bg_lc[:,0]))
             
             #Checking model is actually a good fit around transit by doing 1D poly + FFT model vs 2D poly:
-            bg_model     = np.polyval(np.polyfit(bg_lc[nearTrans&outTransit,0],bg_lc[nearTrans&outTransit,1]-fft_bg_model[nearTrans&outTransit],0), bg_lc[nearTrans,0]) + fft_bg_model[nearTrans]
-            llk_bg_model = -0.5 * np.sum((bg_lc[nearTrans,1] - bg_model) ** 2 / sigma2)
-            llk_polyfit  = -0.5 * np.sum((bg_lc[nearTrans,1] - np.polyval(np.polyfit(bg_lc[nearTrans&outTransit,0],bg_lc[nearTrans&outTransit,1],2),bg_lc[nearTrans,0])) ** 2 / sigma2)
-            if llk_polyfit > llk_bg_model+1:
-                print("Earthshine model not useful in this case - polynomial model is better by", llk_polyfit - llk_bg_model)
-                fft_bg_model=np.tile(0,len(bg_lc[:,0]))
-        else:
-            fft_bg_model=np.tile(0,len(bg_lc[:,0]))
+            bg_fft_model     = np.polyval(np.polyfit(bg_lc[nearTrans&outTransit,0],
+                                                     bg_lc[nearTrans&outTransit,1] - fft_model[nearTrans&outTransit],0),
+                                          bg_lc[:,0]) + \
+                               fft_model
+            llk_bg_model = -0.5 * np.sum((bg_lc[nearTrans&outTransit,1] - bg_fft_model[nearTrans&outTransit]) ** 2 / \
+                                         sigma2[nearTrans&outTransit])
             
+            bg_model = np.polyval(np.polyfit(bg_lc[nearTrans&outTransit,0],bg_lc[nearTrans&outTransit,1],2),
+                                  bg_lc[:,0])
+            llk_polyfit  = -0.5 * np.sum((bg_lc[nearTrans&outTransit,1] - bg_model[nearTrans&outTransit]) ** 2 / \
+                                         sigma2[nearTrans&outTransit])
+            print("polyfit llk:", llk_polyfit, "fft llk:", llk_bg_model)
+            if llk_polyfit > llk_bg_model-1:
+                print("Earthshine model not useful in this case - polynomial model is better by", llk_polyfit - llk_bg_model)
+                fft_model=np.tile(0,len(bg_lc[:,0]))
+        else:
+            fft_model=np.tile(0,len(bg_lc[:,0]))
+
         outTransit*=nearTrans
         
         #print(bg_lc)
-        log_height_guess=np.log(2*np.clip((np.nanmedian(bg_lc[inTransit,1])-np.nanmedian(bg_lc[nearTrans&outTransit,1])),0.00001,1000))
-        priors= np.column_stack(([log_height_guess,np.log(np.clip(1.4*monoparams['tdur'],6*cad,3.0)),0.0],[3.0,0.25,0.75*monoparams['tdur']]))
-        best_nodip_res={'fun':1e30,'bic':1e9}
-
-        best_dip_res={'fun':1e30,'bic':1e9}
-        
-        methods=['L-BFGS-B','Nelder-Mead','Powell']
+        log_height_guess=np.log(2*np.clip((np.nanmedian(bg_lc[inTransit,1])-np.nanmedian(bg_lc[nearTrans&outTransit,1])),
+                                          0.00001,1000) )
+        priors= np.column_stack(([log_height_guess,np.log(np.clip(1.4*monoparams['tdur'],6*cad,3.0)),0.0],
+                                 [3.0,0.25,0.75*monoparams['tdur']]))
+        best_nodip_res={'fun':1e30,'bic':1e9,'llk':-1e20}
+        best_dip_res={'fun':1e30,'bic':1e9,'llk':-1e20}
+        methods=['L-BFGS-B', 'Nelder-Mead', 'Powell']
         n=0
         while n<21:
             #Running the minimization 7 times with different initial params to make sure we get the best fit
@@ -1279,33 +1289,43 @@ def AsteroidCheck(lc,monoparams,interpmodel,ID,order=3,dur_region=3.5,
             
             rand_choice=np.random.random(len(bg_lc))<0.9
             nodip_res={'x':np.polyfit(bg_lc[nearTrans&rand_choice,0],
-                                      bg_lc[nearTrans&rand_choice,1]-fft_bg_model[nearTrans&rand_choice],
-                                      order)}
-            
-            nodip_res['fun'] = -1*(-0.5 * np.sum((bg_lc[nearTrans,1] - fft_bg_model[nearTrans] - np.polyval(nodip_res['x'],bg_lc[nearTrans,0])) ** 2 / sigma2 + np.log(sigma2)))
-
+                                      bg_lc[nearTrans&rand_choice,1] - fft_model[nearTrans&rand_choice],
+                                      order+1)}
+            nodip_model = fft_model[nearTrans] + np.polyval(nodip_res['x'],bg_lc[nearTrans,0])
+            nodip_res['llk'] = log_likelihood_gaussian_dip(np.hstack((-30,-30,0,nodip_res['x'])),bg_lc[nearTrans,0],
+                                                                     bg_lc[nearTrans,1],bg_lc[nearTrans,2])
+            #nodip_res['llk'] = -0.5 * np.sum((bg_lc[nearTrans,1] - nodip_model)**2 / sigma2[nearTrans])
+            nodip_res['prior']=0
+            #np.sum((y - model) ** 2 / sigma2 + np.log(sigma2))
             #BIC = 2*(neg_log_likelihood-log_prior) + log(n_points)*n_params 
-            nodip_res['bic']=(2*nodip_res['fun'] + np.log(len(bg_lc[nearTrans,1]))*len(nodip_res['x']))
+            nodip_res['bic'] = np.log(np.sum(nearTrans))*len(nodip_res['x']) - 2 * nodip_res['llk']
             #print('no dip:',nodip_args,nodip_res,nodip_bic)
             if nodip_res['bic']<best_nodip_res['bic']:
                 best_nodip_res=nodip_res
+                
+                
             
             #log10(height), log10(dur), tcen
             dip_args= np.hstack(([np.random.normal(log_height_guess,0.25)-(n%4)/2.0,
                                   np.log10(1.5*monoparams['tdur'])+abs(np.random.normal(0.0,0.5)),
                                   np.random.normal(0.0,0.5*monoparams['tdur'])],
                                   np.polyfit(bg_lc[outTransit&rand_choice,0],
-                                             bg_lc[outTransit&rand_choice,1]-fft_bg_model[outTransit&rand_choice],
+                                             bg_lc[outTransit&rand_choice,1] - fft_model[outTransit&rand_choice],
                                              order)))
 
             dip_res=optim.minimize(Gaussian_neg_lnprob, dip_args,
                                      args=(bg_lc[nearTrans,0],
-                                           bg_lc[nearTrans,1]-fft_bg_model[nearTrans],
+                                           bg_lc[nearTrans,1]-fft_model[nearTrans],
                                            bg_lc[nearTrans,2],
                                            priors,
-                                           interpmodel,
                                            order),method=methods[n%3])
-            dip_res['bic']=(2*dip_res.fun + np.log(np.sum(nearTrans))*len(dip_args))
+            
+            dip_res['llk']=log_likelihood_gaussian_dip(dip_res['x'], 
+                                                       bg_lc[nearTrans,0],
+                                                       bg_lc[nearTrans,1]-fft_model[nearTrans],
+                                                       bg_lc[nearTrans,2])
+            dip_res['prior']=dip_res['fun']-dip_res['llk']
+            dip_res['bic']= np.log(np.sum(nearTrans))*len(dip_args) - 2 * dip_res['llk']
             
             #print('dip:',dip_args,dip_res,dip_bic)
             if dip_res['bic']<best_dip_res['bic']:
@@ -1317,20 +1337,19 @@ def AsteroidCheck(lc,monoparams,interpmodel,ID,order=3,dur_region=3.5,
                 #Need to expand on priors to include new polynomial orders in this case:
             #print(n,"dip:",dip_res['fun'],dip_res['bic'],dip_args,"nodip:",nodip_res['fun'],nodip_res['bic'],"order:",order)
 
-            if n>=7 and (best_dip_res['fun']<1e30) and (best_nodip_res['fun']<1e30):
+            if n>=7 and (best_dip_res['llk']>-1e20) and (best_nodip_res['llk']>-1e20):
                 break
             n+=1
             
         fit_dict={'asteroid_dip_'+col:best_dip_res[col] for col in best_dip_res}
         fit_dict.update({'asteroid_nodip_'+col:best_nodip_res[col] for col in best_nodip_res})
-            
-        if (best_dip_res['fun']<1e30) and (best_nodip_res['fun']<1e30):
-            fit_dict['asteroid_DeltaBIC']=best_dip_res['bic']-best_nodip_res['bic']
-            fit_dict['asteroid_log_llk_ratio']=(-1*best_dip_res['fun'])-(-1*best_nodip_res['fun'])
+        if (best_dip_res['llk']>-1e20) and (best_nodip_res['llk']>-1e20):
+            fit_dict['asteroid_DeltaBIC']=best_dip_res['bic']-best_nodip_res['bic'] # [prefer dip] < 0 < [prefer no dip]
+            fit_dict['asteroid_log_llk_ratio']=(best_dip_res['llk'])-(best_nodip_res['llk'])
             fit_dict['asteroid_ampl']=np.exp(best_dip_res['x'][0])
             fit_dict['asteroid_dur']=np.exp(best_dip_res['x'][1])
             best_model_resids = bg_lc[nearTrans&outTransit,1] - \
-                       (fft_bg_model[nearTrans&outTransit] + dipmodel_gaussian(best_dip_res['x'],bg_lc[nearTrans&outTransit,0]))
+                       (fft_model[nearTrans&outTransit] + dipmodel_gaussian(best_dip_res['x'],bg_lc[nearTrans&outTransit,0]))
             fit_dict['asteroid_bg_stdw']=np.nanmedian(abs(np.diff(best_model_resids)))
             fit_dict['asteroid_bg_stdr']=np.nanstd(best_model_resids)
             fit_dict['asteroid_snrw'] = fit_dict['asteroid_ampl'] / \
@@ -1340,13 +1359,13 @@ def AsteroidCheck(lc,monoparams,interpmodel,ID,order=3,dur_region=3.5,
             #print(ID,"| Ran Asteroid fitting "+str(n)+" times, and DeltaBIC="+str(DeltaBIC),
             #      "| params:",best_dip_res['x'],best_nodip_res['x'])
         else:
-            print(lc['bg_flux'][nearTrans]-fft_bg_model[nearTrans])
+            print(lc['bg_flux'][nearTrans]-fft_model[nearTrans])
         if plot:
             if plot_loc is not None and type(plot_loc)!=str:
                 ax = plot_loc
             else:
                 fig = plt.figure(figsize=(8,8))
-                ax = plt.add_subplot(111)
+                ax = fig.add_subplot(111)
                 if plot_loc is None:
                     plot_loc=str(ID)+"_asteroid_check.pdf"
                 elif plot_loc[-1]=='/':
@@ -1355,43 +1374,44 @@ def AsteroidCheck(lc,monoparams,interpmodel,ID,order=3,dur_region=3.5,
                       len(bg_lc[nearTrans,1]),plot_loc,best_nodip_res)
             if plot:
                 #### PLOTTING ###
-                ax.scatter(bg_lc[nearTrans,0],bg_lc[nearTrans,1],s=2,alpha=0.75,rasterized=True)
+                ax.scatter(bg_lc[nearTrans,0],bg_lc[nearTrans,1],s=2,alpha=0.75,rasterized=True,zorder=1)
                 
-                ax.plot(bg_lc[nearTrans,0],np.nanmedian(bg_lc[nearTrans,1])+fft_bg_model[nearTrans],':k',
-                        alpha=0.2,linewidth=4,label='ft model of earthshine')
+                ax.plot(bg_lc[nearTrans,0],np.nanmedian(bg_lc[nearTrans,1])+fft_model[nearTrans],':k',
+                        alpha=0.2,linewidth=4,label='ft model of earthshine',zorder=2)
 
-                ax.plot([-0.5*monoparams['tdur'],-0.5*monoparams['tdur']],[-2.0,2.0],':k',alpha=0.6,rasterized=True)
-                ax.plot([0.0,0.0],[-2.0,2.0],'--k',linewidth=3,alpha=0.8,rasterized=True)
-                ax.plot([0.5*monoparams['tdur'],0.5*monoparams['tdur']],[-2.0,2.0],':k',alpha=0.6,rasterized=True)
+                ax.plot([-0.5*monoparams['tdur'],-0.5*monoparams['tdur']],[-2.0,2.0],':k',alpha=0.4,rasterized=True)
+                ax.plot([0.0,0.0],[-2.0,2.0],'--k',linewidth=3,alpha=0.6,rasterized=True)
+                ax.plot([0.5*monoparams['tdur'],0.5*monoparams['tdur']],[-2.0,2.0],':k',alpha=0.4,rasterized=True)
                 ax.set_ylabel("Relative background flux")
 
-                if (best_nodip_res['fun']<1e30):
-                    ax.plot(bg_lc[nearTrans,0],fft_bg_model[nearTrans]+
+                if (best_nodip_res['llk']>-1e20):
+                    ax.plot(bg_lc[nearTrans,0],fft_model[nearTrans]+
                              np.polyval(best_nodip_res['x'],bg_lc[nearTrans,0]),c='C3',linewidth=2,
-                             label='pure trend',alpha=0.6,rasterized=True)
-                if (best_dip_res['fun']<1e30):
+                             label='pure trend',alpha=0.6,rasterized=True,zorder=2)
+                if (best_dip_res['llk']>-1e20):
                     ax.plot(bg_lc[nearTrans,0],
-                             fft_bg_model[nearTrans]+dipmodel_gaussian(best_dip_res.x,bg_lc[nearTrans,0]),c='C4',linewidth=2,
-                             label='trend+asteroid',alpha=0.6,rasterized=True)
+                             fft_model[nearTrans]+dipmodel_gaussian(best_dip_res.x,bg_lc[nearTrans,0]),c='C4',linewidth=2.5,
+                             label='trend+asteroid',alpha=0.8,rasterized=True,zorder=3)
                 try:
-                    ax.set_ylim(np.nanmin(fft_bg_model[nearTrans]+bg_lc[nearTrans,1]),np.nanmax(fft_bg_model[nearTrans]+bg_lc[nearTrans,1]))
+                    ax.set_ylim(np.nanmin(fft_model[nearTrans]+bg_lc[nearTrans,1]),
+                                np.nanmax(fft_model[nearTrans]+bg_lc[nearTrans,1]))
                 except:
                     b=0
                 #plt.ylim(np.percentile(bg_lc[inTransit,1],[0.2,99.8]))
-                ax.legend()
-                if (best_dip_res['fun']<1e30) and (best_nodip_res['fun']<1e30):
-                    ax.set_title(str(ID)+" Asteroid. - "+["pass","fail"][int(fit_dict['asteroid_DeltaBIC']<0)])
+                ax.legend(prop={'size': 5})
+                if (best_dip_res['llk']>-1e20) and (best_nodip_res['llk']>-1e20):
+                    ax.set_title(str(ID)+" Asteroid. - "+["pass","fail"][int(fit_dict['asteroid_DeltaBIC']<-10)])
                 else:
                     ax.set_title(str(ID)+" Asteroid. No fit ???")
                 if type(plot_loc)==str:
                     fig.savefig(plot_loc, dpi=400)
                 if return_fit_lcs:
-                    return fit_dict, ax, np.column_stack((bg_lc[:,0],bg_lc[:,1],fft_bg_model,
+                    return fit_dict, ax, np.column_stack((bg_lc[:,0],bg_lc[:,1],bg_lc[:,2],fft_model,
                                                          np.polyval(best_nodip_res['x'],bg_lc[:,0]),
                                                          dipmodel_gaussian(best_dip_res.x,bg_lc[:,0])))
                 else:
                     return fit_dict, ax
-        elif (best_dip_res['fun']<1e30) and (best_nodip_res['fun']<1e30):
+        elif (best_dip_res['llk']>-1e20) and (best_nodip_res['llk']>-1e20):
             if return_fit_lcs:
                 return fit_dict, None, None
             else:
@@ -1461,8 +1481,9 @@ def VariabilityCheck(lc, params, ID, modeltype='all',plot=False,plot_loc=None,nd
                 mod_res_sin=optim.minimize(Sinusoid_neg_lnprob, mod_args,
                                        args=(x[np.argsort(x)],y[np.argsort(x)],yerr[np.argsort(x)],priors['sin'],polyorder),
                                        method=methods[n%3])
-                mod_res_sin['bic']=(2*mod_res_sin.fun + np.log(len(x))*len(mod_res_sin.x))
-                mod_res_sin['llk']=-1*mod_res_sin.fun
+                mod_res_sin['llk']=log_likelihood_sinusoid(mod_res_sin['x'], x[np.argsort(x)],
+                                                           y[np.argsort(x)],yerr[np.argsort(x)])
+                mod_res_sin['bic']=np.log(len(x))*len(mod_res_sin['x']) - 2 * mod_res_sin['llk']
 
                 #print('dip:',dip_args,dip_res,dip_bic)
                 if mod_res_sin['bic']<best_mod_res['sin']['bic']:
@@ -1491,8 +1512,10 @@ def VariabilityCheck(lc, params, ID, modeltype='all',plot=False,plot_loc=None,nd
                                        args=(x[np.argsort(x)],y[np.argsort(x)],yerr[np.argsort(x)],priors['step'],
                                              np.clip(polyorder+1,1,5),npolys),
                                        method=methods[n%3])
-                mod_res_step['bic']=(2*mod_res_step.fun + np.log(len(x))*len(mod_res_step.x))
-                mod_res_step['llk']=-1*mod_res_step.fun
+                mod_res_step['llk']=log_likelihood_step(mod_res_step['x'],x[np.argsort(x)],y[np.argsort(x)],
+                                                        yerr[np.argsort(x)],npolys)
+                mod_res_step['bic']=np.log(len(x))*len(mod_res_step['x']) - 2 * mod_res_step['llk']
+                #(2*mod_res_step.fun + np.log(len(x))*len(mod_res_step.x))
 
                 #print('dip:',dip_args,dip_res,dip_bic)
                 if mod_res_step['bic']<best_mod_res['step']['bic']:
@@ -1503,9 +1526,9 @@ def VariabilityCheck(lc, params, ID, modeltype='all',plot=False,plot_loc=None,nd
                 mod_res_poly=optim.minimize(Poly_neg_lnprob, np.polyfit(x,y,polyorder),
                                             args=(x,y,yerr,priors['poly'],polyorder),
                                             method=methods[n%3])
-                mod_res_poly['bic']=(2*mod_res_poly.fun + np.log(len(x))*len(mod_res_poly.x))
-                mod_res_poly['llk']=-1*mod_res_poly.fun
-
+                mod_res_poly['llk']=log_likelihood_poly(mod_res_poly['x'],x,y,yerr)
+                mod_res_poly['bic']=np.log(len(x))*len(mod_res_poly['x']) - 2 * mod_res_poly['llk']
+                #=(2*mod_res_poly.fun + np.log(len(x))*len(mod_res_poly.x))
                 #print('dip:',dip_args,dip_res,dip_bic)
                 if mod_res_poly['bic']<best_mod_res['poly']['bic']:
                     best_mod_res['poly']=mod_res_poly
@@ -1523,6 +1546,7 @@ def VariabilityCheck(lc, params, ID, modeltype='all',plot=False,plot_loc=None,nd
 
         best_mod_res['trans']={}
         best_mod_res['trans']['llk']= -0.5 * np.sum((y - y_trans)**2 / sigma2 + np.log(sigma2))
+        best_mod_res['trans']['bic']= np.log(len(x))*6 - 2 * best_mod_res['trans']['llk']
     
         if 'sin' in best_mod_res and best_mod_res['sin']['bic']<1e9:
             best_mod_res['sin']['llk_ratio']=log_likelihood_sinusoid(best_mod_res['sin']['x'], x, y, yerr) - best_mod_res['trans']['llk']
@@ -1577,14 +1601,14 @@ def VariabilityCheck(lc, params, ID, modeltype='all',plot=False,plot_loc=None,nd
         if 'poly' in best_mod_res and best_mod_res['poly']['fun']<1e30:
             ax.plot(x, np.polyval(best_mod_res['poly']['x'],x),
                     c='C2',alpha=0.5,label='polynomial model',linewidth=2.25,zorder=2,rasterized=True)
-        ax.plot(x, y_trans, '--', c='C1', alpha=0.5, label='transit model', linewidth=2.25, zorder=2, rasterized=True)
+        ax.plot(x, y_trans, '-', c='C1', alpha=0.75, label='transit model', linewidth=2.25, zorder=3, rasterized=True)
 
         try:
             ax.set_ylim(np.nanmin(y),np.nanmax(y))
         except:
             b=0
         #plt.ylim(np.percentile(bg_lc[inTransit,1],[0.2,99.8]))
-        ax.legend()
+        ax.legend(prop={'size': 5})
         if len(best_mod_res.keys())>0 and np.all([best_mod_res[mod]['fun']<1e30 for mod in mods]):
             ax.set_title(str(ID)+" ' - "+["pass","fail"][int(np.any([best_mod_res[mod]['llk_ratio']>0 for mod in mods]))])
         else:
@@ -1631,14 +1655,14 @@ def CheckInstrumentalNoise(lc,monodic,jd_base=None, **kwargs):
     inst_snr=1+np.average(tces_per_cadence[abs(tces_per_cadence[:,0]-monodic['tcen'])<monodic['tdur'],1])
     return monodic['snr']/np.clip(inst_snr,1.0,1000)
 
-def GapCull(t0,t,dat,std_thresh=7,boolean=None,time_jump_thresh=0.4):
+def GapCull(t0,t,dat,std_thresh=10,boolean=None,time_jump_thresh=0.4):
     #Removes data before/after gaps and jumps in t & y
     #If there's a big gap or a big jump, we'll remove the far side of that
     if boolean is None:
         boolean=np.tile(True,len(t))
     if np.max(np.diff(t[boolean]))>time_jump_thresh:
         jump_n=np.argmax(np.diff(t[boolean]))
-        jump_time=np.average(t[boolean][jump_n:jump_n+1])
+        jump_time=0.5*(t[boolean][jump_n]+t[boolean][jump_n+1])
         #print("TIME JUMP IN CENTROID AT",jump_time)
         if jump_time < t0:
             boolean*=(t>jump_time)
@@ -1648,9 +1672,9 @@ def GapCull(t0,t,dat,std_thresh=7,boolean=None,time_jump_thresh=0.4):
     for arr in dat:
         noise=np.nanmedian(abs(np.diff(arr[boolean])))
         #5-sigma x centroid jump - need to cut
-        if len(arr[boolean])>0 and np.nanmax(np.diff(arr[boolean]))>std_thresh*noise:
+        if np.sum(boolean)>0 and np.nanmax(abs(np.diff(arr[boolean])))>std_thresh*noise:
             jump_n=np.argmax(np.diff(arr[boolean]))
-            jump_time=np.average(t[boolean][jump_n:jump_n+1])
+            jump_time=0.5*(t[boolean][jump_n]+t[boolean][jump_n+1])
             #print("X JUMP IN CENTROID AT",jump_time)
             if jump_time < t0:
                 boolean*=(t>jump_time)
@@ -1766,8 +1790,9 @@ def CentroidCheck(lc,monoparams,interpmodel,ID,order=2,dur_region=3.5, plot=True
                                         order),method=methods[n%3])
             nodip_res={'fun':yfit.fun+xfit.fun}
             nodip_res['x']=[xfit.x,yfit.x]
-            nodip_res['bic']=2*nodip_res['fun'] + np.log(2*np.sum(roundTransit))*(len(xfit)+len(yfit))
-            nodip_res['llk']=-1*nodip_res['fun']
+            #nodip_res['bic']=2*nodip_res['fun'] + np.log(2*np.sum(roundTransit))*(len(xfit)+len(yfit))
+            nodip_res['llk']=log_likelihood_poly(xfit.x, t,y,yerr)+log_likelihood_poly(yfit.x, t,y,yerr)
+            nodip_res['bic']=np.log(len(x)+len(y))*(len(xfit.x)+len(xfit.y)) - 2 * nodip_res['llk']
             if nodip_res['bic']<best_nodip_res['bic']:
                 best_nodip_res=nodip_res
 
@@ -1780,14 +1805,16 @@ def CentroidCheck(lc,monoparams,interpmodel,ID,order=2,dur_region=3.5, plot=True
                                            priors,
                                            interpmodel,
                                            order),method=methods[n%3])
-            dip_res['llk']=-1*dip_res['fun']
-            dip_res['bic']=2*dip_res.fun + np.log(2*np.sum(roundTransit))*len(dip_res['x'])
+            dip_res['llk']=log_likelihood_centroid(dip_res['x'], t, x, y, xerr, yerr, interpmodel, order)
+            #-1*dip_res['fun']
+            dip_res['bic']=np.log(len(x)+len(y))*(dip_res['x']) - 2 * dip_res['llk']
+            #2*dip_res.fun + np.log(2*np.sum(roundTransit))*len(dip_res['x'])
             if dip_res['bic']<best_dip_res['bic']:
                 best_dip_res=dip_res
             
         #Computing difference in Bayesian Information Criterium - DeltaBIC -  between "dip" and "no dip models"
         centinfo={}
-        centinfo['centroid_DeltaBIC']   = best_dip_res['bic'] - best_nodip_res['bic']
+        centinfo['centroid_DeltaBIC']   = best_dip_res['bic'] - best_nodip_res['bic'] # dip is better < 0 < no dip is better
         centinfo['centroid_llk_ratio']  = best_dip_res['fun'] - best_nodip_res['fun']
         print(best_dip_res)
         if 'x' in best_dip_res:
@@ -1845,7 +1872,7 @@ def CentroidCheck(lc,monoparams,interpmodel,ID,order=2,dur_region=3.5, plot=True
                             linewidth=2.25,alpha=0.6,label='trend+centroid - x',rasterized=True)
                     ax.plot(t,dipmodel_centroid(best_dip_res.x,t,interpmodel,order)[1],c='C4',
                             linewidth=2.25,alpha=0.6,label='trend+centroid - y',rasterized=True)
-                    ax.legend()
+                    ax.legend(prop={'size': 5})
 
                     ax.set_title(str(ID)+" Centroid  - "+["pass","fail"][int(centinfo['centroid_llk_ratio']<-6)])
                 else:
@@ -2475,7 +2502,7 @@ def get_interpmodels(Rs,Ms,Teff,lc_time,lc_flux_unit,mission='tess',n_durs=3,gap
     #print(jumps,jumps[np.argmax(np.diff(jumps))],jumps[1+np.argmax(np.diff(jumps))],P_guess)
 
     # Orbit models - for every n_dur over 4, we add longer durations to check:
-    per_steps=np.logspace(np.log10(0.4),np.log10(2.5+0.33*np.clip(n_durs-4,0.0,2.0)),n_durs)
+    per_steps=np.logspace(np.log10(0.4)-0.03*np.clip(n_durs-9,0.0,7.0),np.log10(2.5+0.33*np.clip(n_durs-4,0.0,2.0)),n_durs)
     b_steps=np.linspace(0.88,0,n_durs)
     orbits = xo.orbits.KeplerianOrbit(r_star=Rs,m_star=Ms,period=P_guess*per_steps,t0=np.tile(0.0,n_durs),b=b_steps)
     
@@ -2483,7 +2510,7 @@ def get_interpmodels(Rs,Ms,Teff,lc_time,lc_flux_unit,mission='tess',n_durs=3,gap
     tdurs=((2*1.1*Rs*np.sqrt(1-b_steps**2))/tt.sqrt(vx**2 + vy**2)).eval().ravel()
 
     # Compute the model light curve using starry
-    interpt=np.linspace(-0.6*np.max(tdurs),0.6*np.max(tdurs),600).astype(np.float32)
+    interpt=np.linspace(-0.6*np.max(tdurs),0.6*np.max(tdurs),600).astype(np.float64)
     
     ys=xo.LimbDarkLightCurve(u_star).get_light_curve(orbit=orbits, r=np.tile(0.1*Rs,n_durs), 
                                                      t=interpt, texp=texp
@@ -2585,9 +2612,8 @@ def VetCand(pl_dic,pl,ID,lc,mission,Rs=1.0,Ms=1.0,Teff=5800,
         
     if pl_dic['orbit_flag']=='mono' and mission.lower()!='k2':
         #Checks to see if dip is due to background asteroid and if that's a better fit than the transit model:
-        outs=AsteroidCheck(deepcopy(lc), pl_dic, pl_dic['interpmodel'], plot=plot,
-                           return_fit_lcs=return_fit_lcs,ID=str(ID).zfill(11)+'_'+pl, 
-                                                               plot_loc=ast_ax, **kwargs)
+        outs=AsteroidCheck(deepcopy(lc), pl_dic, plot=plot,return_fit_lcs=return_fit_lcs,
+                           ID=str(ID).zfill(11)+'_'+pl, plot_loc=ast_ax, **kwargs)
         if outs[0] is not None:
             for col in outs[0]:
                 if 'steroid' in col and type(outs[0][col]) in [str,int,float,np.float64]:
@@ -2601,7 +2627,7 @@ def VetCand(pl_dic,pl,ID,lc,mission,Rs=1.0,Ms=1.0,Teff=5800,
         if return_fit_lcs:
             print(return_fit_lcs,outs[2])
             pl_dic["asteroid_model"]=outs[2]
-        if pl_dic['asteroid_DeltaBIC'] is not None and pl_dic['asteroid_DeltaBIC']<pl_dic['poly_DeltaBIC'] and pl_dic['asteroid_snrr']>pl_dic['snr']:
+        if pl_dic['asteroid_DeltaBIC'] is not None and pl_dic['asteroid_DeltaBIC']<-10 and pl_dic['asteroid_snrr']>pl_dic['snr']:
             pl_dic['flag']='asteroid'
             print(pl,"asteroid. DeltaBic=",pl_dic['asteroid_DeltaBIC'])
     #Checks to see if dip is combined with centroid
@@ -2917,14 +2943,14 @@ def MonoVetting(ID, mission, tcen=None, tdur=None, overwrite=None, do_search=Tru
             ser['mission']=mission
             for key in all_keys:
                 if key in both_dic[obj]:
-                    if type(both_dic[obj][key]) not in [float,int,str,np.float64,np.float32] or (type(both_dic[obj][key])=='str' and len(both_dic[obj][key])>100):
+                    if type(both_dic[obj][key]) not in [float,int,str,np.float64,np.float64] or (type(both_dic[obj][key])=='str' and len(both_dic[obj][key])>100):
                         complexkeys+=[key]
                     else:
                         if key == 'ID':
                             ser[key]=int(both_dic[obj][key])
                         elif type(both_dic[obj][key]) in [str,int]:
                             ser[key]=both_dic[obj][key]
-                        elif type(both_dic[obj][key]) in [float,np.float64,np.float32]:
+                        elif type(both_dic[obj][key]) in [float,np.float64,np.float64]:
                             ser[key]=np.round(both_dic[obj][key],4)
             df=df.append(ser)
             #if str(ID).zfill(11)+'_'+obj not in all_cands_df.index or overwrite:

@@ -135,7 +135,7 @@ def openFits(f,fname,mission,cut_all_anom_lim=4.0,use_ppt=True,force_raw_flux=Fa
         #    'flux_err':magerr2flux(f['LightCurve']['AperturePhotometry']['Aperture_002']['RawMagnitudeError'][:],
         #                           f['LightCurve']['AperturePhotometry']['Aperture_002']['RawMagnitude'][:]),
         lc['flux_err']=np.tile(np.nanmedian(abs(np.diff(lc['raw_flux']))),len(lc['time']))
-    elif type(f)==eleanor.targetdata.TargetData:
+    elif type(f)==eleanor.eleanor.TargetData:
         #Eleanor TESS object
         lc={'time':f.time,'flux':f.corr_flux,'flux_err':f.flux_err,'raw_flux':f.raw_flux,
             'cent_1':f.centroid_xs,'cent_2':f.centroid_ys,'quality':f.quality,
@@ -305,7 +305,7 @@ def openPDC(epic,camp,use_ppt=True,**kwargs):
     if requests.get(urlfilename1, timeout=600).status_code==200:
         with fits.open(urlfilename1,show_progress=False) as hdus:
             lc=openFits(hdus,urlfilename1,mission='kepler',use_ppt=use_ppt,**kwargs)
-            lc['src']['K2']='K2_pdc'
+            lc['src']='K2_pdc'
         return lc
     else:
         return None
@@ -410,22 +410,27 @@ def getK2lc(epic,camp,saveloc=None,pers=None,durs=None,t0s=None,use_ppt=True):
     lcs=[]
     lcs+=[openEverest(int(epic), camp, pers=pers, durs=durs, t0s=t0s, use_ppt=use_ppt)]
     lcs+=[openVand(int(epic), camp, use_ppt=use_ppt)]
+    lcs+=[openPDC(int(epic),int(float(camp)),use_ppt=use_ppt)]
     lcs=[lc for lc in lcs if lc is not None]
-    if len(lcs)==0:
-        try:
-            return [openPDC(int(epic),int(camp),use_ppt=use_ppt)]
-        except:
-            print("No LCs for "+str(epic)+" campaign "+str(camp)+" at all")
-            return None
-    elif len(lcs)==1:
-        return lcs[0]
-    elif len(lcs)>1:
+    if len(lcs)>0:
         stds = np.array([np.nanmedian(abs(np.diff(l['flux'][l['mask']]))) for l in lcs])
-        
-        if len(lcs[0]['time'])>1.5*len(lcs[1]['time']) or ((len(lcs[0]['time'])>0.66*len(lcs[1]['time']))&(stds[0]<stds[1])):
-            return lcs[0]
-        else:
-            return lcs[1]
+        lens = np.array([len(l['flux'][l['mask']]) for l in lcs])
+        #Making a metric from std and length - std/len_norm**3. i.e. a lc 75% as long as the longest is downweighted by 0.42 (e.g. std increased by 2.4 
+        stds/=(lens/np.nanmax(lens))**3
+        i_best = np.argmin(stds)
+        print([l['src'] for l in lcs],stds,i_best)
+        lc={}
+        for nl,l in enumerate(lcs):
+            if nl==i_best:
+                lc=l
+            else:
+                for key in l:
+                    #Adding as a subarray any float array (flux, error, bg, centroid, etc) longer than 500 values:
+                    if type(l[key]) in [list,np.ndarray] and len(l[key])>500 and type(l[key][0])in [float, np.float32, np.float64]:
+                        lc[key+'_'+l['src']]=l[key]
+        return lc
+    else:
+        return None
 
 def K2_lc(epic,pers=None,durs=None,t0s=None, use_ppt=True):
     '''
@@ -496,6 +501,40 @@ def getKeplerLC(kic,cadence='long',use_ppt=True,**kwargs):
     else:
         return None,None
 
+def lcStackDicts(spoclcs,qlplcs,elenlcs):
+    #Stacks multiple lcs together while keeping info from secondary data sources.
+    outlc_by_sect=[]
+    allsects=np.unique(list(spoclcs.keys())+list(qlplcs.keys())+list(elenlcs.keys()))
+    #allkeys=np.unique(np.hstack([list(lcs[nlc].keys()) for nlc in range(len(lcs)) if lcs[nlc] is not None]))
+    #allkeys=allkeys[allkeys not in ['flux_format','flux_unit']] #This is the only non-timeseries keyword
+    print(allsects)
+    #Stacking each timeseries on top of each other
+    for sec in allsects:
+        if sec in spoclcs:
+            sec_lc=spoclcs[sec]
+            if sec in qlplcs:
+                sec_lc.update({'qlp_'+key:qlplcs[sec][key] for key in qlplcs[sec] if key not in ['flux_format','flux_unit']})
+            elif sec in elenlcs:
+                sec_lc.update({'elen_'+key:elenlcs[sec][key] for key in elenlcs[sec] if key not in ['flux_format','flux_unit']})
+            fu=spoclcs[sec]['flux_unit']
+        elif sec in qlplcs:
+            sec_lc=qlplcs[sec]
+            if sec in elenlcs:
+                sec_lc.update({'elen_'+key:elenlcs[sec][key] for key in elenlcs[sec] if key not in ['flux_format','flux_unit']})
+            fu=qlplcs[sec]['flux_unit']
+
+        elif sec in elenlcs:
+            sec_lc=elenlcs[sec]
+            fu=elenlcs[sec]['flux_unit']
+        else:
+            sec_lc=None
+        
+        outlc_by_sect+=[sec_lc]
+    lc=lcStack(outlc_by_sect)
+    if lc is not None:
+        lc['flux_unit']=fu
+    return lc
+
 def lcStack(lcs):
     #Stacks multiple lcs together
     outlc={}
@@ -555,7 +594,7 @@ def getCorotLC(corid,use_ppt=True,**kwargs):
     lc['jd_base']=2451545
     return lc
 
-def TESS_lc(tic, sectors='all',use_ppt=True, coords=None, use_eleanor=True, data_loc=None,**kwargs):
+def TESS_lc(tic, sectors='all',use_ppt=True, coords=None, use_qlp=None,use_eleanor=None, data_loc=None,**kwargs):
     #Downloading TESS lc     
     if data_loc is None:
         data_loc=MonoData_savepath+"/TIC"+str(int(tic)).zfill(11)
@@ -566,7 +605,9 @@ def TESS_lc(tic, sectors='all',use_ppt=True, coords=None, use_eleanor=True, data
            13:'2019169103026_0146',14:'2019198215352_0150',15:'2019226182529_0151',16:'2019253231442_0152',
            17:'2019279210107_0161',18:'2019306063752_0162',19:'2019331140908_0164',20:'2019357164649_0165',
            21:'2020020091053_0167',22:'2020049080258_0174',23:'2020078014623_0177',24:'2020106103520_0180',
-           25:'2020133194932_0182',26:'2020160202036_0188',27:'2020186164531_0189',28:'2020212050318_0190',29:'2020238165205_0193'}
+           25:'2020133194932_0182',26:'2020160202036_0188',27:'2020186164531_0189',28:'2020212050318_0190',
+           29:'2020238165205_0193'}
+    sect_to_orbit={sect+1:[9+sect*2,10+sect*2] for sect in range(len(epoch))}
     lcs=[];lchdrs=[]
     if sectors == 'all':
         if coords is not None and type(coords)==SkyCoord:
@@ -585,70 +626,74 @@ def TESS_lc(tic, sectors='all',use_ppt=True, coords=None, use_eleanor=True, data
         epochs=sectors
     else:
         epochs=[sectors]
-        #observed_sectors=observed(tic)
-        #observed_sectors=np.array([os for os in observed_sectors if observed_sectors[os]])
-        #if observed_sectors!=[-1] and len(observed_sectors)>0:
-        #    observed_sectors=observed_sectors[np.in1d(observed_sectors,np.array(list(epoch.keys())))]
-        #else:
-        #    observed_sectors=sector
-        #print(observed_sectors)
-    get_qlp=0
+
+    lchdrs=[]
+    qlplcs={}
+    elenorlcs={}
+    spoclcs={}
     print(epochs,type(epochs))
     for key in epochs:
-        try:
-            #2=minute cadence data from tess website
-            fitsloc="https://archive.stsci.edu/missions/tess/tid/s"+str(key).zfill(4)+"/"+str(tic).zfill(16)[:4]+"/"+str(tic).zfill(16)[4:8]+"/"+str(tic).zfill(16)[-8:-4]+"/"+str(tic).zfill(16)[-4:]+"/tess"+epoch[key].split('_')[0]+"-s"+str(key).zfill(4)+"-"+str(tic).zfill(16)+"-"+epoch[key].split('_')[1]+"-s_lc.fits"
-            h = httplib2.Http()
-            resp = h.request(fitsloc, 'HEAD')
-            if int(resp[0]['status']) < 400:
-                with fits.open(fitsloc,show_progress=False) as hdus:
-                    lcs+=[openFits(hdus,fitsloc,mission='tess',use_ppt=use_ppt,**kwargs)]
-                    lchdrs+=[hdus[0].header]
-            else:
-                raise Exception('No TESS lightcurve')
-        except:
-            if os.path.isdir(data_loc) and len(glob.glob(data_loc+"/*.h5"))>0:
-                get_qlp+=1
-            elif use_eleanor:
-                print("No QLP files at",data_loc,"Loading Eleanor Lightcurve")
-                try:
-                    #Getting eleanor lightcurve:
-                    try:
-                        star = eleanor.eleanor.Source(tic=tic, sector=key)
-                    except:
-                        star = eleanor.eleanor.Source(coords=coords, sector=key)
-                    try:
-                        elen_obj=eleanor.eleanor.TargetData(star, height=15, width=15, bkg_size=31, do_psf=True, do_pca=True,save_postcard=False)
-                    except:
-                        try:
-                            elen_obj=eleanor.eleanor.TargetData(star, height=15, width=15, bkg_size=31, do_psf=True, do_pca=False,save_postcard=False)
-                        except:
-                            elen_obj=eleanor.eleanor.TargetData(star, height=15, width=15, bkg_size=31, do_psf=False, do_pca=False,save_postcard=False)
-                    elen_hdr={'ID':star.tic,'GaiaID':star.gaia,'Tmag':star.tess_mag,
-                              'RA':star.coords[0],'dec':star.coords[1],'mission':'TESS','campaign':key,'source':'eleanor',
-                              'ap_masks':elen_obj.all_apertures,'ap_image':np.nanmedian(elen_obj.tpf[50:80],axis=0)}
-                    elen_lc=openFits(elen_obj,elen_hdr,mission='tess',use_ppt=use_ppt,**kwargs)
-                    lcs+=[elen_lc]
-                    lchdrs+=[elen_hdr]
-                except Exception as e:
-                    print(e, tic,"not observed by TESS in sector",key)
+        #2=minute cadence data from tess website
+        fitsloc="https://archive.stsci.edu/missions/tess/tid/s"+str(key).zfill(4)+"/"+str(tic).zfill(16)[:4]+"/"+str(tic).zfill(16)[4:8]+"/"+str(tic).zfill(16)[-8:-4]+"/"+str(tic).zfill(16)[-4:]+"/tess"+epoch[key].split('_')[0]+"-s"+str(key).zfill(4)+"-"+str(tic).zfill(16)+"-"+epoch[key].split('_')[1]+"-s_lc.fits"
+        h = httplib2.Http()
+        resp = h.request(fitsloc, 'HEAD')
+        if int(resp[0]['status']) < 400:
+            with fits.open(fitsloc,show_progress=False) as hdus:
+                spoclcs[key]=openFits(hdus,fitsloc,mission='tess',use_ppt=use_ppt,**kwargs)
+                lchdrs+=[hdus[0].header]
 
-    #Acessing QLP data from local files - only happens if there's .h5 lightcurves in a TICXXXXXXX folder in the folder where this is run
-    if get_qlp>0:
-        print("# Loading QLP lightcurves")
-        print(tic,type(tic))
-        for orbit in glob.glob(data_loc+"/*.h5"):
-            f=h5py.File(orbit)
-            if len(lcs)==0 or np.nanmin(abs(np.nanmedian(f['LightCurve']['BJD'])-np.hstack([l['time'] for l in lcs])))>5:
-                # This specific QLP orbit does not have a SPOC lightcurve attached (i.e. no other obs within 5days)
-                lcs+=[openFits(f,orbit,mission='tess',use_ppt=use_ppt,**kwargs)]
+        if use_qlp is None or use_qlp is True:
+            qlpfiles=[data_loc+"/TIC"+str(tic).zfill(11)+"_orbit-"+str(sect_to_orbit[key][n])+"_qlplc.h5" for n in range(2)]
+            if os.path.isfile(qlpfiles[0]) and os.path.isfile(qlpfiles[1]):
+                
+                f1=h5py.File(qlpfiles[0])
+                f2=h5py.File(qlpfiles[1])
+                qlplcs[key]=lcStack([openFits(f1,orbit,mission='tess',use_ppt=use_ppt,**kwargs),
+                                     openFits(f2,orbit,mission='tess',use_ppt=use_ppt,**kwargs)])
                 lchdrs+=[{'source':'qlp'}]
-    if len(lcs)>1:
-        lc=lcStack(lcs)
+            else:
+                strtid=str(int(tic)).zfill(16)
+                fitsloc="https://mast.stsci.edu/hslp/qlp/s"+str(int(key)).zfill(4) + \
+                        "/"+strtid[:4]+"/"+strtid[4:8]+"/"+strtid[8:12]+"/"+strtid[12:] + \
+                        "/hlsp_qlp_tess_ffi_s"+str(int(key)).zfill(4)+"-"+strtid+"_tess_v01_llc.fits"
+                print("QLP:",fitsloc)
+                h = httplib2.Http()
+                resp = h.request(fitsloc, 'HEAD')
+                if int(resp[0]['status']) < 400:
+                    with fits.open(fitsloc,show_progress=False) as hdus:
+                        print(hdus.type)
+                        print(hdus[0].header)
+                        qlplcs[key]=openFits(hdus,fitsloc,mission='tess',use_ppt=use_ppt,**kwargs)
+                        lchdrs+=[hdus[0].header]
+        elif use_eleanor is None or use_eleanor is True:
+            print("No QLP files at",data_loc,"Loading Eleanor Lightcurve")
+            try:
+                #Getting eleanor lightcurve:
+                try:
+                    star = eleanor.eleanor.Source(tic=tic, sector=key)
+                except:
+                    star = eleanor.eleanor.Source(coords=coords, sector=key)
+                try:
+                    elen_obj=eleanor.eleanor.TargetData(star, height=15, width=15, bkg_size=31, do_psf=True, do_pca=True,save_postcard=False)
+                except:
+                    try:
+                        elen_obj=eleanor.eleanor.TargetData(star, height=15, width=15, bkg_size=31, do_psf=True, do_pca=False,save_postcard=False)
+                    except:
+                        elen_obj=eleanor.eleanor.TargetData(star, height=15, width=15, bkg_size=31, do_psf=False, do_pca=False,save_postcard=False)
+                elen_hdr={'ID':star.tic,'GaiaID':star.gaia,'Tmag':star.tess_mag,
+                          'RA':star.coords[0],'dec':star.coords[1],'mission':'TESS','campaign':key,'source':'eleanor',
+                          'ap_masks':elen_obj.all_apertures,'ap_image':np.nanmedian(elen_obj.tpf[50:80],axis=0)}
+                elenorlcs[key]=openFits(elen_obj,elen_hdr,mission='tess',use_ppt=use_ppt,**kwargs)
+                lchdrs+=[elen_hdr]
+            except Exception as e:
+                print(e, tic,"not observed by TESS in sector",key)
+        
+    if len(spoclcs)+len(qlplcs)+len(elenorlcs)>0:
+        lc=lcStackDicts(spoclcs,qlplcs,elenorlcs)
         return lc,lchdrs[0]
-    elif len(lcs)==1:
-        #print(lcs,lchdrs)
-        return lcs[0],lchdrs[0]
+        #elif len(lcs)==1:
+        #    #print(lcs,lchdrs)
+        #    return lcs[0],lchdrs[0]
     else:
         return None,None
 
@@ -718,7 +763,9 @@ def openLightCurve(ID,mission,coor=None,use_ppt=True,other_data=True,
                                      t0s=kwargs.get('initt0',None),
                                      use_ppt=use_ppt)
         if lcs['k2'] is not None:
-            lcs['k2']['time']-=(jd_base-2454833)
+            for key in lcs['k2']:
+                if 'time' in key:
+                    lcs['k2'][key]-=(jd_base-2454833)
     if IDs['kepler'] is not None:
         lcs['kepler'],hdrs['kepler'] = getKeplerLC(IDs['kepler'],use_ppt=use_ppt)
         if lcs['kepler'] is not None:
@@ -747,6 +794,8 @@ def openLightCurve(ID,mission,coor=None,use_ppt=True,other_data=True,
     
     if save:
         ID_string=id_dic[mission]+str(ID).zfill(11)
+        if not os.path.isdir(MonoData_savepath+'/'+ID_string):
+            os.system("mkdir "+MonoData_savepath+'/'+ID_string)
         pickle.dump(lc,open(MonoData_savepath+'/'+ID_string+'/'+ID_string+'_lc.pickle','wb'))
     
     return lc,hdrs[mission.lower()]
@@ -847,7 +896,6 @@ def lcBin(lc,binsize=1/48,split_gap_size=0.8,use_flat=True,use_masked=True, extr
         loop_blocks=[np.arange(len(lc['time']))]
     if extramask is not None and type(extramask)==np.ndarray and (type(extramask[0])==bool)|(type(extramask[0])==np.bool_):
         mask=lc['mask']&extramask
-        print("extramask with n=",np.sum(extramask))
     else:
         mask=lc['mask']
     for sh_time in loop_blocks:
