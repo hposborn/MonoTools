@@ -24,7 +24,7 @@ from astroquery.gaia import Gaia
 from astroquery.vizier import Vizier
 from astroquery.mast import Catalogs
 
-import eleanor
+from eleanor import eleanor
 
 import pickle
 import os.path
@@ -121,7 +121,32 @@ def openFits(f,fname,mission,cut_all_anom_lim=4.0,use_ppt=True,force_raw_flux=Fa
                     lc['cent_1']=f[1].data['PSF_CENTR1'];lc['cent_2']=f[1].data['PSF_CENTR2']
                 else:
                     lc['cent_1']=f[1].data['MOM_CENTR1'];lc['cent_2']=f[1].data['MOM_CENTR2']
+        elif f[0].header['TELESCOP']=='COROT':
+            if 'MAGNIT_V' in f[0].header and type(f[0].header['MAGNIT_V'])==float and not np.isnan(f[0].header['MAGNIT_V']):
+                mag=f[0].header['MAGNIT_V']
+            else:
+                mag=f[0].header['MAGNIT_R']
+            lc={'time':f[1].data['DATEHEL'],'quality':f[1].data['STATUS'],'mask':np.tile(True,len(f[1].data['DATEHEL']))}
+            
+            if f[0].header['FILENAME'][9:12]=='MON':
+                lc['flux']=f[1].data['WHITEFLUX']
+                lc['flux_err']=f[1].data['WHITEFLUXDEV']
                 
+            elif f[0].header['FILENAME'][9:12]=='CHR':
+                logging.debug('3-colour CoRoT lightcurve')
+                #Adding colour fluxes together...
+                lc['flux'] = f[1].data['REDFLUX']+f[1].data['BLUEFLUX']+f[1].data['GREENFLUX']
+                lc['flux_err'] = f[1].data['GREENFLUXDEV']+f[1].data['BLUEFLUXDEV']+f[1].data['REDFLUXDEV']
+            if np.isnan(lc['flux_err']).all():
+                mederr=np.nanmedian(1.06*abs(np.diff(lc['flux'])))
+            else:
+                mederr=np.nanmedian(lc['flux_err'][(lc['flux_err']>0.0)*(~np.isnan(lc['flux_err']))])
+            lc['flux_err'][(lc['flux_err']>0.0)*(~np.isnan(lc['flux_err']))]=mederr
+            lc['flux_err']/=np.nanmedian(lc['flux'])
+            lc['flux']/=np.nanmedian(lc['flux'])
+            lc['mask']=CutHighRegions(lc,std_thresh=4.5,n_pts=25,n_loops=2)
+                
+
     elif type(f)==h5py._hl.files.File:
         #QLP is defined in mags, so lets
         def mag2flux(mags):
@@ -143,7 +168,7 @@ def openFits(f,fname,mission,cut_all_anom_lim=4.0,use_ppt=True,force_raw_flux=Fa
         #    'flux_err':magerr2flux(f['LightCurve']['AperturePhotometry']['Aperture_002']['RawMagnitudeError'][:],
         #                           f['LightCurve']['AperturePhotometry']['Aperture_002']['RawMagnitude'][:]),
         lc['flux_err']=np.tile(np.nanmedian(abs(np.diff(lc['raw_flux']))),len(lc['time']))
-    elif type(f)==eleanor.eleanor.TargetData:
+    elif type(f)==eleanor.TargetData:
         #Eleanor TESS object
         lc={'time':f.time,'flux':f.corr_flux,'flux_err':f.flux_err,'raw_flux':f.raw_flux,
             'cent_1':f.centroid_xs,'cent_2':f.centroid_ys,'quality':f.quality,
@@ -304,6 +329,31 @@ def maskLc(lc,fhead,cut_all_anom_lim=5.0,use_ppt=False,end_of_orbit=True,
     else:
         return mask
 
+    
+def CutHighRegions(lc,std_thresh=3.2,n_pts=25,n_loops=2):
+    # Masking anomalous high region using a running 25-point median and std comparison
+    # This is best used for e.g. Corot data which has SAA crossing events.
+    mask=lc['mask']
+
+    digi=np.vstack([np.arange(f,len(lc['flux'])-(n_pts-f)) for f in range(n_pts)])
+    stacked_fluxes=np.vstack([lc['flux'][digi[n]] for n in range(n_pts)])
+
+    std_threshs=np.linspace(std_thresh-1.5,std_thresh,n_loops)
+    
+    for n in range(n_loops):
+        stacked_masks=np.vstack([mask[digi[n]] for n in range(n_pts)])
+        stacked_masks=stacked_masks.astype(int).astype(float)
+        stacked_masks[stacked_masks==0.0]=np.nan
+
+        meds=np.nanmedian(stacked_fluxes*stacked_masks,axis=0)
+        stds=np.nanstd(stacked_fluxes*stacked_masks,axis=0)
+        #Adding to the mask any points identified in 80% of these passes:
+        mask*=np.nansum(np.vstack([np.hstack((np.tile(False,1+n2),
+                                              stacked_fluxes[n2]*stacked_masks[n2]>(meds+std_threshs[n]*stds),
+                                              np.tile(False,n_pts-n2+1))) for n2 in range(n_pts)])
+                           ,axis=0)[1:-1]<20
+    lc['mask']=mask
+    return lc
 def openPDC(epic,camp,use_ppt=True,**kwargs):
     if camp == '10':
     #https://archive.stsci.edu/missions/k2/lightcurves/c1/201500000/69000/ktwo201569901-c01_llc.fits
@@ -594,13 +644,55 @@ def observed(tic):
 
 def getCorotLC(corid,use_ppt=True,**kwargs):
     #These are pre-computed CoRoT LCs I have lying around. There is no easy API as far as I can tell.
-    lc=openFits(np.load('/'.join(MonoData_tablepath.split('/')[:-1]+["CorotLCs","CoRoT"+str(corid)+".npy"])),
-                        "CorotLCs/CoRoT"+str(corid)+".npy",mission="Corot",use_ppt=use_ppt,**kwargs)
-    
-    #Some of these arrays have flux errors of zoer, so we need to nip that in the bud:
-    lc['flux_err'][lc['flux_err']==0]=np.nanmedian(abs(np.diff(lc['flux'][lc['flux_err']==0])))
-    lc['jd_base']=2451545
-    return lc
+    initstring="https://exoplanetarchive.ipac.caltech.edu/data/ETSS/corot_exo/FITSfiles/"
+    corotlclocs={102356770:["LRa03/EN2_STAR_MON_0102356770_20091003T223149_20100301T055642.fits"],
+                 102387834:["LRa03/EN2_STAR_CHR_0102387834_20091003T223149_20100301T055610.fits"],
+                 102574444:["LRa01/EN2_STAR_CHR_0102574444_20071023T223035_20080303T093534.fits"],
+                 102582649:["LRa06/EN2_STAR_MON_0102582649_20120112T183055_20120329T092714.fits",
+                            "LRa01/EN2_STAR_CHR_0102582649_20071023T223035_20080303T093534.fits"],
+                 102586624:["LRa06/EN2_STAR_MON_0102586624_20120112T183055_20120329T092714.fits",
+                            "LRa01/EN2_STAR_CHR_0102586624_20071023T223035_20080303T093534.fits"],
+                 102647266:["LRa01/EN2_STAR_CHR_0102647266_20071023T223035_20080303T093534.fits"],
+                 102709133:["LRa01/EN2_STAR_CHR_0102709133_20071023T223035_20080303T093502.fits"],
+                 102723949:["LRa06/EN2_STAR_CHR_0102723949_20120112T183055_20120329T092714.fits",
+                            "LRa01/EN2_STAR_CHR_0102723949_20071023T223035_20080303T093502.fits",
+                            "IRa01/EN2_STAR_CHR_0102723949_20070203T130553_20070401T235518.fits"],
+                 102765275:["LRa06/EN2_STAR_MON_0102765275_20120112T183055_20120329T092714.fits",
+                            "LRa01/EN2_STAR_CHR_0102765275_20071023T223035_20080303T093534.fits",
+                            "IRa01/EN2_STAR_MON_0102765275_20070203T130553_20070401T235518.fits"],
+                 102801672:["IRa01/EN2_STAR_MON_0102801672_20070206T133547_20070401T235654.fits"],
+                 102802996:["IRa01/EN2_STAR_MON_0102802996_20070206T133547_20070401T235654.fits"],
+                 102822869:["IRa01/EN2_STAR_MON_0102822869_20070206T133547_20070401T235654.fits"],
+                 102829388:["IRa01/EN2_STAR_MON_0102829388_20070206T133547_20070401T235654.fits"],
+                 102855409:["IRa01/EN2_STAR_CHR_0102855409_20070206T133547_20070401T235654.fits"],
+                 102868004:["IRa01/EN2_STAR_MON_0102868004_20070206T133547_20070401T235654.fits"],
+                 102874481:["IRa01/EN2_STAR_CHR_0102874481_20070206T133547_20070401T235654.fits"],
+                 102895957:["IRa01/EN2_STAR_CHR_0102895957_20070203T130553_20070401T235934.fits"],
+                 102919036:["IRa01/EN2_STAR_MON_0102919036_20070203T130553_20070401T235518.fits"],
+                 102973379:["IRa01/EN2_STAR_MON_0102973379_20070206T133547_20070401T235654.fits"],
+                 211616889:["SRc01/EN2_STAR_MON_0211616889_20070413T180030_20070509T065744.fits"],
+                 211621528:["SRc01/EN2_STAR_CHR_0211621528_20070413T180030_20070509T065744.fits"],
+                 211631779:["SRc01/EN2_STAR_MON_0211631779_20070413T180206_20070509T065920.fits"],
+                 211634383:["SRc01/EN2_STAR_MON_0211634383_20070413T180206_20070509T065920.fits"],
+                 211647475:["SRc01/EN2_STAR_CHR_0211647475_20070413T180030_20070509T065744.fits"],
+                 211649312:["SRc01/EN2_STAR_MON_0211649312_20070413T180030_20070509T065744.fits"],
+                 211650063:["SRc01/EN2_STAR_MON_0211650063_20070413T180206_20070509T065920.fits"],
+                 211666578:["SRc01/EN2_STAR_MON_0211666578_20070413T180030_20070509T065744.fits"],
+                 310190466:["LRc03/EN2_STAR_MON_0310190466_20090403T220030_20090702T022725.fits"],
+                 315188649:["SRa03/EN2_STAR_CHR_0315188649_20100305T001525_20100329T065610.fits"],
+                 629951504:["LRc08/EN2_STAR_MON_0629951504_20110708T153829_20110930T045022.fits"]}
+    if int(corid) in corotlclocs:
+        lcs=[]
+        for loc in corotlclocs[int(corid)]:
+            with fits.open(initstring+loc,show_progress=False,timeout=120) as hdus:
+                lci=openFits(hdus,initstring+loc,mission='corot',use_ppt=use_ppt,**kwargs)
+                lci['src']='corot'
+                lcs+=[lci]
+        lc=lcStack(lcs)
+        lc['jd_base']=2451545
+        return lc
+    else:
+        return None
 
 def TESS_lc(tic, sectors='all',use_ppt=True, coords=None, use_qlp=None, use_eleanor=None, data_loc=None,**kwargs):
     #Downloading TESS lc     
@@ -614,7 +706,7 @@ def TESS_lc(tic, sectors='all',use_ppt=True, coords=None, use_qlp=None, use_elea
            17:'2019279210107_0161',18:'2019306063752_0162',19:'2019331140908_0164',20:'2019357164649_0165',
            21:'2020020091053_0167',22:'2020049080258_0174',23:'2020078014623_0177',24:'2020106103520_0180',
            25:'2020133194932_0182',26:'2020160202036_0188',27:'2020186164531_0189',28:'2020212050318_0190',
-           29:'2020238165205_0193'}
+           29:'2020238165205_0193',30:'2020266004630_0195'}
     sect_to_orbit={sect+1:[9+sect*2,10+sect*2] for sect in range(len(epoch))}
     lcs=[];lchdrs=[]
     if sectors == 'all':
@@ -679,16 +771,16 @@ def TESS_lc(tic, sectors='all',use_ppt=True, coords=None, use_qlp=None, use_elea
             try:
                 #Getting eleanor lightcurve:
                 try:
-                    star = eleanor.eleanor.Source(tic=tic, sector=key)
+                    star = eleanor.Source(tic=tic, sector=key)
                 except:
-                    star = eleanor.eleanor.Source(coords=coords, sector=key)
+                    star = eleanor.Source(coords=coords, sector=key)
                 try:
-                    elen_obj=eleanor.eleanor.TargetData(star, height=15, width=15, bkg_size=31, do_psf=True, do_pca=True,save_postcard=False)
+                    elen_obj=eleanor.TargetData(star, height=15, width=15, bkg_size=31, do_psf=True, do_pca=True,save_postcard=False)
                 except:
                     try:
-                        elen_obj=eleanor.eleanor.TargetData(star, height=15, width=15, bkg_size=31, do_psf=True, do_pca=False,save_postcard=False)
+                        elen_obj=eleanor.TargetData(star, height=15, width=15, bkg_size=31, do_psf=True, do_pca=False,save_postcard=False)
                     except:
-                        elen_obj=eleanor.eleanor.TargetData(star, height=15, width=15, bkg_size=31, do_psf=False, do_pca=False,save_postcard=False)
+                        elen_obj=eleanor.TargetData(star, height=15, width=15, bkg_size=31, do_psf=False, do_pca=False,save_postcard=False)
                 elen_hdr={'ID':star.tic,'GaiaID':star.gaia,'Tmag':star.tess_mag,
                           'RA':star.coords[0],'dec':star.coords[1],'mission':'TESS','campaign':key,'source':'eleanor',
                           'ap_masks':elen_obj.all_apertures,'ap_image':np.nanmedian(elen_obj.tpf[50:80],axis=0)}
@@ -907,8 +999,11 @@ def lcBin(lc,binsize=1/48,split_gap_size=0.8,use_flat=True,use_masked=True, extr
         mask=lc['mask']&extramask
     else:
         mask=lc['mask']
+    #For each of the seprated lightcurve blocks:
     for sh_time in loop_blocks:
         nodata=False
+        #For each of the flux arrays (binned and normal):
+        cads=None;digi=None
         for fkey in flux_dic:
             if use_masked:
                 if len(lc[fkey][sh_time][mask[sh_time]])>0:
@@ -928,11 +1023,11 @@ def lcBin(lc,binsize=1/48,split_gap_size=0.8,use_flat=True,use_masked=True, extr
                                  np.arange(np.min(lc_segment[:,0])-0.5*binsize,np.max(lc_segment[:,0])+0.5*binsize,binsize))
             elif not nodata:
                 binlc[fkey]+=[lc_segment]
-        if binsize>(1.66*np.nanmedian(np.diff(lc['time'][sh_time]))):
+        if binsize>(1.66*np.nanmedian(np.diff(lc['time'][sh_time]))) and digi is not None:
             binlc['bin_cadence']+=[np.array([cads[digi==d] if type(cads[digi==d])==str else cads[digi==d][0] for d in np.unique(digi)])[:,np.newaxis]]
         else:
-            binlc['bin_cadence']+=[cads[:,np.newaxis]]
-    
+            if cads is not None:
+                binlc['bin_cadence']+=[cads[:,np.newaxis]]
     binlc={fkey:np.vstack(binlc[fkey]) for fkey in binlc}
     if modify_lc:
         lc['bin_time']=binlc['flux'][:,0]
@@ -1095,605 +1190,6 @@ def lcFlatten(lc, winsize = 3.5, stepsize = 0.15, polydegree = 2,
         
     return lc
     
-
-
-def init_model(lc, initdepth, initt0, Rstar, rhostar, Teff, logg=np.array([4.3,1.0,1.0]),initdur=None, 
-               periods=None,assume_circ=False,
-               use_GP=True,constrain_LD=True,ld_mult=3,useL2=True,
-               mission='TESS',FeH=0.0,LoadFromFile=False,cutDistance=0.0,
-               debug=True):
-    # lc - dictionary with arrays:
-    #   -  'time' - array of times, (x)
-    #   -  'flux' - array of flux measurements (y)
-    #   -  'flux_err'  - flux measurement errors (yerr)
-    # initdepth - initial depth guess
-    # initt0 - initial time guess
-    # Rstar - array with radius of star and error/s
-    # rhostar - array with density of star and error/s
-    # periods - In the case where a planet is already transiting, include the period guess as a an array with length n_pl
-    # constrain_LD - Boolean. Whether to use 
-    # ld_mult - Multiplication factor on STD of limb darkening]
-    # cutDistance - cut out points further than this from transit. Default of zero does no cutting
-    
-    lcmask = np.tile(True,len(x)) if 'mask' not in lc else lc['mask']
-    
-    x,y,yerr = lc['time'],lc['flux'],lc['flux_err']
-    
-    n_pl=len(initt0)
-    
-    print("Teff:",Teff)
-    start=None
-    with pm.Model() as model:
-        
-        # We're gonna need a bounded normal:
-        #BoundedNormal = pm.Bound(pm.Normal, lower=0, upper=3)
-
-        #Stellar parameters (although these aren't really fitted.)
-        #Using log rho because otherwise the distribution is not normal:
-        if len(rhostar)==3:
-            logrho_S = pm.Normal("logrho_S", mu=np.log(rhostar[0]), sd=np.average(abs(rhostar[1:]/rhostar[0])),testval=np.log(rhostar[0]))
-        else:
-            logrho_S = pm.Normal("logrho_S", mu=np.log(rhostar[0]), sd=rhostar[1]/rhostar[0],testval=np.log(rhostar[0]))
-
-        rho_S = pm.Deterministic("rho_S",tt.exp(logrho_S))
-        if len(Rstar)==3:
-            Rs = pm.Normal("Rs", mu=Rstar[0], sd=np.average(Rstar[1:]),testval=Rstar[0],shape=1)
-        else:
-            Rs = pm.Normal("Rs", mu=Rstar[0], sd=Rstar[1],testval=Rstar[0],shape=1)
-        Ms = pm.Deterministic("Ms",(rho_S/1.408)*Rs**3)
-
-        # The baseline flux
-        mean = pm.Normal("mean", mu=0.0, sd=1.0,testval=0.0)
-        
-        # The 2nd light (not third light as companion light is not modelled) 
-        # This quantity is in delta-mag
-        if useL2:
-            deltamag_contam = pm.Uniform("deltamag_contam", lower=-20.0, upper=20.0)
-            mult = pm.Deterministic("mult",(1+tt.power(2.511,-1*deltamag_contam))) #Factor to multiply normalised lightcurve by
-        else:
-            mult=1.0
-        
-        # The time of a reference transit for each planet
-        # If multiple times are given that means multiple transits *without* a set period - a "complex" t0
-        is_complex_t0=np.array([type(it0)==list for it0 in initt0])
-        print("Checking if there's complex t0s suggesting two transits with gap:",initt0,is_complex_t0)
-        if np.all(~is_complex_t0):
-            #Normal transit fit - no complex gaps
-            t0 = pm.Normal("t0", mu=initt0, sd=1.0, shape=n_pl, testval=initt0)
-        else:
-            # In cases where we have two transit with a gap between, we will have two t0s for a single planet (and N periods)
-           
-            mus=np.array([initt0[nt0][1] for nt0 in range(len(initt0)) if is_complex_t0[nt0]])
-            sds=np.tile(1.0,np.sum(is_complex_t0))
-            #print(mus,mus.shape,type(mus),sds,sds.shape,type(sds))
-            t0_second_trans = pm.Normal("t0_second_trans",
-                                        mu=mus, 
-                                        sd=sds,
-                                        shape=np.sum(is_complex_t0),
-                                        testval=mus)
-
-            if np.all(is_complex_t0)>1:
-                t0 = pm.Normal("t0", mu=[t0s[0] for t0s in initt0], sd=1.0,
-                               shape=n_pl,testval=[t0s[0] for t0s in initt0])
-            else:
-                mus=np.array([initt0[nt0] for nt0 in range(len(initt0)) if not is_complex_t0[nt0]]+[initt0[nt0][0] for nt0 in range(len(initt0)) if is_complex_t0[nt0]])
-                sds=np.tile(1.0,len(is_complex_t0))
-                #print(mus,mus.shape,type(mus),sds,sds.shape,type(sds))
-                t0 = pm.Normal("t0",
-                               mu=mus,
-                               sd=sds,
-                               shape=n_pl,
-                               testval=mus)
-            for nt in range(len(initt0)):
-                if is_complex_t0[nt] and (periods[nt]==0.0)|(periods[nt] is None)|(np.isnan(periods[nt])):
-                    #need to make periods[nt] into a list of possible periods.
-                    inputdur=0.5 if initdur is None or np.isnan(initdur[nt]) or initdur[nt]==0.0 else initdur[nt]
-                    max_P=initt0[nt][1]-initt0[nt][0]
-                    folded_x=np.sort(abs((x[lcmask]-initt0[nt][0]-max_P*0.5)%max_P-max_P*0.5))
-                    min_P=np.where(np.diff(folded_x)>inputdur)[0]
-                    min_P=min_P[0] if len(min_P)>1 else min_P
-                    min_P=np.max(folded_x) if len(min_P)==0 else min_P
-                    #print(min_P,max_P)
-                    periods[nt]=list(max_P/np.arange(1,max_P/min_P,1))
-                    #Periods is then from max_P down to the limit where max_P/N<min_P, i.e. floor(max_P/min_P)
-                    
-        #Calculating minimum period:
-        P_gap_cuts=[];pertestval=[]
-        #print(initt0)
-        for n,nt0 in enumerate(initt0):
-            if not is_complex_t0[n]:
-                #Looping over all t0s - i.e. all planets
-                if periods is None or np.isnan(periods[n]) or periods[n]==0.0:
-                    #computing minimum periods and gaps for each planet, given the LC
-                    dist_from_t0=np.sort(abs(nt0-x[lcmask]))
-                    inputdur=0.5 if initdur is None or np.isnan(initdur[n]) or initdur[n]==0.0 else initdur[n]
-                    #print(x[lcmask],nt0,inputdur)
-                    P_gap_cuts+=[PeriodGaps(x[lcmask],nt0,inputdur)]
-                    #Estimating init P using duration:
-                    initvrel=(2*(1+np.sqrt(initdepth[n]))*np.sqrt(1-(0.41/(1+np.sqrt(initdepth[n])))**2))/inputdur
-                    initper=18226*(rhostar[0]/1.408)/(initvrel**3)
-                    #print(initper,P_gap_cuts[n])
-                    if initper>P_gap_cuts[n][0]:
-                        pertestval+=[initper/P_gap_cuts[n][0]]
-                    else:
-                        pertestval+=[0.5]
-                else:
-                    P_gap_cuts+=[[0.75*periods[n]]]
-                    pertestval+=[periods[n]/P_gap_cuts[n][0]]
-        
-        #Cutting points for speed of computation:
-        if not np.any(is_complex_t0):
-            speedmask=np.tile(False, len(x))
-            for n,it0 in enumerate(initt0):
-                if not is_complex_t0[n]:
-                    if periods is not None and not np.isnan(periods[n]) and not periods[n]==0.0:
-                        #For known periodic planets, need to keep many transits, so masking in the period space:
-                        speedmask[(((x-it0)%periods[n])<cutDistance)|(((x-it0)%periods[n])>(periods[n]-cutDistance))]=True
-                    elif cutDistance>0.0:
-                        speedmask[abs(x-it0)<cutDistance]=True
-                    else:
-                        #No parts of the lc to cut
-                        speedmask=np.tile(True,len(x))
-            print(np.sum(~speedmask),"points cut from lightcurve leaving",np.sum(speedmask),"to process")
-            totalmask=speedmask*lcmask
-        else:
-            #Using all points in the 
-            totalmask=lcmask[:]
-        
-        P_min=np.array([P_gap_cuts[n][0] for n in range(len(P_gap_cuts)) if not is_complex_t0[n]])
-        pertestval=np.array(pertestval)
-        print("Using minimum period(s) of:",P_min)
-        
-        #From Dan Foreman-Mackey's thing:
-        period = pm.Pareto("period", m=min_period, alpha=2./3)
-
-        #P_index = pm.Bound("P_index", upper=1.0, lower=0.0)("P_index", mu=0.5, sd=0.33, shape=n_pl)
-        
-        if np.any(is_complex_t0):
-            #Let's do the complex period using "Categorical" discrete distribution (we give an array where all possible periods must sum to 1)
-            #Computing priors as n**-(8/3) and making input array from 0 to 25 populated by the derived periods
-            #print([periods[npl] for npl in range(len(initt0)) if is_complex_t0[npl]])
-            complex_pers=pm.Deterministic("complex_pers", tt.as_tensor_variable([periods[npl] for npl in range(len(initt0)) if is_complex_t0[npl]]))
-        logp = pm.Deterministic("logp", tt.log(period))
-
-        # The Espinoza (2018) parameterization for the joint radius ratio and
-        # impact parameter distribution
-        if useL2:
-            #EB case as second light needed:
-            RpRs, b = xo.distributions.get_joint_radius_impact(
-                min_radius=0.001, max_radius=1.25,
-                testval_r=np.array(initdepth)**0.5,
-                testval_b=np.random.rand(n_pl)
-            )
-        else:
-            RpRs, b = xo.distributions.get_joint_radius_impact(
-                min_radius=0.001, max_radius=0.25,
-                testval_r=np.array(initdepth)**0.5,
-                testval_b=np.random.rand(n_pl)
-            )
-
-        r_pl = pm.Deterministic("r_pl", RpRs * Rs)
-        
-        #Initialising Limb Darkening:
-        if constrain_LD:
-            n_samples=1200
-            # Bounded normal distributions (bounded between 0.0 and 1.0) to constrict shape given star.
-            ld_dists=getLDs(np.random.normal(Teff[0],Teff[1],n_samples),
-                            np.random.normal(logg[0],logg[1],n_samples),FeH,mission=mission)
-            print("contrain LDs - ",Teff[0],Teff[1],logg[0],logg[1],FeH,n_samples,
-                  np.clip(np.nanmedian(ld_dists,axis=0),0,1),np.clip(ld_mult*np.nanstd(ld_dists,axis=0),0.05,1.0))
-            u_star = pm.Bound(pm.Normal, lower=0.0, upper=1.0)("u_star", 
-                                        mu=np.clip(np.nanmedian(ld_dists,axis=0),0,1),
-                                        sd=np.clip(ld_mult*np.nanstd(ld_dists,axis=0),0.05,1.0), shape=2, testval=np.clip(np.nanmedian(ld_dists,axis=0),0,1))
-        else:
-            # The Kipping (2013) parameterization for quadratic limb darkening paramters
-            u_star = xo.distributions.QuadLimbDark("u_star", testval=np.array([0.3, 0.2]))
-        
-        #Initialising GP kernel (i.e. without initialising Potential)
-        if use_GP:
-            # Transit jitter & GP parameters
-            #logs2 = pm.Normal("logs2", mu=np.log(np.var(y[m])), sd=10)
-            cads=np.unique(lc['cadence'])
-            #print(cads)
-            #Transit jitter will change if observed by Kepler/K2/TESS - need multiple logs^2
-            if len(cads)==1:
-                logs2 = pm.Uniform("logs2", upper=np.log(np.std(y[totalmask]))+4,
-                                   lower=np.log(np.std(y[totalmask]))-4)
-                min_cad=np.nanmedian(np.diff(x))#Limiting to <1 cadence
-            else:
-                logs2 = pm.Uniform("logs2", upper=[np.log(np.std(y[totalmask&(lc['cads']==c)]))+4 for c in cads],
-                                   lower=[np.log(np.std(y[totalmask&(lc['cads']==c)]))-4 for c in cads], shape=len(cads))
-                min_cad=np.min([np.nanmedian(np.diff(x[lc['cads']==c])) for c in cads])
-            
-            logw0_guess = np.log(2*np.pi/10)
-            
-            lcrange=x[totalmask][-1]-x[totalmask][0]
-            
-            #freqs bounded from 2pi/minimum_cadence to to 2pi/(4x lc length)
-            logw0 = pm.Uniform("logw0",lower=np.log((2*np.pi)/(4*lcrange)), 
-                               upper=np.log((2*np.pi)/min_cad))
-
-            # S_0 directly because this removes some of the degeneracies between
-            # S_0 and omega_0 prior=(-0.25*lclen)*exp(logS0)
-            logpower = pm.Uniform("logpower",lower=-20,upper=np.log(np.nanmedian(abs(np.diff(y[totalmask])))))
-            logS0 = pm.Deterministic("logS0", logpower - 4 * logw0)
-
-            # GP model for the light curve
-            kernel = xo.gp.terms.SHOTerm(log_S0=logS0, log_w0=logw0, Q=1/np.sqrt(2))
-        
-        if not assume_circ:
-            # This is the eccentricity prior from Kipping (2013) / https://arxiv.org/abs/1306.4982
-            BoundedBeta = pm.Bound(pm.Beta, lower=1e-5, upper=1-1e-5)
-            ecc = BoundedBeta("ecc", alpha=0.867, beta=3.03, shape=n_pl,
-                              testval=np.tile(0.1,n_pl))
-            omega = xo.distributions.Angle("omega", shape=n_pl, testval=np.tile(0.1,n_pl))
-
-        # Complex T requires special treatment of orbit (i.e. period) and potential:
-        if np.any(is_complex_t0):
-            #Marginalising over each possible period
-            if np.sum(is_complex_t0)==1:
-                #Single planet with two transits and a gap
-                logprobs = []
-                all_lcs = []
-                for i, index in enumerate([periods[np] for np in range(len(periods)) if is_complex_t0[np]]):
-                    with pm.Model(name="per_{0}".format(i), model=model) as submodel:
-                        if not np.all(is_complex_t0):
-                            #Have other planets:
-                            p2use=tt.concatenate(period,complex_pers[0][i])
-                        else:
-                            p2use=complex_pers[0][i]
-                        
-                        # Set up a Keplerian orbit for the planets
-                        if assume_circ:
-                            orbit = xo.orbits.KeplerianOrbit(
-                                r_star=Rs, rho_star=rho_S,
-                                period=p2use, t0=t0, b=b)
-                        else:
-                            orbit = xo.orbits.KeplerianOrbit(
-                                r_star=Rs, rho_star=rho_S,
-                                ecc=ecc, omega=omega,
-                                period=p2use, t0=t0, b=b)
-                        print("orbit set up")
-                        vx, vy, vz = orbit.get_relative_velocity(t0)
-                        #vsky = 
-                        if n_pl>1:
-                            vrel=pm.Deterministic("vrel",tt.diag(tt.sqrt(vx**2 + vy**2))/Rs)
-                        else:
-                            vrel=pm.Deterministic("vrel",tt.sqrt(vx**2 + vy**2)/Rs)
-                        tdur=pm.Deterministic("tdur",(2*tt.sqrt(1-b**2))/vrel)
-                        
-                        #print(x[totalmask])
-                        if debug:
-                            tt.printing.Print('u_star')(u_star)
-                            tt.printing.Print('r_pl')(r_pl)
-                            tt.printing.Print('mult')(mult)
-                            tt.printing.Print('tdur')(tdur)
-                            tt.printing.Print('t0')(t0)
-                            tt.printing.Print('b')(b)
-                            tt.printing.Print('p2use')(p2use)
-                            tt.printing.Print('rho_S')(rho_S)
-                            tt.printing.Print('Rs')(Rs)
-                        # Compute the model light curve using starry
-                        light_curves = xo.LimbDarkLightCurve(u_star).get_light_curve(orbit=orbit, r=r_pl,
-                                                                                     t=x[totalmask])*1e3/mult
-                        
-                        light_curve = pm.math.sum(light_curves, axis=-1) + mean     
-                        all_lcs.append(light_curve)
-
-                        if use_GP:
-                            if len(cads)==1:
-                                #Observed by a single telescope
-                                gp = xo.gp.GP(kernel, x[totalmask], tt.exp(logs2) + tt.zeros(np.sum(totalmask)), J=2)
-
-                                loglike = tt.sum(gp.log_likelihood(y[totalmask] - light_curve))
-                                gp_pred = pm.Deterministic("gp_pred", gp.predict())
-                            else:
-                                #We have multiple logs2 terms due to multiple telescopes:
-                                for n in range(len(cads)):
-                                    gp_i += [xo.gp.GP(kernel, x[totalmask&(lc['cads']==cads[n])], tt.exp(logs2[n]) + tt.zeros(np.sum(totalmask&(lc['cads']==cads[n]))), J=2)]
-                                    llk_gp_i += [gp.log_likelihood(y[totalmask&(lc['cads']==cads[n])] - light_curve)]
-                                    gp_pred_i += [gp.predict()]
-
-                                loglike = tt.sum(tt.stack(llk_gp_i))
-                                gp_pred = pm.Deterministic("gp_pred", tt.stack(gp_pred_i))
-
-                            #chisqs = pm.Deterministic("chisqs", (y - (gp_pred + tt.sum(light_curve,axis=-1)))**2/yerr**2)
-                            #avchisq = pm.Deterministic("avchisq", tt.sum(chisqs))
-                            #llk = pm.Deterministic("llk", model.logpt)
-                        else:
-                            loglike = tt.sum(pm.Normal.dist(mu=light_curve, sd=yerr[totalmask]).logp(y[totalmask]))
-                        
-                        logprior = tt.log(orbit.dcosidb) - 2 * tt.log(complex_pers[0][i])
-                        logprobs.append(loglike + logprior)
-                        
-            elif np.sum(is_complex_t0)==2:
-                #Two planets with two transits...
-                for i_1, index in enumerate(periods[is_complex_t0][0]):
-                    for i_2, index in enumerate(periods[is_complex_t0][1]):
-                        with pm.Model(name="per_{0}_{1}".format(i_1,i_2), model=model) as submodel:
-                            if not np.all(is_complex_t0):
-                                #Have other planets:
-                                p2use=tt.concatenate(period,tt.as_tensor_variable([complex_pers[0][i_1],complex_pers[1][i_2]]))
-                            else:
-                                p2use=tt.as_tensor_variable([complex_pers[0][i_1],complex_pers[1][i_2]])
-                            if debug:
-                                tt.printing.Print('p2use')(p2use)
-                            # Set up a Keplerian orbit for the planets
-                            if assume_circ:
-                                orbit = xo.orbits.KeplerianOrbit(
-                                    r_star=Rs, rho_star=rho_S,
-                                    period=p2use, t0=t0, b=b)
-                            else:
-                                orbit = xo.orbits.KeplerianOrbit(
-                                    r_star=Rs, rho_star=rho_S,
-                                    ecc=ecc, omega=omega,
-                                    period=p2use, t0=t0, b=b)
-                            vx, vy, vz = orbit.get_relative_velocity(t0)
-                            #vsky = 
-                            if n_pl>1:
-                                vrel=pm.Deterministic("vrel",tt.diag(tt.sqrt(vx**2 + vy**2))/Rs)
-                            else:
-                                vrel=pm.Deterministic("vrel",tt.sqrt(vx**2 + vy**2)/Rs)
-                            tdur=pm.Deterministic("tdur",(2*tt.sqrt(1-b**2))/vrel)
-
-                            # Compute the model light curve using starry
-                            light_curves = xo.LimbDarkLightCurve(u_star).get_light_curve(orbit=orbit, r=r_pl,
-                                                                                         t=x[totalmask])*1e3/mult
-                            light_curve = pm.math.sum(light_curves, axis=-1) + mean     
-                            all_lcs.append(light_curve)
-
-                            if use_GP:
-                                if len(cads)==1:
-                                    #Observed by a single telescope
-                                    gp = xo.gp.GP(kernel, x[totalmask], tt.exp(logs2) + tt.zeros(np.sum(totalmask)), J=2)
-
-                                    loglike = tt.sum(gp.log_likelihood(y[totalmask] - light_curve))
-                                    gp_pred = pm.Deterministic("gp_pred", gp.predict())
-                                else:
-                                    #We have multiple logs2 terms due to multiple telescopes:
-                                    for n in range(len(cads)):
-                                        gp_i += [xo.gp.GP(kernel, x[totalmask&(lc['cads']==cads[n])], tt.exp(logs2[n]) + tt.zeros(np.sum(totalmask&(lc['cads']==cads[n]))), J=2)]
-                                        llk_gp_i += [gp.log_likelihood(y[totalmask&(lc['cads']==cads[n])] - light_curve)]
-                                        gp_pred_i += [gp.predict()]
-
-                                    loglike = tt.sum(tt.stack(llk_gp_i))
-                                    gp_pred = pm.Deterministic("gp_pred", tt.stack(gp_pred_i))
-
-                                #chisqs = pm.Deterministic("chisqs", (y - (gp_pred + tt.sum(light_curve,axis=-1)))**2/yerr**2)
-                                #avchisq = pm.Deterministic("avchisq", tt.sum(chisqs))
-                                #llk = pm.Deterministic("llk", model.logpt)
-                            else:
-                                loglike = tt.sum(pm.Normal.dist(mu=light_curve, sd=yerr[totalmask]).logp(y[totalmask]))
-
-                            logprior = tt.sum(tt.log(orbit.dcosidb)) -\
-                                       2 * tt.log(periods[is_complex_t0][i_1]) -\
-                                       2 * tt.log(periods[is_complex_t0][i_1])
-                            logprobs.append(loglike + logprior)
-                        
-            # Compute the marginalized probability and the posterior probability for each period
-            logprobs = tt.stack(logprobs)
-            logprob_marg = pm.math.logsumexp(logprobs)
-            logprob_class = pm.Deterministic("logprob_class", logprobs - logprob_marg)
-            pm.Potential("logprob", logprob_marg)
-
-            # Compute the marginalized light curve
-            pm.Deterministic("light_curve", tt.sum(tt.stack(all_lcs) * tt.exp(logprob_class)[:, None], axis=0))
-        else:
-            #No complex periods - i.e. no gaps:
-            if assume_circ:
-                orbit = xo.orbits.KeplerianOrbit(
-                    r_star=Rs, rho_star=rho_S,
-                    period=period, t0=t0, b=b)
-            else:
-                # This is the eccentricity prior from Kipping (2013) / https://arxiv.org/abs/1306.4982
-                BoundedBeta = pm.Bound(pm.Beta, lower=1e-5, upper=1-1e-5)
-                ecc = BoundedBeta("ecc", alpha=0.867, beta=3.03, shape=n_pl,
-                                  testval=np.tile(0.1,n_pl))
-                omega = xo.distributions.Angle("omega", shape=n_pl, testval=np.tile(0.1,n_pl))
-                orbit = xo.orbits.KeplerianOrbit(
-                    r_star=Rs, rho_star=rho_S,
-                    ecc=ecc, omega=omega,
-                    period=period, t0=t0, b=b)
-
-            vx, vy, vz = orbit.get_relative_velocity(t0)
-            #vsky = 
-            if n_pl>1:
-                vrel=pm.Deterministic("vrel",tt.diag(tt.sqrt(vx**2 + vy**2))/Rs)
-            else:
-                vrel=pm.Deterministic("vrel",tt.sqrt(vx**2 + vy**2)/Rs)
-
-            tdur=pm.Deterministic("tdur",(2*tt.sqrt(1-b**2))/vrel)
-            
-            light_curves = xo.LimbDarkLightCurve(u_star).get_light_curve(orbit=orbit, r=r_pl,t=x[totalmask])*1e3/mult
-            light_curve = pm.math.sum(light_curves, axis=-1)
-            pm.Deterministic("light_curves", light_curves)
-            # Compute the model light curve using starry
-            if use_GP:
-                if len(cads)==1:
-                    gp = xo.gp.GP(kernel, x[totalmask], tt.exp(logs2) + tt.zeros(np.sum(totalmask)), J=2)
-
-                    llk_gp = pm.Potential("transit_obs", gp.log_likelihood(y[totalmask] - light_curve))
-                    gp_pred = pm.Deterministic("gp_pred", gp.predict())
-                else:
-                    #We have multiple logs2 terms due to multiple telescopes:
-                    gp_i = []
-                    llk_gp_i = []
-                    gp_pred_i = []
-                    for n in range(len(cads)):
-                        gp_i += [xo.gp.GP(kernel, x[totalmask&(lc['cads']==cads[n])], tt.exp(logs2[n]) + tt.zeros(np.sum(totalmask&(lc['cads']==cads[n]))), J=2)]
-                        llk_gp_i += [gp.log_likelihood(y[totalmask&(lc['cads']==cads[n])] - light_curve)]
-                        gp_pred_i += [gp.predict()]
-
-                    llk_gp = pm.Potential("transit_obs", tt.stack(llk_gp_i))
-                    gp_pred = pm.Deterministic("gp_pred", tt.stack(gp_pred_i))
-
-                #chisqs = pm.Deterministic("chisqs", (y - (gp_pred + tt.sum(light_curve,axis=-1)))**2/yerr**2)
-                #avchisq = pm.Deterministic("avchisq", tt.sum(chisqs))
-                #llk = pm.Deterministic("llk", model.logpt)
-            else:
-                pm.Normal("obs", mu=light_curve, sd=yerr[totalmask], observed=y[totalmask])
-
-        if debug:
-            tt.printing.Print('Rs')(Rs)
-            tt.printing.Print('RpRs')(RpRs)
-            tt.printing.Print('u_star')(u_star)
-            tt.printing.Print('r_pl')(r_pl)
-            tt.printing.Print('t0')(t0)
-        
-        #print(P_min,t0,type(x[totalmask]),x[totalmask][:10],np.nanmedian(np.diff(x[totalmask])))
-        
-        # Fit for the maximum a posteriori parameters, I've found that I can get
-        # a better solution by trying different combinations of parameters in turn
-        if start is None:
-            start = model.test_point
-        #print(model.test_point)
-        if not LoadFromFile:
-            if debug:
-                print("before",model.check_test_point())
-            map_soln = xo.optimize(start=start, vars=[RpRs, b])
-            map_soln = xo.optimize(start=map_soln, vars=[logs2])
-            map_soln = xo.optimize(start=map_soln, vars=[period, t0])
-            map_soln = xo.optimize(start=map_soln, vars=[logs2, logpower])
-            map_soln = xo.optimize(start=map_soln, vars=[logw0])
-            map_soln = xo.optimize(start=map_soln)
-            if debug:
-                print("after",model.check_test_point())
-            
-            return model, map_soln, totalmask, P_gap_cuts
-        else:
-            return model, None, totalmask, P_gap_cuts
-
-        # This shouldn't make a huge difference, but I like to put a uniform
-        # prior on the *log* of the radius ratio instead of the value. This
-        # can be implemented by adding a custom "potential" (log probability).
-        #pm.Potential("r_prior", -pm.math.log(r))
-
-
-def Run(ID, initdepth, initt0, mission='TESS', stellardict=None,n_draws=1200,
-        overwrite=False,LoadFromFile=False,savefileloc=None, doplots=True,do_per_gap_cuts=True, **kwargs):
-    #, cutDistance=0.0):
-    """#PymcSingles - Run model
-    Inputs:
-    #  * ID - ID of star (in TESS, Kepler or K2)
-    #  * initdepth - initial detected depth (for Rp guess)
-    #  * initt0 - initial detection transit time
-    #  * mission - TESS or Kepler/K2
-    #  * stellardict - dictionary of stellar parameters. (alternatively taken from Gaia). With:
-    #         Rs, Rs_err - 
-    #         rho_s, rho_s_err - 
-    #         Teff, Teff_err - 
-    #         logg, logg_err - 
-    #  * n_draws - number of samples for the MCMC to take
-    #  * overwrite - whether to overwrite saved samples
-    #  * LoadFromFile - whether to load the last written sample file
-    #  * savefileloc - location of savefiles. If None, creates a folder specific to the ID
-    # In KWARGS:
-    #  * ALL INPUTS TO INIT_MODEL
-    
-    Outputs:
-    # model - the PyMc3 model
-    # trace - the samples
-    # lc - a 3-column light curve with time, flux, flux_err
-    """
-    
-    if not LoadFromFile:
-        savenames=GetSavename(ID, mission, how='save', overwrite=overwrite, savefileloc=savefileloc)
-    else:
-        savenames=GetSavename(ID, mission, how='load', overwrite=overwrite, savefileloc=savefileloc)
-    #print(savenames)
-    
-    if os.path.exists(savenames[1].replace('_mcmc.pickle','.lc')) and os.path.exists(savenames[1].replace('_mcmc.pickle','_hdr.pickle')) and not overwrite:
-        print("loading from",savenames[1].replace('_mcmc.pickle','.lc'))
-        #Loading lc from file
-        df=pd.read_csv(savenames[1].replace('_mcmc.pickle','.lc'))
-        lc={col.replace('# ',''):df[col].values for col in df.columns}
-        hdr=pickle.load(open(savenames[1].replace('_mcmc.pickle','_hdr.pickle'),'rb'))
-    else:
-        lc,hdr = openLightCurve(ID,mission,**kwargs)
-        #print([len(lc[key]) for key in list(lc.keys())])
-        pd.DataFrame({key:lc[key] for key in list(lc.keys())}).to_csv(savenames[1].replace('_mcmc.pickle','.lc'))
-        pickle.dump(hdr, open(savenames[1].replace('_mcmc.pickle','_hdr.pickle'),'wb'))
-
-    if stellardict is None:
-        Rstar, rhostar, Teff, logg, src = starpars.getStellarInfo(ID, hdr, mission, overwrite=overwrite,
-                                                             fileloc=savenames[1].replace('_mcmc.pickle','_starpars.csv'),
-                                                             savedf=True)
-    else:
-        if type(stellardict['Rs_err'])==tuple:
-            Rstar=np.array([stellardict['Rs'],stellardict['Rs_err'][0],stellardict['Rs_err'][1]])
-        else:
-            Rstar=np.array([stellardict['Rs'],stellardict['Rs_err'],stellardict['Rs_err']])
-        if type(stellardict['rho_s_err'])==tuple:
-            rhostar = np.array([stellardict['rho_s'],stellardict['rho_s_err'][0],stellardict['rho_s_err'][1]])
-        else:
-            rhostar = np.array([stellardict['rho_s'],stellardict['rho_s_err'],stellardict['rho_s_err']])
-        if type(stellardict['Teff_err'])==tuple:
-            Teff = np.array([stellardict['Teff'],stellardict['Teff_err'][0],stellardict['Teff_err'][1]])
-        else:
-            Teff = np.array([stellardict['Teff'],stellardict['Teff_err'],stellardict['Teff_err']])
-        if type(stellardict['logg_err'])==tuple:
-            logg = np.array([stellardict['logg'],stellardict['logg_err'][0],stellardict['logg_err'][1]])
-        else:
-            logg = np.array([stellardict['logg'],stellardict['logg_err'],stellardict['logg_err']])
-    print("Initialising transit model")
-    #print(lc['time'],type(lc['time']),type(lc['time'][0]))
-    model, soln, lcmask, P_gap_cuts = init_model(lc,initdepth, initt0, Rstar, rhostar, Teff,
-                                                 logg=logg, **kwargs)
-    #initdur=None,n_pl=1,periods=None,per_index=-8/3,
-    #assume_circ=False,use_GP=True,constrain_LD=True,ld_mult=1.5,
-    #mission='TESS',LoadFromFile=LoadFromFile,cutDistance=cutDistance)
-    print("Model loaded")
-
-
-    #try:
-    if LoadFromFile and not overwrite:
-        trace = LoadPickle(ID, mission, savenames[0])
-    else:
-        trace=None
-   
-    if trace is None:
-        #Running sampler:
-        np.random.seed(int(ID))
-        with model:
-            #print(type(soln))
-            #print(soln.keys())
-            trace = pm.sample(tune=int(n_draws*0.66), draws=n_draws, start=soln, chains=4,
-                                  step=xo.get_dense_nuts_step(target_accept=0.9),compute_convergence_checks=False)
-
-        SavePickle(trace, ID, mission, savenames[0])
-            
-    if do_per_gap_cuts:
-        #Doing Cuts for Period gaps (i.e. where photometry rules out the periods of a planet)
-        #Only taking MCMC positions in the trace where either:
-        #  - P<0.5dur away from a period gap in P_gap_cuts[:-1]
-        #  - OR P is greater than P_gap_cuts[-1]
-        tracemask=np.tile(True,len(trace['t0'][:,0]))
-        for n in range(len(P_gap_cuts)):
-            #for each planet - only use monos
-            periods=kwargs.get("periods",None)
-            if periods is None or np.isnan(periods[n]) or periods[n]==0.0:
-                #Cutting points where P<P_gap_cuts[-1] and P is not within 0.5Tdurs of a gap:
-                gap_dists=np.nanmin(abs(trace['period'][:,n][:,np.newaxis]-P_gap_cuts[n][:-1][np.newaxis,:]),axis=1)
-                tracemask[(trace['period'][:,n]<P_gap_cuts[n][-1])*(gap_dists>0.5*np.nanmedian(trace['tdur'][:,n]))] = False
-            
-        #tracemask=np.column_stack([(np.nanmin(abs(trace['period'][:,n][:,np.newaxis]-P_gap_cuts[n][:-1][np.newaxis,:]),axis=1)<0.5*np.nanmedian(trace['tdur'][:,n]))|(trace['period'][:,n]>P_gap_cuts[n][-1]) for n in range(len(P_gap_cuts))]).any(axis=1)
-        print(np.sum(~tracemask),"(",int(100*np.sum(~tracemask)/len(tracemask)),") removed due to period gap cuts")
-    else:
-        tracemask=None
-    if doplots:
-        print("plotting")
-        PlotLC(lc, trace, ID, mission=mission, savename=savenames[0].replace('mcmc.pickle','TransitFit.png'), lcmask=lcmask,tracemask=tracemask)
-        PlotCorner(trace, ID, mission=mission, savename=savenames[0].replace('mcmc.pickle','corner.png'),tracemask=tracemask)
-    
-    if LoadFromFile and not overwrite and os.path.exists(savenames[0].replace('mcmc.pickle','results.txt')):
-        with open(savenames[0].replace('mcmc.pickle','results.txt'), 'r', encoding='UTF-8') as file:
-            restable = file.read()
-    else:
-        restable=ToLatexTable(trace, ID, mission=mission, varnames=None,order='columns',
-                              savename=savenames[0].replace('mcmc.pickle','results.txt'), overwrite=False,
-                              savefileloc=None, tracemask=tracemask)
-    return {'model':model, 'trace':trace, 'light_curve':lc, 'lcmask':lcmask, 'P_gap_cuts':P_gap_cuts, 'tracemask':tracemask,'restable':restable}
-
 def RunFromScratch(ID, mission, tcen, tdur, ra=None, dec=None, 
                    mono_SNRthresh=6.0,
                    other_planet_SNRthresh=6.0, PL_ror_thresh=0.2):

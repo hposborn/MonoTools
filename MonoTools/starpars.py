@@ -274,9 +274,9 @@ def GetKICinfo(kic):
         elif 'radius' in row:
             newname=newname.replace('radius','rad')
         if '_err1' in row:
-            newname=newname.replace('_err1','ep')
+            newname='epos_'+newname.replace('_err1','')
         elif '_err2' in row:
-            newname=newname.replace('_err2','em')
+            newname='eneg_'+newname.replace('_err2','')
         kicdat=kicdat.rename(index={row:newname})
         try:
             kicdat[newname]=float(kicdat[newname])
@@ -288,9 +288,9 @@ def GetKICinfo(kic):
             kicdat[row[:-1]]=0.5*(abs(kicdat[row])+abs(kicdat[row[:-1]+'p']))
     #Adding rho in terms of solar density:
     kicdat['rho']=kicdat['rho_gcm3']/1.411
-    kicdat['rhoep']=kicdat['rho_gcm3ep']/1.411
-    kicdat['rhoem']=kicdat['rho_gcm3em']/1.411
-    kicdat['rhoe']=0.5*(abs(kicdat['rhoep'])+abs(kicdat['rhoem']))
+    kicdat['epos_rho']=kicdat['epos_rho_gcm3']/1.411
+    kicdat['eneg_rho']=kicdat['eneg_rho_gcm3']/1.411
+    kicdat['rhoe']=0.5*(abs(kicdat['epos_rho'])+abs(kicdat['eneg_rho']))
     kicdat['rho_gcm3e']=1.411*kicdat['rhoe']
 
     #kicdat=pd.DataFrame.from_csv("https://exoplanetarchive.ipac.caltech.edu/cgi-bin/nstedAPI/nph-nstedAPI?table=keplerstellar&where=epic_number=%27"+str(int(kic))+"%27")
@@ -300,7 +300,7 @@ def GetKICinfo(kic):
     kicdat['source']='kic'
     return kicdat
 
-def GetExoFop(icid,mission='tess',file=''):
+def GetExoFop(icid, mission='tess',file=''):
     cols={'Telescope':'telescope','Instrument':'instrument','Teff (K)':'teff','Teff (K) Error':'teffe',
           'Teff':'teff','Teff Error':'teffe','log(g)':'logg',
           'log(g) Error':'logge','Radius (R_Sun)':'rad','Radius':'rad','Radius Error':'rade',
@@ -360,7 +360,7 @@ def GetExoFop(icid,mission='tess',file=''):
             return kicinfo
     else:
         kicinfo = None
-    assert mission.lower() in ['tess','k2']
+    assert mission.lower() in ['tess','k2','corot']
     outdat={}
     outdat['mission']=mission.lower()
     #Searching TESS and K2 ExoFop for info (and TIC-8 info):
@@ -448,12 +448,12 @@ def GetExoFop(icid,mission='tess',file=''):
             except:
                 pass
             if col.find('_err1')!=-1:
-                outdat=outdat.rename(index={col:col.replace('_err1','ep')})
+                outdat=outdat.rename(index={col:'epos_'+col.replace('_err1','')})
             elif col.find('_err2')!=-1:
-                outdat=outdat.rename(index={col:col.replace('_err2','em')})
-            elif col.find('_err')!='1':
-                outdat[col.replace('_err','em')]=outdat[col]
-                outdat[col.replace('_err','ep')]=outdat[col]
+                outdat=outdat.rename(index={col:'eneg_'+col.replace('_err2','')})
+            elif col.find('_err')!=-1:
+                outdat['epos_'+col.replace('_err','')]=outdat[col]
+                outdat['eneg_'+col.replace('_err','')]=outdat[col]
                 outdat=outdat.rename(index={col:col.replace('_err','e')})
         for col in outdat.index:
             if 'radius' in col:
@@ -469,7 +469,7 @@ def GetExoFop(icid,mission='tess',file=''):
 
 def LoadModel():
     #Loading isoclassify "mesa" model from file:
-    from stellar.isoclassify import classify, pipeline
+    from ..stellar.isoclassify import classify, pipeline
     mist_loc='/'.join(classify.__file__.split('/')[:-3])+'/mesa.h5'
     import h5py
     file = h5py.File(mist_loc,'r+', driver='core', backing_store=False)
@@ -523,7 +523,7 @@ def LoadModel():
 
 def LoadDust(sc,plx,dust='allsky'):
     import mwdust
-    from stellar.isoclassify import pipeline
+    from ..stellar.isoclassify import pipeline
     av=mwdust.SFD()(sc.galactic.l.deg,sc.galactic.b.deg,1000.0/plx)
     #sfdmap(sc.ra.deg.to_string(),sc.dec.deg.to_string())
     ext={}
@@ -643,10 +643,13 @@ def CheckSpecCsv(radec,icid,thresh=20*u.arcsec):
 def Assemble_and_run_isoclassify(icid,sc,mission,survey_dat,exofop_dat,errboost=0.2,spec_dat=None,
                                  useGaiaLum=True,useGaiaBR=True,useBV=True,useGaiaSpec=True,
                                  use2mass=True,useGriz=True,useGaiaAg=True):
-    from stellar.isoclassify import classify, pipeline
+    from ..stellar.isoclassify import classify, pipeline
     ############################################
     #    Building isoclassify input data:      #
     ############################################
+    
+    print(exofop_dat.index[:50])
+    print(exofop_dat.index[50:])
     
     x=classify.obsdata()
     mag=False
@@ -670,19 +673,25 @@ def Assemble_and_run_isoclassify(icid,sc,mission,survey_dat,exofop_dat,errboost=
         print("No Gaia mag for",icid)
         mag+=False
     #BV from either APASS or Exofop:
-    if useBV and 'ap_Johnson B (B)' in survey_dat.index and not pd.isnull(survey_dat[['ap_Johnson B (B)','ap_Johnson V (V)','ap_Berr','ap_Verr']]).any():
+    print(useBV,{i:survey_dat[i] for i in survey_dat.index if 'B' in i or 'V' in i})
+    if useBV and 'ap_Johnson B (B)' in survey_dat.index and not pd.isnull(survey_dat.reindex(index = ['ap_Johnson B (B)','ap_Johnson V (V)','ap_Berr','ap_Verr'])).any():
         #BV photometry (eg apass)
         x.addbv([survey_dat['ap_Johnson B (B)'],survey_dat['ap_Johnson V (V)']],
                 [errboost+survey_dat['ap_Berr'],errboost+survey_dat['ap_Verr']])
         mag+=True
-    elif useBV and 'B' in exofop_dat.index and not np.isnan(np.sum(exofop_dat[['B','V','Be','Ve']].values.astype(float))):
-        x.addbv([float(exofop_dat['B']),float(exofop_dat['V'])],
-                [errboost+float(exofop_dat['Be']),errboost+float(exofop_dat['Ve'])])
+        print("Added BV")
+    elif useBV and 'Bmag' in exofop_dat.index and not pd.isnull(exofop_dat.reindex(index = ['Bmag','Vmag','e_Bmag','e_Vmag'])).any():
+        x.addbv([float(exofop_dat['Bmag']),float(exofop_dat['Vmag'])],
+                [errboost+float(exofop_dat['e_Bmag']),errboost+float(exofop_dat['e_Vmag'])])
+        print("Added BV")
         mag+=True
     else:
         print("No BV for",icid)
+        #print(useBV and 'Bmag' in exofop_dat.index)
+        #print(pd.isnull(exofop_dat.reindex(index = ['Bmag','Vmag','e_Bmag','e_Vmag'])))
+        
         mag+=False
-
+    
     #Spectra either from APASS, or from user-uploaded file, or from Gaia spectrum:
     if 'spec' in exofop_dat.index and exofop_dat['spec'] is not None:
         #From ExoFop - either has _user (K2) or _INSTRUMENT (TESS)
@@ -721,21 +730,25 @@ def Assemble_and_run_isoclassify(icid,sc,mission,survey_dat,exofop_dat,errboost=
         x.addspec([survey_dat.teff_val, survey_dat.rv_template_logg, 0.0],
                   [0.5*(survey_dat.teff_percentile_upper-survey_dat.teff_percentile_lower), 0.4, 1.0])
     #2MASS JHK from Gaia-xmatched catalogue or from ExoFop:
+    print(use2mass,{i:exofop_dat[i] for i in exofop_dat.index if 'J' in i or 'H' in i or 'K' in i})
     if use2mass and '2m_j_m' in survey_dat.index and '2m_h_m' in survey_dat.index and '2m_ks_m' in survey_dat.index:
         for col in ['2m_j_msigcom','2m_h_msigcom','2m_ks_msigcom']:
             if col not in survey_dat:
                 survey_dat[col] = 0.2
         # 2MASS photometry
+        print("Added JHK")
         x.addjhk([survey_dat['2m_j_m'],survey_dat['2m_h_m'],survey_dat['2m_ks_m']],
                  [errboost+survey_dat['2m_j_msigcom'],errboost+survey_dat['2m_h_msigcom'],errboost+survey_dat['2m_ks_msigcom']])
         mag+=True
-    elif use2mass and 'K' in exofop_dat.index  and not pd.isnull(exofop_dat[['J','H','K',
-                                                                                   'Je','He','Ke']]).any():
-        x.addjhk([float(exofop_dat['J']),float(exofop_dat['H']),float(exofop_dat['K'])],
-                 [errboost+float(exofop_dat['Je']),errboost+float(exofop_dat['He']),errboost+float(exofop_dat['Ke'])])
+    elif use2mass and 'Kmag' in exofop_dat.index and not pd.isnull(exofop_dat.reindex(index = ['Jmag','Hmag','Kmag','e_Jmag','e_Hmag','e_Kmag'])).any():
+        print("Added JHK", not pd.isnull(exofop_dat.reindex(index = ['Jmag','Hmag','Kmag','e_Jmag','e_Hmag','e_Kmag'])).any())
+        x.addjhk([float(exofop_dat['Jmag']),float(exofop_dat['Hmag']),float(exofop_dat['Kmag'])],
+                 [errboost+float(exofop_dat['e_Jmag']),errboost+float(exofop_dat['e_Hmag']),errboost+float(exofop_dat['e_Kmag'])])
         mag+=True
     else:
         print("No 2MASS for",icid)
+        #print('K' in exofop_dat.index)
+        #print(pd.isnull(exofop_dat.reindex(index = ['Jmag','Hmag','Kmag','e_Jmag','e_Hmag','e_Kmag'])))
         mag+=False
     #GRIZ photometry from APASS or Gaia-xmatched SDSS catalogue or from ExoFop:
     if useGriz and "ap_Sloan z' (SZ)" in survey_dat.index and "ap_Sloan r' (SR)" in survey_dat.index and "ap_Sloan i' (SI)" in survey_dat.index and "ap_Sloan z' (SZ)" in survey_dat.index:
@@ -748,18 +761,20 @@ def Assemble_and_run_isoclassify(icid,sc,mission,survey_dat,exofop_dat,errboost=
                  [errboost+survey_dat["ap_SGerr"],errboost+survey_dat["ap_SRerr"],
                   errboost+survey_dat["ap_SIerr"],errboost+survey_dat["ap_SZerr"]])
         mag+=True
-    elif useGriz and 'sd_z_mag' in survey_dat.index and not pd.isnull(survey_dat["sd_g_mag","sd_r_mag","sd_i_mag","sd_z_mag","sd_g_mag_error","sd_r_mag_error","sd_i_mag_error","sd_z_mag_error"]).any():
+    elif useGriz and 'sd_z_mag' in survey_dat.index and not pd.isnull(survey_dat.reindex(index = ["sd_g_mag","sd_r_mag","sd_i_mag","sd_z_mag","sd_g_mag_error","sd_r_mag_error","sd_i_mag_error","sd_z_mag_error"])).any():
         x.addgriz([survey_dat['sd_g_mag'],survey_dat['sd_r_mag'],survey_dat['sd_i_mag'],survey_dat['sd_z_mag']],
                   [errboost+survey_dat['sd_g_mag_error'],errboost+survey_dat['sd_r_mag_error'],
                    errboost+survey_dat['sd_i_mag_error'],errboost+survey_dat['sd_z_mag_error']])
         mag+=True
-    elif useGriz and 'z' in exofop_dat.index and not pd.isnull(exofop_dat[["g","r","i","z","ge","re","ie","ze"]]).any():
-        x.addgriz([float(exofop_dat['g']),float(exofop_dat['r']),float(exofop_dat['i']),float(exofop_dat['z'])],
-                  [errboost+float(exofop_dat['ge']),errboost+float(exofop_dat['re']),
-                   errboost+float(exofop_dat['ie']),errboost+float(exofop_dat['ze'])])
+    elif useGriz and 'zmag' in exofop_dat.index and not pd.isnull(exofop_dat.reindex(index = ["gmag","rmag","imag","zmag","e_gmag","e_rmag","e_imag","e_zmag"])).any():
+        x.addgriz([float(exofop_dat['gmag']),float(exofop_dat['rmag']),float(exofop_dat['imag']),float(exofop_dat['zmag'])],
+                  [errboost+float(exofop_dat['e_gmag']),errboost+float(exofop_dat['e_rmag']),
+                   errboost+float(exofop_dat['e_imag']),errboost+float(exofop_dat['e_zmag'])])
         mag+=True
     else:
         mag+=False
+        #print(useGriz,'zmag' in exofop_dat.index)
+        #print(pd.isnull(survey_dat.reindex(index = ["sd_g_mag","sd_r_mag","sd_i_mag","sd_z_mag","sd_g_mag_error","sd_r_mag_error","sd_i_mag_error","sd_z_mag_error"])))
         print("No griz for",icid)
     #Gaia Ag
     if useGaiaAg and 'a_g_val' in survey_dat.index and survey_dat['a_g_val'] is not None:
@@ -799,12 +814,18 @@ def Assemble_and_run_isoclassify(icid,sc,mission,survey_dat,exofop_dat,errboost=
                'lum','lumep','lumem','avs','avsep','avsem','dis','disep','disem']#,'plx','plxep','plxem','mabs']
     isoclass_df=pd.Series()
     for c in col_names:
-        exec('isoclass_df[\"'+c+'\"]=paras.'+c)
+        if c[-2:]=='em':
+            cout='eneg_'+c[:-2]
+        elif c[-2:]=='ep':
+            cout='epos_'+c[:-2]
+        else:
+            cout=c
+        exec('isoclass_df[\"'+cout+'\"]=paras.'+c)
     #isoclass_df=isoclass_df.rename(index={'rho':'rho_gcm3','rhoep':'rho_gcm3ep','rhoem':'rho_gcm3em'})
     #After much posturing, I have determined that these output "rho"s are in rho_S and not gcm3, so adding gcm3 values here:
     isoclass_df['rho_gcm3']=isoclass_df['rho']*1.411
-    isoclass_df['rho_gcm3ep']=isoclass_df['rhoep']*1.411
-    isoclass_df['rho_gcm3em']=isoclass_df['rhoem']*1.411
+    isoclass_df['epos_rho_gcm3']=isoclass_df['epos_rho']*1.411
+    isoclass_df['eneg_rho_gcm3']=isoclass_df['eneg_rho']*1.411
     return isoclass_df, paras
     
 def starpars(icid,mission,errboost=0.1,radec=None,return_best=True,
@@ -845,15 +866,21 @@ def starpars(icid,mission,errboost=0.1,radec=None,return_best=True,
     elif radec is not None:
         exofop_dat=Catalogs.query_criteria(catalog="Tic",coordinates=str(radec.ra.deg)+','+str(radec.dec.deg),
                                            radius=12.5*u.arcsecond,objType="STAR").to_pandas()
-        if exofop_dat.shape[0]>0:
+        if type(exofop_dat)==pd.DataFrame and exofop_dat.shape[0]>0:
             exofop_dat=exofop_dat.loc[np.argmin(exofop_dat['Tmag'])]
         #exofop_dat=exofop_dat.append(corot_dat)
         kicinfo=None
     ############################################
     #   Getting survey data from [Various]:    #
     ############################################
-    
+    if exofop_dat is not None:
+        for col in exofop_dat.index:
+            if col[:2]=='e_' and 'epos_'+col[2:] not in exofop_dat.index and 'eneg_'+col[2:] not in exofop_dat.index:
+                exofop_dat['epos_'+col[2:]]=exofop_dat[col]
+                exofop_dat['eneg_'+col[2:]]=exofop_dat[col]
+                
     if use_surveys:
+        print("use_surveys:",use_surveys,exofop_dat.index)
         #Loading RA and Dec:
         if radec is None:
             if type(exofop_dat['ra'])==str and (exofop_dat['ra'].find(':')!=-1)|(exofop_dat['ra'].find('h')!=-1):
@@ -874,12 +901,15 @@ def starpars(icid,mission,errboost=0.1,radec=None,return_best=True,
         while isoclass_dens_is_NaN and n_kw_to_remove<=len(order_of_kw_to_remove):
             kwars={order_of_kw_to_remove[nkw]:(True if nkw>=n_kw_to_remove else False) for nkw in range(len(order_of_kw_to_remove))}
             #print(n_kw_to_remove,'/',len(order_of_kw_to_remove),kwars)
-            try:
+            #try:
+            if 1==1:
                 isoclass_df, paras = Assemble_and_run_isoclassify(icid,coor,mission,survey_dat,exofop_dat,
-                                                   errboost=errboost*(1+0.33*n_kw_to_remove),spec_dat=spec_dat,**kwars)
+                                                  errboost=errboost*(1+0.33*n_kw_to_remove),spec_dat=spec_dat,**kwars)
                 #print(isoclass_df[['rho_gcm3','rho_gcm3ep','rho_gcm3em']])
-                isoclass_dens_is_NaN=(np.isnan(isoclass_df[['rho_gcm3','rho_gcm3ep','rho_gcm3em']]).any())|(isoclass_df[['rho_gcm3','rho_gcm3ep','rho_gcm3em']]==0.0).all()
-            except Exception as e:
+                isoclass_dens_is_NaN=(pd.isnull(isoclass_df.reindex(index = ['rho_gcm3','epos_rho_gcm3','eneg_rho_gcm3'])).any())|(isoclass_df.reindex(index = ['rho_gcm3','epos_rho_gcm3','eneg_rho_gcm3'])==0.0).all()
+                print(isoclass_df.reindex(index = ['rho_gcm3','epos_rho_gcm3','eneg_rho_gcm3']), isoclass_dens_is_NaN and n_kw_to_remove<=len(order_of_kw_to_remove))
+            else:
+                #except Exception as e:
                 exc_type, exc_obj, exc_tb = sys.exc_info()
                 print(exc_type, exc_tb.tb_lineno)
                 isoclass_df,paras=None,None
@@ -893,46 +923,49 @@ def starpars(icid,mission,errboost=0.1,radec=None,return_best=True,
         isoclass_df=None
         paras=None
     if isoclass_df is not None:
-        isoclass_err_rho=(0.5*(abs(isoclass_df['rho_gcm3ep'])+abs(isoclass_df['rho_gcm3em'])))/isoclass_df['rho_gcm3']
+        isoclass_err_rho=(0.5*(abs(isoclass_df['epos_rho_gcm3'])+abs(isoclass_df['eneg_rho_gcm3'])))/isoclass_df['rho_gcm3']
     else:
         isoclass_err_rho=100
     #Calculating 
+    print(type(exofop_dat),exofop_dat)
+    exofop_dat=exofop_dat.drop([i for i in exofop_dat.index if 'rho' in i and pd.isnull(exofop_dat[i])])
     if 'rho' not in exofop_dat.index and 'rho_gcm3' not in exofop_dat.index and 'rad' in exofop_dat.index and (('mass' in exofop_dat.index)|('logg' in exofop_dat.index)):
         #Getting Density from R, M and logg:
         rhos=[];rhoems=[];rhoeps=[];rhoes=[]
+        print([i for i in exofop_dat.index if 'mass' in i])
         if 'mass' in exofop_dat.index:
             rhos+=[exofop_dat['mass']/exofop_dat['rad']**3]
-            rhoeps+=[(exofop_dat['mass']+exofop_dat['massep'])/((exofop_dat['rad']-exofop_dat['radem'])**3)-rhos[-1]]
-            rhoems+=[rhos[-1] - (exofop_dat['mass']-exofop_dat['massem'])/((exofop_dat['rad']+exofop_dat['radep'])**3)]
+            rhoeps+=[(exofop_dat['mass']+exofop_dat['epos_mass'])/((exofop_dat['rad']-exofop_dat['eneg_rad'])**3)-rhos[-1]]
+            rhoems+=[rhos[-1] - (exofop_dat['mass']-exofop_dat['eneg_mass'])/((exofop_dat['rad']+exofop_dat['epos_rad'])**3)]
             rhoes+=[0.5*(abs(rhoeps[-1])+abs(rhoems[-1]))]
         if 'logg' in exofop_dat.index:
             rhos+=[np.power(10,exofop_dat['logg']-4.4377)/exofop_dat['rad']]
-            rhoeps+=[np.power(10,(exofop_dat['logg']+exofop_dat['loggep'])-4.4377)/(exofop_dat['rad']-exofop_dat['radem'])-rhos[-1]]
-            rhoems+=[rhos[-1]-np.power(10,(exofop_dat['logg']-exofop_dat['loggem'])-4.4377)/(exofop_dat['rad']+exofop_dat['rad'])]
-            rhoes+=[0.5*(abs(rhoeps[-1])+abs(rhpems[-1]))]
+            rhoeps+=[np.power(10,(exofop_dat['logg']+exofop_dat['epos_logg'])-4.4377)/(exofop_dat['rad']-exofop_dat['eneg_rad'])-rhos[-1]]
+            rhoems+=[rhos[-1]-np.power(10,(exofop_dat['logg']-exofop_dat['eneg_logg'])-4.4377)/(exofop_dat['rad']+exofop_dat['epos_rad'])]
+            rhoes+=[0.5*(abs(rhoeps[-1])+abs(rhoems[-1]))]
         rhos=np.array(rhos)
         rhoes=np.array(rhoes)
         exofop_dat['rho']=rhos[np.argmin(rhoes)]
         exofop_dat['rhoe']=np.min(rhoes)
-        exofop_dat['rhoem']=rhoems[np.argmin(rhoes)]
-        exofop_dat['rhoep']=rhoeps[np.min(rhoes)]
+        exofop_dat['eneg_rho']=rhoems[np.argmin(rhoes)]
+        exofop_dat['epos_rho']=rhoeps[np.argmin(rhoes)]
         exofop_dat['rho_gcm3']=exofop_dat['rho']*1.411
         exofop_dat['rho_gcm3e']=exofop_dat['rhoe']*1.411
-        exofop_dat['rho_gcm3em']=exofop_dat['rhoem']*1.411
-        exofop_dat['rho_gcm3ep']=exofop_dat['rhoep']*1.411
+        exofop_dat['eneg_rho_gcm3']=exofop_dat['eneg_rho']*1.411
+        exofop_dat['epos_rho_gcm3']=exofop_dat['eneg_rho']*1.411
     elif 'rho' in exofop_dat.index and 'rho_gcm3' not in exofop_dat.index:
         exofop_dat['rho_gcm3']=exofop_dat['rho']*1.411
-        exofop_dat['rho_gcm3e']=0.5*(abs(exofop_dat['rhoep'])+abs(exofop_dat['rhoem']))*1.411
+        exofop_dat['rho_gcm3e']=0.5*(abs(exofop_dat['epos_rho'])+abs(exofop_dat['eneg_rho']))*1.411
     elif 'rho_gcm3' in exofop_dat.index and 'rho' not in exofop_dat.index:
         exofop_dat['rho']=exofop_dat['rho_gcm3']/1.411
-        exofop_dat['rhoe']=0.5*(abs(exofop_dat['rho_gcm3ep'])+abs(exofop_dat['rho_gcm3em']))/1.411
-        exofop_dat['rhoep']=exofop_dat['rho_gcm3ep']/1.411
-        exofop_dat['rhoem']=exofop_dat['rho_gcm3em']/1.411
+        exofop_dat['rhoe']=0.5*(abs(exofop_dat['epos_rho_gcm3'])+abs(exofop_dat['eneg_rho_gcm3']))/1.411
+        exofop_dat['epos_rho']=exofop_dat['epos_rho_gcm3']/1.411
+        exofop_dat['eneg_rho']=exofop_dat['eneg_rho_gcm3']/1.411
     elif 'rho_gcm3' not in exofop_dat.index:
         exofop_dat['rho_gcm3e']=100
         exofop_dat['rho_gcm3']=1
-    if 'rho_gcm3em' in exofop_dat.index and 'rho_gcm3e' not in exofop_dat.index:
-        exofop_dat['rho_gcm3e']=0.5*(abs(exofop_dat['rho_gcm3ep'])+abs(exofop_dat['rho_gcm3em']))
+    if 'eneg_rho_gcm3' in exofop_dat.index and 'rho_gcm3e' not in exofop_dat.index:
+        exofop_dat['rho_gcm3e']=0.5*(abs(exofop_dat['epos_rho_gcm3'])+abs(exofop_dat['eneg_rho_gcm3']))
         #elif 
         #exofop_dat['rho_gcm3e']=0.5*(exofop_dat['rho_gcm3em']+exofop_dat['rho_gcm3ep'])
     #Calculating percentage error on density from exofop/input catalogues:
@@ -951,9 +984,9 @@ def starpars(icid,mission,errboost=0.1,radec=None,return_best=True,
     print('Density errors.  isoclassify:',isoclass_err_rho,', input cat:',inputcat_err_rho)
     print(isoclass_df is not None)
     print(exofop_dat['rho_gcm3'],isoclass_df['rho_gcm3'])
-    print(abs(0.5*(abs(isoclass_df['rho_gcm3ep'])+abs(isoclass_df['rho_gcm3em']))+exofop_dat['rho_gcm3e']))
-    if isoclass_df is not None and ((exofop_dat['rho_gcm3'] is None) or (abs(exofop_dat['rho_gcm3']-isoclass_df['rho_gcm3']) > abs(0.5*(abs(isoclass_df['rho_gcm3ep'])+abs(isoclass_df['rho_gcm3em']))+exofop_dat['rho_gcm3e']))):
-        print('Densities disagree at >1-sigma | isoclassify:',isoclass_df['rho_gcm3'],0.5*(abs(isoclass_df['rho_gcm3ep'])+abs(isoclass_df['rho_gcm3em'])),'| input cat:',exofop_dat['rho_gcm3'],exofop_dat['rho_gcm3e'])
+    print(abs(0.5*(abs(isoclass_df['epos_rho_gcm3'])+abs(isoclass_df['eneg_rho_gcm3']))+exofop_dat['rho_gcm3e']))
+    if isoclass_df is not None and ((exofop_dat['rho_gcm3'] is None) or (abs(exofop_dat['rho_gcm3']-isoclass_df['rho_gcm3']) > abs(0.5*(abs(isoclass_df['epos_rho_gcm3'])+abs(isoclass_df['eneg_rho_gcm3']))+exofop_dat['rho_gcm3e']))):
+        print('Densities disagree at >1-sigma | isoclassify:',isoclass_df['rho_gcm3'],0.5*(abs(isoclass_df['epos_rho_gcm3'])+abs(isoclass_df['eneg_rho_gcm3'])),'| input cat:',exofop_dat['rho_gcm3'],exofop_dat['rho_gcm3e'])
     
     #Now we know which is best, we put that best info into "best_df"
     best_df=pd.Series()
@@ -967,21 +1000,21 @@ def starpars(icid,mission,errboost=0.1,radec=None,return_best=True,
     #selecting the best stellar parameter source from input cat vs isoclassify
     if isoclass_err_rho<inputcat_err_rho or np.isnan(inputcat_err_rho):
         #Generated Density better constrained by isoclassify:
-        col_names=['teff','teffep','teffem','logg','loggep','loggem','lum','lumep','lumem',
-                   'rad','radep','radem','mass','massep','massem','rho_gcm3','rho_gcm3ep','rho_gcm3em',
-                   'dis','disep','disem']
+        col_names=['teff','epos_teff','eneg_teff','logg','epos_logg','eneg_logg','lum','epos_lum','eneg_lum',
+                   'rad','epos_rad','eneg_rad','mass','epos_mass','eneg_mass','rho_gcm3','epos_rho_gcm3','eneg_rho_gcm3',
+                   'dis','epos_dis','eneg_dis']
         for col in col_names:
             best_df[col]=isoclass_df[col]
         best_df['source']='isoclassify'
     elif inputcat_err_rho<=isoclass_err_rho or np.isnan(isoclass_err_rho):
         #input catalogue info better constrained
-        col_names=['teff','teffep','teffem','teffe','teff_prov','logg','loggep','loggem','logge','logg_prov',
-                   'rad','radep','radem','rade','mass','massep','massem','masse'
-                   'rho_gcm3','rho_gcm3e','rho_gcm3ep','rho_gcm3em','rho','rhoe','rhoep','rhoem']
+        col_names=['teff','teffe','epos_teff','eneg_teff','logg','logge','epos_logg','eneg_logg',
+                   'rad','rade','epos_rad','eneg_rad','mass','masse','epos_mass','eneg_mass',
+                   'rho_gcm3','rho_gcm3e','epos_rho_gcm3','eneg_rho_gcm3','rho','rhoe','epos_rho','eneg_rho']
         if 'av' in exofop_dat.index:
-            col_names+=['avs','avsem','avsep']
+            col_names+=['avs','eneg_avs','epos_avs']
         if 'feh' in exofop_dat.index:
-            col_names+=['feh','fehem','fehep']
+            col_names+=['feh','eneg_feh','epos_feh']
         for col in col_names:
             if col in exofop_dat.index:
                 best_df[col]=exofop_dat[col]
@@ -989,7 +1022,7 @@ def starpars(icid,mission,errboost=0.1,radec=None,return_best=True,
     
     #Converting rho in gcm3 to rho in rho_s
     if 'rho_gcm3' in best_df.index:
-        coldic={'rho_gcm3':'rho','rho_gcm3em':'rhoem','rho_gcm3ep':'rhoep'}
+        coldic={'rho_gcm3':'rho','eneg_rho_gcm3':'eneg_rho','epos_rho_gcm3':'epos_rho'}
         for key in coldic:
             best_df[coldic[key]]=best_df[key]/1.411
             
@@ -998,7 +1031,7 @@ def starpars(icid,mission,errboost=0.1,radec=None,return_best=True,
     else:
         return exofop_dat,survey_dat,isoclass_df,paras,best_df
 
-    
+
 def IsoClass(icid,mission,coor,ic_info=None,return_best=True,errboost=0.05,
              useGaiaLum=True,useGaiaBR=True,useGaiaSpec=True,
              useBV=True,use2mass=True,useGriz=True,useGaiaAg=True):
@@ -1018,10 +1051,11 @@ def IsoClass(icid,mission,coor,ic_info=None,return_best=True,errboost=0.05,
         kwars={order_of_kw_to_remove[nkw]:(True if nkw>=n_kw_to_remove else False) for nkw in range(len(order_of_kw_to_remove))}
         #print(n_kw_to_remove,'/',len(order_of_kw_to_remove),kwars)
         try:
+            
             isoclass_df, paras = Assemble_and_run_isoclassify(icid,coor,mission,survey_dat,ic_info,
                                                errboost=errboost*(1+0.33*n_kw_to_remove),spec_dat=spec_dat,**kwars)
             #print(isoclass_df[['rho_gcm3','rho_gcm3ep','rho_gcm3em']])
-            isoclass_dens_is_NaN=(np.isnan(isoclass_df[['rho_gcm3','rho_gcm3ep','rho_gcm3em']]).any())|(isoclass_df[['rho_gcm3','rho_gcm3ep','rho_gcm3em']]==0.0).all()
+            isoclass_dens_is_NaN=(pd.isnull(isoclass_df.reindex(index=['epos_rho_gcm3','eneg_rho_gcm3','rho_gcm3'])).any())|(isoclass_df.reindex(index=['epos_rho_gcm3','eneg_rho_gcm3','rho_gcm3'])==0).any()
         except Exception as e:
             exc_type, exc_obj, exc_tb = sys.exc_info()
             print(exc_type, exc_tb.tb_lineno)
@@ -1034,29 +1068,25 @@ def IsoClass(icid,mission,coor,ic_info=None,return_best=True,errboost=0.05,
         return None
     #selecting the best stellar parameter source from input cat vs isoclassify
     #Generated Density better constrained by isoclassify:
-    col_names=['teff','teffep','teffem','logg','loggep','loggem','lum','lumep','lumem',
-               'rad','radep','radem','mass','massep','massem','rho_gcm3','rho_gcm3ep','rho_gcm3em',
-               'dis','disep','disem']
+    col_names=['teff','epos_teff','eneg_teff','logg','epos_logg','eneg_logg','lum','epos_lum','eneg_lum',
+               'rad','epos_rad','eneg_rad','mass','epos_mass','eneg_mass','rho_gcm3','epos_rho_gcm3','eneg_rho_gcm3',
+               'dis','epos_dis','eneg_dis']
     best_df={}
     for col in col_names:
         if 'dis' in col:
             #print(col)
-            bdfcol = col.replace('dis', 'dist')
+            col = col.replace('dis', 'dist')
+            best_df['dist']=isoclass_df['dis']
         else:
-            bdfcol = col
-        if col[-2:]=='em':
-            bdfcol="eneg_"+bdfcol[:-2]
-        elif col[-2:]=='ep':
-            bdfcol="epos_"+bdfcol[:-2]
-        best_df[bdfcol]=isoclass_df[col]
-        
+            best_df[col]=isoclass_df[col]
         if 'rho_gcm3' in col:
-            best_df[bdfcol.replace('_gcm3','')]=isoclass_df[col]/1.411
+            best_df[col.replace('_gcm3','')]=isoclass_df[col]/1.411
     best_df['ra']=coor.ra.deg
     best_df['dec']=coor.dec.deg
     best_df['src']='isoclassify'
     return pd.Series(best_df,name=icid)
-    
+
+
 def getStellarDensity(ID,mission,errboost=0.1):
     #Compiling dfs (which may have spectra)
     exofop_dat,_,isoclass_df,_,_=starpars(ID,mission,errboost=0.1,return_best=False)
@@ -1064,41 +1094,41 @@ def getStellarDensity(ID,mission,errboost=0.1):
     #Sorting out missing data and getting important info - Mass, Radius, density and logg:
     if pd.isnull(exofop_dat[['logg','mass']]).all() and ~np.isnan(exofop_dat['lum']):
         if 'lume' not in exofop_dat.index:
-            exofop_dat['lume']=0.5*(abs(exofop_dat['lumem'])+exofop_dat['lumep'])
+            exofop_dat['lume']=0.5*(abs(exofop_dat['eneg_lum'])+exofop_dat['epos_lum'])
         #Mass-Luminosity relation for objects with no Mass but have Luminosity
         if ((~np.isnan(exofop_dat['rad']))&(exofop_dat['rad']<0.55))|((exofop_dat['teff']<5000)&(exofop_dat['lum']<0.3)):
             #M < 0.43
             exofop_dat['mass']=np.power(exofop_dat['lum']/0.23,1/2.3)
-            exofop_dat['massep']=(1/2.3)*np.power(exofop_dat['lum']/0.23,1/2.3-1.0)*exofop_dat['lume']
-            exofop_dat['massem']=-1*exofop_dat['massep']
+            exofop_dat['epos_mass']=(1/2.3)*np.power(exofop_dat['lum']/0.23,1/2.3-1.0)*exofop_dat['lume']
+            exofop_dat['eneg_mass']=-1*exofop_dat['epos_mass']
             exofop_dat['logg']=np.power(10,exofop_dat['mass']/exofop_dat['rad']**2)+4.43
         elif best_stardf['teff']>8550:
             #2Ms < M < 55Ms
             exofop_dat['mass']=np.power(exofop_dat['lum']/1.4,1/3.5)
-            exofop_dat['massep']=(1/3.5)*np.power(exofop_dat['lum']/1.4,1/3.5-1.0)*exofop_dat['lume']
-            exofop_dat['massem']=-1*exofop_dat['massep']
+            exofop_dat['epos_mass']=(1/3.5)*np.power(exofop_dat['lum']/1.4,1/3.5-1.0)*exofop_dat['lume']
+            exofop_dat['eneg_mass']=-1*exofop_dat['epos_mass']
         else:
             #0.43 < M < 2
             exofop_dat['mass']=np.power(exofop_dat['lum'],1/4)
-            exofop_dat['massep']=(1/4)*np.power(exofop_dat['lum']/0.23,(1/4-1.0))*exofop_dat['lume']
-            exofop_dat['massem']=-1*exofop_dat['massep']
+            exofop_dat['epos_mass']=(1/4)*np.power(exofop_dat['lum']/0.23,(1/4-1.0))*exofop_dat['lume']
+            exofop_dat['eneg_mass']=-1*exofop_dat['epos_mass']
 
     #compiling a logg array:
     if pd.isnull(exofop_dat['logg']) and ~pd.isnull(exofop_dat[['mass','rad']]).any():
         exofop_dat['logg']=np.array([np.log10(exofop_dat['mass']/exofop_dat['rad']**2)+4.438,0.5,0.5])
-        exofop_dat['loggep']=np.array([np.log10((exofop_dat['mass']+exofop_dat['massep'])/(exofop_dat['rad']-exofop_dat['radem'])**2)+4.438,0.5,0.5])-exofop_dat['logg']
-        exofop_dat['loggem']=exofop_dat['logg']-np.array([np.log10((exofop_dat['mass']-exofop_dat['massem'])/(exofop_dat['rad']+exofop_dat['radep'])**2)+4.438,0.5,0.5])
+        exofop_dat['epos_logg']=np.array([np.log10((exofop_dat['mass']+exofop_dat['epos_mass'])/(exofop_dat['rad']-exofop_dat['eneg_rad'])**2)+4.438,0.5,0.5])-exofop_dat['logg']
+        exofop_dat['eneg_logg']=exofop_dat['logg']-np.array([np.log10((exofop_dat['mass']-exofop_dat['eneg_mass'])/(exofop_dat['rad']+exofop_dat['epos_rad'])**2)+4.438,0.5,0.5])
     
     #compiling a rho array:
     if not pd.isnull(exofop_dat['rho']) and exofop_dat['rho']!=0.0:
-        rhos=np.array([exofop_dat['rho'],exofop_dat['rhoem'],exofop_dat['rhoep']])
+        rhos=np.array([exofop_dat['rho'],exofop_dat['eneg_rho'],exofop_dat['epos_rho']])
     elif not np.isnan(exofop_dat[['logg','rad','mass']]).all():
-        rhos=dens2(*exofop_dat[['logg','loggem','loggep','rad','radem','radep','mass','massem','massep']])
+        rhos=dens2(*exofop_dat[['logg','eneg_logg','epos_logg','rad','eneg_rad','eneg_rad','mass','eneg_mass','epos_mass']])
     else:
         rhos=None
         
     if isoclass_df is not None and not np.isnan(isoclass_df['rho']):
-        rhos_iso=np.array([isoclass_df['rho'],isoclass_df['rhoem'],isoclass_df['rhoep']])
+        rhos_iso=np.array([isoclass_df['rho'],isoclass_df['eneg_rho'],isoclass_df['epos_rho']])
     else:
         rhos_iso=None
         
@@ -1328,9 +1358,12 @@ def getStellarInfoFromCsv(ID,mission,radec=None,k2tab=None,keptabs=None,use_isoc
             
             if len(epicdat.shape)>0:
                 epicdat=epicdat.iloc[0] if type(epicdat)==pd.DataFrame else epicdat
-                radec=SkyCoord(epicdat['rastr'],epicdat['decstr'],unit=(u.hourangle,u.deg))
-                epicdat['ra']=radec.ra.deg
-                epicdat['dec']=radec.dec.deg
+                if 'rastr' in epicdat.index:
+                    radec=SkyCoord(epicdat['rastr'],epicdat['decstr'],unit=(u.hourangle,u.deg))
+                    epicdat['ra']=radec.ra.deg
+                    epicdat['dec']=radec.dec.deg
+                elif 'RAJ2000' in epicdat.index:
+                    epicdat=epicdat.rename(index={'RAJ2000':'ra','DECJ2000':'dec'})
 
             if k2tab is None:
                 if not os.path.isfile(os.path.join(MonoData_tablepath,"k2_table.txt")):
@@ -1377,23 +1410,25 @@ def getStellarInfoFromCsv(ID,mission,radec=None,k2tab=None,keptabs=None,use_isoc
             keptabs=None            
         elif mission.lower()=='corot':
             #getting radec and then searching TIC
-            corot_dat=pd.read_csv(os.path.join(MonoData_tablepath,'2020_monos_unq.csv'))
-            corot_dat=corot_dat.loc[corot_dat['mission']=='CoRoT']
-            corot_dat=corot_dat.loc[corot_dat['id'].astype(int)==int(ID)].iloc[0]
-            radec=SkyCoord(corot_dat['ra']*u.deg,corot_dat['dec']*u.deg)
+            if radec is None:
+                corot_dat=pd.read_csv(os.path.join(MonoData_tablepath,'2020_monos_unq.csv'))
+                corot_dat=corot_dat.loc[corot_dat['mission']=='CoRoT']
+                corot_dat=corot_dat.loc[corot_dat['id'].astype(int)==int(ID)].iloc[0]
+                radec=SkyCoord(corot_dat['ra']*u.deg,corot_dat['dec']*u.deg)
             
         if radec is not None:
             #Now getting TIC, which may be present for the above too
             try:
                 tic_dat = Catalogs.query_criteria("TIC", coordinates=radec,
-                                                  radius=10*u.arcsec,objType='STAR').to_pandas()#This is not used, as TIC is on ExoFop
+                                                  radius=10*u.arcsec, objType='STAR').to_pandas()#This is not used, as TIC is on ExoFop
                 tic_dat=tic_dat.iloc[np.argmin(tic_dat['Tmag'])]
                 if info is None or info['source'] in z:
-                    info=tic_dat
+                    info = tic_dat
                     info['source']='TICv8'
             except:
                 print(ID," not in TIC")
                 tic_dat=None
+    print(info)
     if info is not None:
         #Switching all e_, E_, etc to uniform column names:
         info=RenameSeries(info)
@@ -1408,7 +1443,9 @@ def getStellarInfoFromCsv(ID,mission,radec=None,k2tab=None,keptabs=None,use_isoc
         if 'rad' not in info.index and use_isochrones==1:
             try:
                 print("#Using Isoclassify to attempt to get star parameters:")
-                Rstar, rhos, Teff, logg, src = getStellarInfo(ID, info, mission, radec=radec)
+                from . import tools
+                Rstar, rhos, Teff, logg, src = getStellarInfo(ID, info, mission, radec=radec,
+                                                  fileloc=MonoData_tablepath+"/"+tools.id_dic[mission]+str(ID).zfill(11))
                 info['rad']=Rstar[0]
                 info['eneg_rad']=Rstar[1]
                 info['epos_rad']=Rstar[2]
@@ -1424,6 +1461,7 @@ def getStellarInfoFromCsv(ID,mission,radec=None,k2tab=None,keptabs=None,use_isoc
                 info['source']='IsoClassify'
             except:
                 print("getStellarInfo fails")
+                print(info)
         
         if 'teff' not in info.index and 'rad' in info.index and 'lum' in info.index:
             info['teff']=5800*(info['lum']/info['rad']**2)**(1/4)
@@ -1462,7 +1500,7 @@ def getStellarInfoFromCsv(ID,mission,radec=None,k2tab=None,keptabs=None,use_isoc
                         nomag=False
             else:
                 #Problem here - not enough info for rho... Doing IsoClassify to get that info:
-                isoinfo = IsoClass(ID,mission,radec)
+                isoinfo = IsoClass(ID,mission,radec,ic_info=info)
                 #Overwriting current info with isoclassify outputs:
                 for col in info.keys():
                     info[col] =  isoinfo[col] if col in isoinfo.keys() and not pd.isnull(isoinfo[col]) else info[col]
@@ -1510,6 +1548,7 @@ def getStellarInfo(ID,hdr,mission,radec=None,overwrite=False,fileloc=None,savedf
         isoclass_df=make_numeric(pd.read_csv(fileloc.replace('.csv','_isoclass.csv'), index_col=0,header=None).T)
         best_stardf=make_numeric(pd.read_csv(fileloc.replace(".csv","_best.csv"), index_col=0,header=None).T)
     else:
+        print("using starpars to derive info")
         exofop_dat,survey_dat,isoclass_df,paras,best_stardf=starpars(ID,mission,errboost=0.1,radec=radec,
                                                                      return_best=False,useGaiaLum=True,
                                                                      useGaiaBR=True,useGaiaSpec=True,
@@ -1544,38 +1583,38 @@ def getStellarInfo(ID,hdr,mission,radec=None,overwrite=False,fileloc=None,savedf
     #Sorting out missing data and getting important info - Mass, Radius, density and logg:
     if pd.isnull(best_stardf[['logg','mass']]).all() and ~np.isnan(best_stardf['lum']):
         if 'lume' not in best_stardf.index:
-            best_stardf['lume']=0.5*(abs(best_stardf['lumem'])+best_stardf['lumep'])
+            best_stardf['lume']=0.5*(abs(best_stardf['eneg_lum'])+best_stardf['epos_lum'])
         
         #Mass-Luminosity relation for objects with no Mass but have Luminosity
         if ((~np.isnan(best_stardf['rad']))&(best_stardf['rad']<0.55))|((best_stardf['teff']<5000)&(best_stardf['lum']<0.3)):
             #M < 0.43
             best_stardf['mass']=np.power(best_stardf['lum']/0.23,1/2.3)
-            best_stardf['massep']=(1/2.3)*np.power(best_stardf['lum']/0.23,1/2.3-1.0)*best_stardf['lume']
-            best_stardf['massem']=-1*best_stardf['massep']
+            best_stardf['epos_mass']=(1/2.3)*np.power(best_stardf['lum']/0.23,1/2.3-1.0)*best_stardf['lume']
+            best_stardf['eneg_mass']=-1*best_stardf['epos_mass']
             best_stardf['logg']=np.power(10,best_stardf['mass']/best_stardf['rad']**2)+4.43
         elif best_stardf['teff']>8550:
             #2Ms < M < 55Ms
             best_stardf['mass']=np.power(best_stardf['lum']/1.4,1/3.5)
-            best_stardf['massep']=(1/3.5)*np.power(best_stardf['lum']/1.4,1/3.5-1.0)*best_stardf['lume']
-            best_stardf['massem']=-1*best_stardf['massep']
+            best_stardf['epos_mass']=(1/3.5)*np.power(best_stardf['lum']/1.4,1/3.5-1.0)*best_stardf['lume']
+            best_stardf['eneg_mass']=-1*best_stardf['epos_mass']
         else:
             #0.43 < M < 2
             best_stardf['mass']=np.power(best_stardf['lum'],1/4)
-            best_stardf['massep']=(1/4)*np.power(best_stardf['lum']/0.23,(1/4-1.0))*best_stardf['lume']
-            best_stardf['massem']=-1*best_stardf['massep']
+            best_stardf['epos_mass']=(1/4)*np.power(best_stardf['lum']/0.23,(1/4-1.0))*best_stardf['lume']
+            best_stardf['eneg_mass']=-1*best_stardf['epos_mass']
     if ~pd.isnull(best_stardf['rad']):
-        Rstar=np.array([best_stardf['rad'], best_stardf['radem'],abs(best_stardf['radep'])])
+        Rstar=np.array([best_stardf['rad'], best_stardf['eneg_rad'],abs(best_stardf['epos_rad'])])
     else:
         print("No Rs",best_stardf['rad'])
     
     if ~pd.isnull(best_stardf['teff']):
-        Teff=np.array([best_stardf['teff'], best_stardf['teffem'],abs(best_stardf['teffep'])])
+        Teff=np.array([best_stardf['teff'], best_stardf['eneg_teff'],abs(best_stardf['epos_teff'])])
     else:
         print("No Teff",best_stardf['teff'])
 
     #compiling a logg array:
     if ~pd.isnull(best_stardf['logg']):
-        logg=np.array([best_stardf['logg'], best_stardf['loggem'],best_stardf['loggep']])
+        logg=np.array([best_stardf['logg'], best_stardf['eneg_logg'],best_stardf['epos_logg']])
     elif ~pd.isnull(best_stardf[['mass','rad']]).any():
         logg=np.array([np.log10(best_stardf['mass']/best_stardf['rad']**2)+4.438,0.5,0.5])
     else:
@@ -1583,8 +1622,8 @@ def getStellarInfo(ID,hdr,mission,radec=None,overwrite=False,fileloc=None,savedf
     
     #compiling a rho array:
     if not pd.isnull(best_stardf['rho']) and best_stardf['rho']!=0.0:
-        rhos=np.array([best_stardf['rho'],best_stardf['rhoem'],best_stardf['rhoep']])
+        rhos=np.array([best_stardf['rho'],best_stardf['eneg_rho'],best_stardf['epos_rho']])
     else:
-        rhos=dens2(*best_stardf[['logg','loggem','loggep','rad','radem','radep','mass','massem','massep']])
+        rhos=dens2(*best_stardf[['logg','eneg_logg','epos_logg','rad','eneg_rad','epos_rad','mass','eneg_mass','epos_mass']])
     
     return Rstar, rhos, Teff, logg, best_stardf['source']

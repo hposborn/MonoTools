@@ -2755,6 +2755,8 @@ class monoModel():
     def PlotPeriods(self, plot_loc=None,log=True,nbins=25,pmax=None,ymin=None,xlog=False):
         assert hasattr(self,'trace')
         import seaborn as sns
+        from scipy.special import logsumexp
+        pal=sns.color_palette('viridis_r',6)
         plot_pers=self.duos+self.monos
         if ymin is None:
             ymin=np.min(np.hstack([np.nanmedian(self.trace['logprob_marg_'+pl],axis=0) for pl in self.duos]))/np.log(10)-2.0
@@ -2764,14 +2766,30 @@ class monoModel():
             for npl, pl in enumerate(plot_pers):
                 plt.subplot(1,len(plot_pers),npl+1)
                 if pl in self.duos:
+                    #As we're using the nanmedian log10(prob)s for each period, we need to make sure their sums add to 1.0
+                    psum=logsumexp(np.nanmedian(self.trace['logprob_marg_'+pl],axis=0))/np.log(10)
                     #Plotting lines
-                    for n in range(len(self.trace['duo_periods_'+pl][0,:])):
-                        # Density Plot and Histogram of all arrival delays                        
-                        plt.plot([np.nanmedian(self.trace['duo_periods_'+pl][:,n]),np.nanmedian(self.trace['duo_periods_'+pl][:,n])],
-                                 [ymin,np.nanmedian(self.trace['logprob_marg_'+pl][:,n])/np.log(10)],linewidth=5.0)
-                    print(np.min(np.nanmedian(self.trace['logprob_marg_'+pl],axis=0)))
+                    cols=[]
+                    coldic={-6:"p<1e-5",-5:"p>1e-5",-4:"p>1e-4",-3:"p>0.1%",-2:"p>1%",-1:"p>10%"}
+                    probs=np.nanmedian(self.trace['logprob_marg_'+pl],axis=0)/np.log(10)
+                    for n in np.arange(len(probs))[np.argsort(probs)][::-1]:
+                        # Density Plot and Histogram of all arrival delays        
+                        nprob=probs[n]
+                        ncol=int(np.floor(np.clip(nprob-psum,-6,0)))
+                        
+                        if ncol not in cols:
+                            cols+=[ncol]
+                            plt.plot(np.tile(np.nanmedian(self.trace['duo_periods_'+pl][:,n]),2),
+                                     [ymin-psum,nprob-psum],
+                                     linewidth=5.0,color=pal[6+ncol],alpha=0.6,label=coldic[ncol])
+                        else:
+                            plt.plot(np.tile(np.nanmedian(self.trace['duo_periods_'+pl][:,n]),2),
+                                     [ymin-psum,nprob-psum],
+                                     linewidth=5.0,color=pal[6+ncol],alpha=0.6)
+
                     plt.title("Duo - "+str(pl))
-                    plt.ylim(ymin,0.1)
+                    plt.ylim(ymin-psum,1.0)
+                    plt.legend()
                     if xlog:
                         plt.xscale('log')
                         plt.xticks([20,40,60,80,100,150,200,250,300,350,400,450,500,600,700],
@@ -2780,7 +2798,7 @@ class monoModel():
                     plt.ylabel("$\log_{10}{p}$")
                     plt.xlabel("Period [d]")
                 elif pl in self.monos:
-                    from scipy.special import logsumexp
+                    
                     #if 'logprob_marg_sum_'+pl in self.trace.varnames:
                     #    total_prob=logsumexp((self.trace['logprob_marg_'+pl]+self.trace['logprob_marg_sum_'+pl]).ravel())
                     #else:

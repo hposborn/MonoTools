@@ -1290,7 +1290,7 @@ def AsteroidCheck(lc,monoparams,ID,order=3,dur_region=3.5,
             rand_choice=np.random.random(len(bg_lc))<0.9
             nodip_res={'x':np.polyfit(bg_lc[nearTrans&rand_choice,0],
                                       bg_lc[nearTrans&rand_choice,1] - fft_model[nearTrans&rand_choice],
-                                      order+1)}
+                                      order)}
             nodip_model = fft_model[nearTrans] + np.polyval(nodip_res['x'],bg_lc[nearTrans,0])
             nodip_res['llk'] = log_likelihood_gaussian_dip(np.hstack((-30,-30,0,nodip_res['x'])),
                                                            bg_lc[nearTrans,0], bg_lc[nearTrans,1], bg_lc[nearTrans,2])
@@ -1344,6 +1344,24 @@ def AsteroidCheck(lc,monoparams,ID,order=3,dur_region=3.5,
             
         fit_dict={'asteroid_dip_'+col:best_dip_res[col] for col in best_dip_res}
         fit_dict.update({'asteroid_nodip_'+col:best_nodip_res[col] for col in best_nodip_res})
+        
+        # Also doing correlation coefficient between bg flux and real flux during transit:
+        # In the case that the BG causes the lc to dip, we should find a negative correlation coefficient & low p-value:
+        from scipy.stats import pearsonr
+        fluxkey='rawflux' if 'rawflux' in lc else 'flux'
+        just_oot=lc['mask'] * \
+                 (abs(lc['time']-monoparams['tcen'])>monoparams['tdur']*0.75) * \
+                 (abs(lc['time']-monoparams['tcen'])<monoparams['tdur']*2)
+        inTransit=lc['mask'] * (abs(lc['time']-monoparams['tcen'])<monoparams['tdur']*0.625)
+        #Removing a just-out-of-transit polynomial fit to both sets of in-transit data, so we should only have the dip
+        bg_poly=np.polyval(np.polyfit(lc['time'][just_oot],
+                                     lc['bg_flux'][just_oot], 1), lc['time'][inTransit])
+        lc_poly=np.polyval(np.polyfit(lc['time'][just_oot],
+                                     lc[fluxkey][just_oot], 1), lc['time'][inTransit])
+        R=pearsonr(lc['bg_flux'][inTransit] - bg_poly, lc[fluxkey][inTransit]-lc_poly)
+        fit_dict['R_bg_flux_corr']=R[0]
+        fit_dict['P_bg_flux_corr']=R[1]
+        
         if (best_dip_res['llk']>-1e20) and (best_nodip_res['llk']>-1e20):
             fit_dict['asteroid_DeltaBIC']=best_dip_res['bic']-best_nodip_res['bic'] # [prefer dip] < 0 < [prefer no dip]
             fit_dict['asteroid_log_llk_ratio']=(best_dip_res['llk'])-(best_nodip_res['llk'])
@@ -1462,7 +1480,7 @@ def VariabilityCheck(lc, params, ID, modeltype='all',plot=False,plot_loc=None,nd
     if modeltype=='poly' or modeltype=='both' or modeltype=='all':
         best_mod_res['poly']={'fun':1e30,'bic':1e9,'sin_llk':-1e9,'npolys':[]}
         mods+=['poly']
-    if modeltype!='none':
+    if modeltype!='none' and len(x)>order+1 and len(y)>order+1:
         methods=['L-BFGS-B','Nelder-Mead','Powell']
         n=0
         while n<21:
@@ -1742,7 +1760,7 @@ def CentroidCheck(lc,monoparams,interpmodel,ID,order=2,dur_region=3.5, plot=True
 
             #At the point all arrays should be flat, so we can make order==1
             order=0
-        if len(x)>0 and len(y)>0:
+        if len(x)>order+1 and len(y)>order+1:
             xerr=np.std(x)
             x-=np.median(x)
             if len(x[inTransit])>0 and len(x[outTransit])>0:
@@ -1780,6 +1798,7 @@ def CentroidCheck(lc,monoparams,interpmodel,ID,order=2,dur_region=3.5, plot=True
         best_nodip_res={'fun':1e30,'bic':1e6}
         best_dip_res={'fun':1e30,'bic':1e6}
         methods=['L-BFGS-B','Nelder-Mead','Powell']
+        
         for n in range(7):
             #Doing simple polynomial fits for non-dips. Excluding 10% of data each time to add some randomness
             rand_choice=np.random.choice(len(x),int(0.9*len(x)),replace=False)
