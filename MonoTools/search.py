@@ -1480,7 +1480,7 @@ def VariabilityCheck(lc, params, ID, modeltype='all',plot=False,plot_loc=None,nd
     if modeltype=='poly' or modeltype=='both' or modeltype=='all':
         best_mod_res['poly']={'fun':1e30,'bic':1e9,'sin_llk':-1e9,'npolys':[]}
         mods+=['poly']
-    if modeltype!='none' and len(x)>order+1 and len(y)>order+1:
+    if modeltype!='none' and len(x)>polyorder+1 and len(y)>polyorder+1:
         methods=['L-BFGS-B','Nelder-Mead','Powell']
         n=0
         while n<21:
