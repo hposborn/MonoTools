@@ -368,8 +368,8 @@ def MonoTransitSearch(lc,ID,mission, Rs=None,Ms=None,Teff=None,
     #Computing a fine x-range to search:
     search_xrange=[]
     
-    Rs=1.0 if (Rs is None or not use_stellar_dens) else float(Rs)
-    Ms=1.0 if (Ms is None or not use_stellar_dens) else float(Ms)
+    Rs=1.0 if (Rs is None or not use_stellar_dens or np.isnan(Rs)) else float(Rs)
+    Ms=1.0 if (Ms is None or not use_stellar_dens or np.isnan(Ms)) else float(Ms)
     Teff=5800.0 if Teff is None else float(Teff)
 
     mincad=np.min([float(cad[1:])/1440 for cad in np.unique(lc['cadence'])])
@@ -890,6 +890,7 @@ def PeriodicPlanetSearch(lc, ID, planets, use_binned=False, use_flat=True, binsi
         model = transitleastsquares(modx[anommask], mody[anommask])
         results+=[model.power(period_min=1.1,period_max=p_max,duration_grid_step=1.0625,Rstar=Rs,Mstar=Ms,
                               use_threads=1,show_progress_bar=False, n_transits_min=3)]
+        print(results[-1])
         
         if 'FAP' in results[-1] and 'snr' in results[-1] and not np.isnan(results[-1]['snr']) and 'transit_times' in results[-1]:
             #Defining transit times as those times where the SNR in transit is consistent with expectation (>-3sigma)
@@ -948,7 +949,7 @@ def PeriodicPlanetSearch(lc, ID, planets, use_binned=False, use_flat=True, binsi
             this_pl_masked=np.min(abs((lc[prefix+'time'][np.newaxis,:]-t_zero)-np.array(trans)[:,np.newaxis]),axis=0)<(0.7*plparams['tdur'])
             #this_pl_masked=(((lc[prefix+'time']-plparams['tcen']+0.7*plparams['tdur'])%results[-1].period)<(1.4*plparams['tdur']))
             #print(n_pl,results[-1].period,plparams['tdur'],np.sum(this_pl_masked))
-            plmask=plmask+this_pl_masked
+            plmask = plmask+this_pl_masked
             SNR_last_planet=SNR
         else:
             # Fails
@@ -1460,6 +1461,10 @@ def VariabilityCheck(lc, params, ID, modeltype='all',plot=False,plot_loc=None,nd
     round_trans=(abs(x)<ndurs*params['tdur'])
     x=x[round_trans]
     y = params['monofit_y'][round_trans]
+    mask = lc['mask'][np.isin(lc['time'],params['monofit_x'][abs(params['monofit_x']-params['tcen'])<ndurs*params['tdur']])]
+    
+    print(params['tdur'],np.sum(abs(x)>0.6*params['tdur']))
+    
     yerr = params['monofit_yerr'][round_trans]
     y_trans = params['monofit_ymodel'][round_trans]
     sigma2 = yerr ** 2
@@ -1485,8 +1490,8 @@ def VariabilityCheck(lc, params, ID, modeltype='all',plot=False,plot_loc=None,nd
         n=0
         while n<21:
             #Running the minimization 7 times with different initial params to make sure we get the best fit
-
-            rand_choice=np.random.random(len(x))<0.925
+            rand_choice=np.random.random(len(x))<0.95
+            
             #non-dip is simple poly fit. Including 10% cut in points to add some randomness over n samples
             #log10(height), log10(dur), tcen
             if modeltype=='sin' or modeltype=='both' or modeltype=='all':
@@ -1600,7 +1605,8 @@ def VariabilityCheck(lc, params, ID, modeltype='all',plot=False,plot_loc=None,nd
             elif plot_loc[-1]=='/':
                 plot_loc=plot_loc+str(ID)+"_variability_check.pdf"
         
-        markers, caps, bars = ax.errorbar(x,y,yerr=yerr,fmt='.k',ecolor='#AAAAAA',markersize=3.5,alpha=0.6,rasterized=True)
+        markers, caps, bars = ax.errorbar(x[mask],y[mask],yerr=yerr[mask],
+                                          fmt='.k',ecolor='#AAAAAA',markersize=3.5,alpha=0.6,rasterized=True)
         [bar.set_alpha(0.2) for bar in bars]
         [cap.set_alpha(0.2) for cap in caps]
 
@@ -1914,7 +1920,6 @@ def CentroidCheck(lc,monoparams,interpmodel,ID,order=2,dur_region=3.5, plot=True
             return centinfo, None,arrs
     else:
         return None, None
-
 
 def CheckPeriodConfusedPlanets(lc,all_dets,mono_mono=True,multi_multi=True,mono_multi=True):
     #Merges dic of mono detections with a dic of periodic planet detections
@@ -2527,12 +2532,12 @@ def get_interpmodels(Rs,Ms,Teff,lc_time,lc_flux_unit,mission='tess',n_durs=3,gap
     orbits = xo.orbits.KeplerianOrbit(r_star=Rs,m_star=Ms,period=P_guess*per_steps,t0=np.tile(0.0,n_durs),b=b_steps)
     
     vx, vy, vz = orbits.get_relative_velocity(0.0)
-    tdurs=((2*1.1*Rs*np.sqrt(1-b_steps**2))/tt.sqrt(vx**2 + vy**2)).eval().ravel()
+    tdurs=((2*1.1*np.clip(Rs,0.1,10)*np.sqrt(1-b_steps**2))/tt.sqrt(vx**2 + vy**2)).eval().ravel()
 
     # Compute the model light curve using starry
     interpt=np.linspace(-0.6*np.max(tdurs),0.6*np.max(tdurs),600).astype(np.float64)
     
-    ys=xo.LimbDarkLightCurve(u_star).get_light_curve(orbit=orbits, r=np.tile(0.1*Rs,n_durs), 
+    ys=xo.LimbDarkLightCurve(u_star).get_light_curve(orbit=orbits, r=np.tile(0.1*np.clip(Rs,0.1,10),n_durs), 
                                                      t=interpt, texp=texp
                                                      ).eval()/lc_flux_unit
     interpmodels=[]
@@ -2554,6 +2559,15 @@ def VetCand(pl_dic,pl,ID,lc,mission,Rs=1.0,Ms=1.0,Teff=5800,
         
         monoparams = QuickMonoFit(deepcopy(lc),pl_dic['tcen'],np.clip(pl_dic['tdur'],0.1,2.5),
                                                Rs=Rs,Ms=Ms,Teff=Teff,how='mono',**kwargs)
+        if monoparams['tdur']>2:
+            #Running with solar values:
+            monoparams2 = QuickMonoFit(deepcopy(lc),pl_dic['tcen'],np.clip(pl_dic['tdur'],0.1,2),
+                                                   Rs=1.0,Ms=1.0,Teff=Teff,how='mono',**kwargs)
+            print("Star-param-free model llk:",monoparams2['log_lik_mono'],"dur:",monoparams2['tdur'],
+                  "versus:",monoparams['log_lik_mono'],"dur:",monoparams2['tdur'])
+            if monoparams2['log_lik_mono']>(monoparams['log_lik_mono']+5):
+                monoparams=monoparams2
+
         #if not bool(monoparams['model_success']):
         #    #Redoing without fitting the polynomial if the fit fails:
         #    monoparams = QuickMonoFit(deepcopy(lc),pl_dic['tcen'],pl_dic['tdur'],

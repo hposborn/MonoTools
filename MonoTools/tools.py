@@ -238,6 +238,10 @@ def maskLc(lc,fhead,cut_all_anom_lim=5.0,use_ppt=False,end_of_orbit=True,
     
     prefix= 'bin_' if use_binned else ''
     suffix='_flat' if use_flat else ''
+    if 'flux_unit' in lc:
+        lc['flux']*=lc['flux_unit']
+        if lc['flux_unit']==0.001:
+            use_ppt=True
     
     mask = np.isfinite(lc[prefix+'flux'+suffix]) & np.isfinite(lc[prefix+'time']) & np.isfinite(lc[prefix+'flux_err'])
     if np.sum(mask)>0:
@@ -255,12 +259,21 @@ def maskLc(lc,fhead,cut_all_anom_lim=5.0,use_ppt=False,end_of_orbit=True,
             mask=mask&(np.sum(np.vstack([lc['quality'] & 2 ** (q - 1) for q in qs]),axis=0)==0)
         #print(np.sum(~lc['mask']),"points after quality flags")
         if cut_all_anom_lim>0:
-            #print(np.sum(~lc['mask']),"points before CutAnomDiff")
+            #Stacking 20 point-shifted lightcurves on top of each other for quick median filter: is (flux - median of 20pts)<threshold*MAD of 20pts
+            stack_shitfed_flux=np.column_stack([lc[prefix+'flux'+suffix][mask][n:(-20+n)] for n in range(20)])
+            mask[mask][10:-10]=abs(lc[prefix+'flux'+suffix][mask][10:-10] - np.nanmedian(stack_shitfed_flux,axis=1))<cut_all_anom_lim*np.nanmedian(abs(np.diff(stack_shitfed_flux,axis=1)),axis=1)
+            #Now doing difference 
             mask[mask]=CutAnomDiff(lc[prefix+'flux'+suffix][mask],cut_all_anom_lim)
+            '''
             #Doing this a second time with more stringent limits to cut two-point outliers:
             mask[mask]=CutAnomDiff(lc[prefix+'flux'+suffix][mask],cut_all_anom_lim+3.5)
+            '''
             #print(np.sum(~lc['mask']),"after before CutAnomDiff")
         mu = np.median(lc[prefix+'flux'+suffix][mask])
+        if mu<1e-3:
+            #In this case we have an already zero-divided flux array:
+            mu+=1
+            lc[prefix+'flux'+suffix]+=1
         if use_ppt:
             # Convert to parts per thousand
             lc[prefix+'flux'+suffix] = (lc[prefix+'flux'+suffix] / mu - 1) * 1e3
@@ -422,7 +435,6 @@ def openEverest(epic,camp,pers=None,durs=None,t0s=None,use_ppt=True,**kwargs):
     for c in camp:
         try:
             st1=everest.Everest(int(epic),season=c,show_progress=False)
-
             if pers is not None and durs is not None and t0s is not None:
                 #Recomputing lightcurve given planets
                 for pl in range(len(pers)):
@@ -439,17 +451,17 @@ def openEverest(epic,camp,pers=None,durs=None,t0s=None,use_ppt=True,**kwargs):
                       'raw_flux_err':st1.fraw_err,
                       'quality':st1.quality}
             else:
-                lcev={'time':np.vstack((lcev['time'],st1.time)),
-                      'flux':np.vstack((lcev['flux'],st1.flux,st1.flux)),
-                      'flux_err':np.vstack((lcev['flux_err'],st1.fraw_err,st1.fraw_err)),
-                      'raw_flux':np.vstack((lcev['raw_flux'],st1.fraw,st1.fraw)),
-                      'raw_flux_err':np.vstack((lcev['raw_flux_err'],st1.fraw_err,st1.fraw_err)),
-                      'quality':np.vstack((lcev['quality'],st1.quality))}
+                lcev={'time':np.hstack((lcev['time'],st1.time)),
+                      'flux':np.hstack((lcev['flux'],st1.flux)),
+                      'flux_err':np.hstack((lcev['flux_err'],st1.fraw_err)),
+                      'raw_flux':np.hstack((lcev['raw_flux'],st1.fraw)),
+                      'raw_flux_err':np.hstack((lcev['raw_flux_err'],st1.fraw_err)),
+                      'quality':np.hstack((lcev['quality'],st1.quality))}
             hdr={'cdpp':st1.cdpp,'ID':st1.ID,'Tmag':st1.mag,'mission':'K2','name':st1.name,'campaign':camp,'lcsource':'everest'}
-            lcs+=[openFits(lcev,hdr,mission='k2',use_ppt=use_ppt,**kwargs)]
         except:
             print(c,"not possible to load")
             return None
+        lcs=[openFits(lcev,hdr,mission='k2',use_ppt=use_ppt)]
         #elif int(camp)>=14:
         #    lcloc='https://archive.stsci.edu/hlsps/everest/v2/c'+str(int(camp))+'/'+str(epic)[:4]+'00000/'+str(epic)[4:]+'/hlsp_everest_k2_llc_'+str(epic)+'-c'+str(int(camp))+'_kepler_v2.0_lc.fits'
         #    lcev=openFits(fits.open(lcloc),lcloc)
@@ -495,6 +507,16 @@ def K2_lc(epic,pers=None,durs=None,t0s=None, use_ppt=True):
     # Opens K2 lc
     '''
     df,_=starpars.GetExoFop(epic,"k2")
+    #if df is None or (type(df['campaign']) in [str,list] and len(df['campaign'])==0):
+    from astroquery.mast import Observations
+    obs_table = Observations.query_object("EPIC "+str(int(epic)))
+    cands=list(np.unique(obs_table[obs_table['obs_collection']=='K2']['sequence_number'].data.data).astype(str))
+    if df is None:
+        df={}
+    if df['campaign'] is None or (type(df['campaign']) in [str,list] and len(df['campaign'])==0):
+        df['campaign']=','.join(cands+df['campaign'].split(','))
+    else:
+        df['campaign']=','.join(cands)
     lcs=[]
     print("K2 campaigns to search:",str(df['campaign']).split(','))
     for camp in str(df['campaign']).split(','):
@@ -706,8 +728,8 @@ def TESS_lc(tic, sectors='all',use_ppt=True, coords=None, use_qlp=None, use_elea
            17:'2019279210107_0161',18:'2019306063752_0162',19:'2019331140908_0164',20:'2019357164649_0165',
            21:'2020020091053_0167',22:'2020049080258_0174',23:'2020078014623_0177',24:'2020106103520_0180',
            25:'2020133194932_0182',26:'2020160202036_0188',27:'2020186164531_0189',28:'2020212050318_0190',
-           29:'2020238165205_0193',30:'2020266004630_0195'}
-    sect_to_orbit={sect+1:[9+sect*2,10+sect*2] for sect in range(len(epoch))}
+           29:'2020238165205_0193',30:'2020266004630_0195',31:'2020294194027-0198'}
+    sect_to_orbit={sect+1:[9+sect*2,10+sect*2] for sect in range(np.max(list(epoch.keys())))}
     lcs=[];lchdrs=[]
     if sectors == 'all':
         if coords is not None and type(coords)==SkyCoord:
@@ -723,7 +745,7 @@ def TESS_lc(tic, sectors='all',use_ppt=True, coords=None, use_qlp=None, use_elea
                 print("FOUND TIC IN TOI LIST")
                 epochs=list(np.array(toi_df.loc[toi_df['TIC ID']==tic,'Sectors'].values[0].split(',')).astype(int))
     elif type(sectors)==list or type(sectors)==np.ndarray:
-        epochs=sectors
+        epochs=[s for s in sectors if s<=np.max(list(epoch.keys()))]
     else:
         epochs=[sectors]
 
@@ -735,12 +757,22 @@ def TESS_lc(tic, sectors='all',use_ppt=True, coords=None, use_qlp=None, use_elea
     for key in epochs:
         #2=minute cadence data from tess website
         fitsloc="https://archive.stsci.edu/missions/tess/tid/s"+str(key).zfill(4)+"/"+str(tic).zfill(16)[:4]+"/"+str(tic).zfill(16)[4:8]+"/"+str(tic).zfill(16)[-8:-4]+"/"+str(tic).zfill(16)[-4:]+"/tess"+epoch[key].split('_')[0]+"-s"+str(key).zfill(4)+"-"+str(tic).zfill(16)+"-"+epoch[key].split('_')[1]+"-s_lc.fits"
-        h = httplib2.Http()
+        
         resp = h.request(fitsloc, 'HEAD')
         if int(resp[0]['status']) < 400:
             with fits.open(fitsloc,show_progress=False) as hdus:
                 spoclcs[key]=openFits(hdus,fitsloc,mission='tess',use_ppt=use_ppt,**kwargs)
                 lchdrs+=[hdus[0].header]
+        else:
+            #Getting spoc 30min data:
+            fitsloc='https://mast.stsci.edu/api/v0.1/Download/file?uri=mast:HLSP/tess-spoc/s'+str(int(key)).zfill(4) + \
+                    "/target/"+strtid[:4]+"/"+strtid[4:8]+"/"+strtid[8:12]+"/"+strtid[12:] + \
+                    "/hlsp_tess-spoc_tess_phot_"+strtid+"-s"+str(int(key)).zfill(4)+"_tess_v1_lc.fits"
+            resp = h.request(fitsloc, 'HEAD')
+            if int(resp[0]['status']) < 400:
+                with fits.open(fitsloc,show_progress=False) as hdus:
+                    spoclcs[key]=tools.openFits(hdus,fitsloc,mission='tess')
+                    lchdrs+=[hdus[0].header]
 
         if use_qlp is None or use_qlp is True:
             qlpfiles=[data_loc+"/orbit-"+str(int(sect_to_orbit[key][n]))+"_qlplc.h5" for n in range(2)]
@@ -760,7 +792,6 @@ def TESS_lc(tic, sectors='all',use_ppt=True, coords=None, use_qlp=None, use_elea
                         "/"+strtid[:4]+"/"+strtid[4:8]+"/"+strtid[8:12]+"/"+strtid[12:] + \
                         "/hlsp_qlp_tess_ffi_s"+str(int(key)).zfill(4)+"-"+strtid+"_tess_v01_llc.fits"
                 #print("QLP:",fitsloc)
-                h = httplib2.Http()
                 resp = h.request(fitsloc, 'HEAD')
                 if int(resp[0]['status']) < 400:
                     with fits.open(fitsloc,show_progress=False) as hdus:
