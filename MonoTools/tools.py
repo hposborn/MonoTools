@@ -728,7 +728,7 @@ def TESS_lc(tic, sectors='all',use_ppt=True, coords=None, use_qlp=None, use_elea
            17:'2019279210107_0161',18:'2019306063752_0162',19:'2019331140908_0164',20:'2019357164649_0165',
            21:'2020020091053_0167',22:'2020049080258_0174',23:'2020078014623_0177',24:'2020106103520_0180',
            25:'2020133194932_0182',26:'2020160202036_0188',27:'2020186164531_0189',28:'2020212050318_0190',
-           29:'2020238165205_0193',30:'2020266004630_0195',31:'2020294194027-0198'}
+           29:'2020238165205_0193',30:'2020266004630_0195',31:'2020294194027_0198'}
     sect_to_orbit={sect+1:[9+sect*2,10+sect*2] for sect in range(np.max(list(epoch.keys())))}
     lcs=[];lchdrs=[]
     if sectors == 'all':
@@ -757,7 +757,8 @@ def TESS_lc(tic, sectors='all',use_ppt=True, coords=None, use_qlp=None, use_elea
     for key in epochs:
         #2=minute cadence data from tess website
         fitsloc="https://archive.stsci.edu/missions/tess/tid/s"+str(key).zfill(4)+"/"+str(tic).zfill(16)[:4]+"/"+str(tic).zfill(16)[4:8]+"/"+str(tic).zfill(16)[-8:-4]+"/"+str(tic).zfill(16)[-4:]+"/tess"+epoch[key].split('_')[0]+"-s"+str(key).zfill(4)+"-"+str(tic).zfill(16)+"-"+epoch[key].split('_')[1]+"-s_lc.fits"
-        
+        h = httplib2.Http()
+        strtid=str(int(tic)).zfill(16)
         resp = h.request(fitsloc, 'HEAD')
         if int(resp[0]['status']) < 400:
             with fits.open(fitsloc,show_progress=False) as hdus:
@@ -787,7 +788,6 @@ def TESS_lc(tic, sectors='all',use_ppt=True, coords=None, use_qlp=None, use_elea
                                      openFits(f2,sect_to_orbit[key][1],mission='tess',use_ppt=use_ppt,**kwargs)])
                 lchdrs+=[{'source':'qlp'}]
             else:
-                strtid=str(int(tic)).zfill(16)
                 fitsloc='https://mast.stsci.edu/api/v0.1/Download/file?uri=mast:HLSP/qlp/s'+str(int(key)).zfill(4) + \
                         "/"+strtid[:4]+"/"+strtid[4:8]+"/"+strtid[8:12]+"/"+strtid[12:] + \
                         "/hlsp_qlp_tess_ffi_s"+str(int(key)).zfill(4)+"-"+strtid+"_tess_v01_llc.fits"
