@@ -75,7 +75,7 @@ def openFits(f,fname,mission,cut_all_anom_lim=4.0,use_ppt=True,force_raw_flux=Fa
                 #logging.debug('Everest file')#Everest (Luger et al) detrending:
                 print("everest file")
                 lc={'time':f[1].data['TIME'],'flux':f[1].data['FCOR'],'flux_err':f[1].data['RAW_FERR'],
-                    'raw_flux':f[1].data['fraw'],'bg_flux':f[1].data['BKG'],'qual':f[1].data['QUALITY']}
+                    'raw_flux':f[1].data['fraw'],'bg_flux':f[1].data['BKG'],'quality':f[1].data['QUALITY']}
             elif fname.find('k2sc')!=-1:
                 print("K2SC file")
                 #logging.debug('K2SC file')#K2SC (Aigraine et al) detrending:
@@ -145,8 +145,12 @@ def openFits(f,fname,mission,cut_all_anom_lim=4.0,use_ppt=True,force_raw_flux=Fa
             lc['flux_err']/=np.nanmedian(lc['flux'])
             lc['flux']/=np.nanmedian(lc['flux'])
             lc['mask']=CutHighRegions(lc,std_thresh=4.5,n_pts=25,n_loops=2)
-                
-
+    elif type(f).__name__=='TessLightCurve':
+        import lightkurve
+        lc={'time':f.time,'flux':f.flux,'flux_err':f.flux_err,'quality':f.quality,
+            'cent_1':f.centroid_col,'cent_2':f.centroid_row}
+        #Adjusting flux_err for abs mag diff:
+        lc['flux_err']*=np.nanmedian(abs(np.diff(lc['time'])))/np.nanmedian(lc['flux_err'])
     elif type(f)==h5py._hl.files.File:
         #QLP is defined in mags, so lets
         def mag2flux(mags):
@@ -367,6 +371,7 @@ def CutHighRegions(lc,std_thresh=3.2,n_pts=25,n_loops=2):
                            ,axis=0)[1:-1]<20
     lc['mask']=mask
     return lc
+
 def openPDC(epic,camp,use_ppt=True,**kwargs):
     if camp == '10':
     #https://archive.stsci.edu/missions/k2/lightcurves/c1/201500000/69000/ktwo201569901-c01_llc.fits
@@ -384,14 +389,12 @@ def openPDC(epic,camp,use_ppt=True,**kwargs):
 def openVand(epic,camp,v=1,use_ppt=True,**kwargs):
     lcvand=[]
     #camp=camp.split(',')[0] if len(camp)>3
-    if camp=='10' or camp==10 or camp=='10.0':
-        camp='102'
-    elif camp=='et' or camp=='E' or camp=='e':
+    if camp=='et' or camp=='E' or camp=='e':
         camp='e'
         #https://www.cfa.harvard.edu/~avanderb/k2/ep60023342alldiagnostics.csv
     else:
         camp=str(int(float(camp))).zfill(2)
-    if camp in ['09','11']:
+    if camp in ['09','10','11']:
         #C91: https://archive.stsci.edu/missions/hlsp/k2sff/c91/226200000/35777/hlsp_k2sff_k2_lightcurve_226235777-c91_kepler_v1_llc.fits
         url1='http://archive.stsci.edu/missions/hlsp/k2sff/c'+str(int(camp))+'1/'+str(epic)[:4]+'00000/'+str(epic)[4:]+'/hlsp_k2sff_k2_lightcurve_'+str(epic)+'-c'+str(int(camp))+'1_kepler_v1_llc.fits'
         print("Vanderburg LC at ",url1)
@@ -399,8 +402,8 @@ def openVand(epic,camp,v=1,use_ppt=True,**kwargs):
             with fits.open(url1,show_progress=False) as hdus:
                 lcvand+=[openFits(hdus,url1,mission='k2',use_ppt=use_ppt,**kwargs)]
         url2='http://archive.stsci.edu/missions/hlsp/k2sff/c'+str(int(camp))+'2/'+str(epic)[:4]+'00000/'+str(epic)[4:]+'/hlsp_k2sff_k2_lightcurve_'+str(epic)+'-c'+str(int(camp))+'2_kepler_v1_llc.fits'
-        if requests.get(url1, timeout=600).status_code==200:
-            with fits.open(url1,show_progress=False) as hdus:
+        if requests.get(url2, timeout=600).status_code==200:
+            with fits.open(url2,show_progress=False) as hdus:
                 lcvand+=[openFits(hdus,url2,mission='k2',use_ppt=use_ppt)]
     elif camp=='e':
         print("Engineering data")
@@ -420,10 +423,15 @@ def openVand(epic,camp,v=1,use_ppt=True,**kwargs):
             print("Extracted vanderburg LC from ",urlfitsname)
         else:
             print("Cannot find vanderburg LC at ",urlfitsname)
-    lc=lcStack(lcvand)
-    lc['src']='K2_vand'
-    return lc
- 
+    #Cutting Nones:
+    lcvand=[lc for lc in lcvand if lc is not None]
+    if lcvand is not None and len(lcvand)>0:
+        lc=lcStack(lcvand)
+        lc['src']='K2_vand'
+        return lc
+    else:
+        return None
+
 def openEverest(epic,camp,pers=None,durs=None,t0s=None,use_ppt=True,**kwargs):
     import everest
     if camp in [10,11,10.0,11.0,'10','11','10.0','11.0']:
@@ -432,6 +440,7 @@ def openEverest(epic,camp,pers=None,durs=None,t0s=None,use_ppt=True,**kwargs):
         camp=[int(float(camp))]
     lcs=[]
     lcev={}
+    camp=np.unique(np.array(camp))
     for c in camp:
         try:
             st1=everest.Everest(int(epic),season=c,show_progress=False)
@@ -460,13 +469,12 @@ def openEverest(epic,camp,pers=None,durs=None,t0s=None,use_ppt=True,**kwargs):
             hdr={'cdpp':st1.cdpp,'ID':st1.ID,'Tmag':st1.mag,'mission':'K2','name':st1.name,'campaign':camp,'lcsource':'everest'}
         except:
             print(c,"not possible to load")
-            return None
-        lcs=[openFits(lcev,hdr,mission='k2',use_ppt=use_ppt)]
-        #elif int(camp)>=14:
-        #    lcloc='https://archive.stsci.edu/hlsps/everest/v2/c'+str(int(camp))+'/'+str(epic)[:4]+'00000/'+str(epic)[4:]+'/hlsp_everest_k2_llc_'+str(epic)+'-c'+str(int(camp))+'_kepler_v2.0_lc.fits'
-        #    lcev=openFits(fits.open(lcloc),lcloc)
-    #print(np.unique(lcev['quality']))
-    lc=lcStack(lcs)
+            continue
+    lc=openFits(lcev,hdr,mission='k2',use_ppt=use_ppt)
+    #elif int(camp)>=14:
+    #    lcloc='https://archive.stsci.edu/hlsps/everest/v2/c'+str(int(camp))+'/'+str(epic)[:4]+'00000/'+str(epic)[4:]+'/hlsp_everest_k2_llc_'+str(epic)+'-c'+str(int(camp))+'_kepler_v2.0_lc.fits'
+    #    lcev=openFits(fits.open(lcloc),lcloc)
+    #lc=lcStack(lcs)
     lc['src']='K2_ev'
     return lc
    
@@ -477,52 +485,69 @@ def getK2lc(epic,camp,saveloc=None,pers=None,durs=None,t0s=None,use_ppt=True):
     '''
     from urllib.request import urlopen
     import everest
-    lcs=[]
-    lcs+=[openEverest(int(epic), camp, pers=pers, durs=durs, t0s=t0s, use_ppt=use_ppt)]
-    lcs+=[openVand(int(epic), camp, use_ppt=use_ppt)]
-    lcs+=[openPDC(int(epic),int(float(camp)),use_ppt=use_ppt)]
-    lcs=[lc for lc in lcs if lc is not None]
-    if len(lcs)>0:
-        stds = np.array([np.nanmedian(abs(np.diff(l['flux'][l['mask']]))) for l in lcs])
-        lens = np.array([len(l['flux'][l['mask']]) for l in lcs])
+    lcs={}
+    lcs['vand']={camp:openVand(int(epic), camp, use_ppt=use_ppt)}
+    if camp!='E':
+        lcs['ev']={camp:openEverest(int(epic), int(float(camp)), pers=pers, durs=durs, t0s=t0s, use_ppt=use_ppt)}
+        lcs['pdc']={camp:openPDC(int(epic),int(float(camp)),use_ppt=use_ppt)}
+    lcs={ilc:lcs[ilc] for ilc in lcs if lcs[ilc][camp] is not None}
+    if len(lcs.keys())>1:
+        lens = {l:len(lcs[l][camp]['flux'][lcs[l][camp]['mask']]) for l in lcs}
+        stds = {l:np.nanmedian(abs(np.diff(lcs[l][camp]['flux'][lcs[l][camp]['mask']])))/(lens[l]/np.nanmax(lens[l]))**3 for l in lcs}
         #Making a metric from std and length - std/len_norm**3. i.e. a lc 75% as long as the longest is downweighted by 0.42 (e.g. std increased by 2.4 
-        stds/=(lens/np.nanmax(lens))**3
-        i_best = np.argmin(stds)
-        print([l['src'] for l in lcs],stds,i_best)
-        lc={}
-        for nl,l in enumerate(lcs):
-            if nl==i_best:
-                lc=l
-            else:
-                for key in l:
-                    #Adding as a subarray any float array (flux, error, bg, centroid, etc) longer than 500 values:
-                    if type(l[key]) in [list,np.ndarray] and len(l[key])>500 and type(l[key][0])in [float, np.float32, np.float64]:
-                        lc[key+'_'+l['src']]=l[key]
+        ordered_keys = [k for k, v in sorted(stds.items(), key=lambda item: item[1])]
+        list(np.array(list(lcs.keys()))[np.argsort(stds)])
+        lc=lcStackDicts(lcs,ordered=ordered_keys)
         return lc
-    else:
+    elif len(lcs.keys())==1:
+        return lcs[list(lcs.keys())[0]][camp]
+    elif len(lcs.keys())==0:
         return None
 
-def K2_lc(epic,pers=None,durs=None,t0s=None, use_ppt=True):
+def K2_lc(epic,coor=None,pers=None,durs=None,t0s=None, use_ppt=True):
     '''
     # Opens K2 lc
     '''
-    df,_=starpars.GetExoFop(epic,"k2")
     #if df is None or (type(df['campaign']) in [str,list] and len(df['campaign'])==0):
     from astroquery.mast import Observations
-    obs_table = Observations.query_object("EPIC "+str(int(epic)))
-    cands=list(np.unique(obs_table[obs_table['obs_collection']=='K2']['sequence_number'].data.data).astype(str))
-    if df is None:
-        df={}
-    if df['campaign'] is None or (type(df['campaign']) in [str,list] and len(df['campaign'])==0):
-        df['campaign']=','.join(cands+df['campaign'].split(','))
+    if len(str(int(epic)))==8 and str(int(epic))[:2]=='60':
+        #Engineering campaign, so we don't have a proper EPIC here.
+        df=None
+        v = Vizier(catalog=['J/ApJS/224/2'])
+        res = v.query_region(coor, radius=5*units.arcsec, catalog=['J/ApJS/224/2'])
+        if len(res)>0 and len(res[0])>0:
+            other_epic=res[0]['EPIC'][0]
+            obs_table = Observations.query_object("EPIC "+str(int(other_epic)))
+            cands=list(np.unique(obs_table[obs_table['obs_collection']=='K2']['sequence_number'].data.data).astype(int).astype(str))
+        else:
+            cands=[]
+        cands+=['E']
     else:
+        #Normal K2 observation:
+        df,_=starpars.GetExoFop(epic,"k2")
+        obs_table = Observations.query_object("EPIC "+str(int(epic)))
+        cands=list(np.unique(obs_table[obs_table['obs_collection']=='K2']['sequence_number'].data.data).astype(str))
+    if df is None:
+        df={'campaign':None}
+    if df['campaign'] is None or (type(df['campaign']) in [str,list] and len(df['campaign'])==0):
         df['campaign']=','.join(cands)
+    else:
+        df['campaign']=','.join(cands+str(df['campaign']).split(','))
+    df['campaign']=df['campaign'].replace('.0','')
+    df['campaign']=df['campaign'].replace('102','10')
     lcs=[]
-    print("K2 campaigns to search:",str(df['campaign']).split(','))
-    for camp in str(df['campaign']).split(','):
-        lcs+=[getK2lc(epic,camp,pers=pers,durs=durs,t0s=t0s, use_ppt=use_ppt)]
-    lcs=lcStack(lcs)
-    return lcs,df
+    print("K2 campaigns to search:",np.unique(np.array(str(df['campaign']).split(','))))
+    for camp in np.unique(np.array(str(df['campaign']).split(','))):
+        if camp!='':
+            lcs+=[getK2lc(epic,camp,pers=pers,durs=durs,t0s=t0s, use_ppt=use_ppt)]
+    lcs=[lc for lc in lcs if lc is not None]
+    if len(lcs)>1:
+        lcs=lcStack(lcs)
+        return lcs,df
+    elif len(lcs)==1:
+        return lcs[0],df
+    else:
+        return None,df
 
 
 def getKeplerLC(kic,cadence='long',use_ppt=True,**kwargs):
@@ -581,14 +606,40 @@ def getKeplerLC(kic,cadence='long',use_ppt=True,**kwargs):
     else:
         return None,None
 
-def lcStackDicts(spoclcs,qlplcs,elenlcs):
+def lcStackDicts(lcdicts, ordered=None):
     #Stacks multiple lcs together while keeping info from secondary data sources.
+    #lcdicts must be in form {'src1':{'camp1':{'time':[],'flux:[], ...},'sect2':{'time':...}},'src2':{'camp1':...}}}
+    
+    # Ordered should be ordered 
+    
     outlc_by_sect=[]
-    allsects=np.unique(list(spoclcs.keys())+list(qlplcs.keys())+list(elenlcs.keys()))
+    #Getting all sectors/campaigns across all lightcurve extractions:
+    allsects=np.unique([key_i for lcsrc in lcdicts for key_i in lcdicts[lcsrc]])
     #allkeys=np.unique(np.hstack([list(lcs[nlc].keys()) for nlc in range(len(lcs)) if lcs[nlc] is not None]))
-    #allkeys=allkeys[allkeys not in ['flux_format','flux_unit']] #This is the only non-timeseries keyword
-    print(allsects)
+    #allkeys=allkeys[allkeys not in ['flux_format','flux_unit','src']] #This is the only non-timeseries keyword
+    ordered=list(lcdicts.keys()) if ordered is None else ordered
+    #Removing keys if they are in ordered but not in lcdicts
+    for key in ordered:
+        if key not in lcdicts:
+            ordered.remove(key)
+    
+    print(allsects, lcdicts.keys())
     #Stacking each timeseries on top of each other
+    for sect in allsects:
+        sec_lc={}
+        #print(allsects,allkeys,lcdicts.keys())
+        for lcsrc in ordered:
+            if sec_lc=={} and sect in lcdicts[lcsrc]:
+                sec_lc.update(lcdicts[lcsrc][sect])
+                sec_lc['src']=lcsrc
+            elif sect in lcdicts[lcsrc]:
+                #Section already created - adding under secondary name:
+                sec_lc.update({lcsrc+'_'+key:lcdicts[lcsrc][sect][key] for key in lcdicts[lcsrc][sect] if key not in ['flux_format','flux_unit','src']})
+        if sec_lc=={}:
+            outlc_by_sect+=[None]
+        else:
+            outlc_by_sect+=[sec_lc]
+    '''
     for sec in allsects:
         if sec in spoclcs:
             sec_lc=spoclcs[sec]
@@ -610,29 +661,48 @@ def lcStackDicts(spoclcs,qlplcs,elenlcs):
             sec_lc=None
         
         outlc_by_sect+=[sec_lc]
+    '''
     lc=lcStack(outlc_by_sect)
-    if lc is not None:
-        lc['flux_unit']=fu
     return lc
 
 def lcStack(lcs):
-    #Stacks multiple lcs together
-    outlc={}
-    allkeys=np.unique(np.hstack([list(lcs[nlc].keys()) for nlc in range(len(lcs)) if lcs[nlc] is not None]))
-    allkeys=allkeys[allkeys!='flux_format'] #This is the only non-timeseries keyword
-    #Stacking each timeseries on top of each other
-    for nlc in range(len(lcs)):
-        for key in allkeys:
-            if key in lcs[nlc]:
-                newarr=lcs[nlc][key]
-            else:
-                newarr=np.tile(np.nan,len(lcs[nlc]['time']))
-            if key in outlc:
-                outlc[key]=np.hstack([outlc[key],newarr])
-            else:
-                outlc[key]=newarr
-    outlc['flux_unit']=lcs[nlc]['flux_unit']
-    return outlc
+    if len(lcs)==1:
+        return lcs[0]
+    else:
+        #Stacks multiple lcs together
+        outlc={}
+        allkeys=np.unique(np.hstack([list(lcs[nlc].keys()) for nlc in range(len(lcs)) if lcs[nlc] is not None]))
+        allkeys=allkeys[allkeys!='flux_format'] #This is the only non-timeseries keyword
+        #Checking we dont have matching lcs:
+        if len(lcs)>1:
+            matching=[]
+            for n1 in range(len(lcs)):
+                for n2 in range(n1+1,len(lcs)):
+                    if n1!=n2 and np.all(lcs[n1]['time']==lcs[n2]['time']) and np.all(lcs[n1]['flux']==lcs[n2]['flux']):
+                            match_deletes+=[n1,n2]
+            if len(matching)==1:
+                lcs=lcs.remove(matching[0])
+            elif len(matching)>1:
+                for match in matching[:-1]:
+                    lcs=lcs.remove(match)
+            print("matching pairs = ",matching)
+
+
+        #Stacking each timeseries on top of each other
+        for nlc in range(len(lcs)):
+            if lcs[nlc] is not None:
+                #In the case of a "parallel" lc, we put this into the dict, but with e.g. time_1 or flux_err_2:
+                for key in allkeys:
+                    if key in lcs[nlc]:
+                        newarr=lcs[nlc][key]
+                    else:
+                        newarr=np.tile(np.nan,len(lcs[nlc]['time']))
+                    if key in outlc:
+                        outlc[key]=np.hstack([outlc[key],newarr])
+                    else:
+                        outlc[key]=newarr
+                outlc['flux_unit']=lcs[nlc]['flux_unit']
+        return outlc
 
 def CutAnomDiff(flux,thresh=4.2):
     #Uses differences between points to establish anomalies.
@@ -728,7 +798,7 @@ def TESS_lc(tic, sectors='all',use_ppt=True, coords=None, use_qlp=None, use_elea
            17:'2019279210107_0161',18:'2019306063752_0162',19:'2019331140908_0164',20:'2019357164649_0165',
            21:'2020020091053_0167',22:'2020049080258_0174',23:'2020078014623_0177',24:'2020106103520_0180',
            25:'2020133194932_0182',26:'2020160202036_0188',27:'2020186164531_0189',28:'2020212050318_0190',
-           29:'2020238165205_0193',30:'2020266004630_0195',31:'2020294194027_0198'}
+           29:'2020238165205_0193',30:'2020266004630_0195',31:'2020294194027_0198',32:'2020324010417_0200'}
     sect_to_orbit={sect+1:[9+sect*2,10+sect*2] for sect in range(np.max(list(epoch.keys())))}
     lcs=[];lchdrs=[]
     if sectors == 'all':
@@ -772,7 +842,7 @@ def TESS_lc(tic, sectors='all',use_ppt=True, coords=None, use_qlp=None, use_elea
             resp = h.request(fitsloc, 'HEAD')
             if int(resp[0]['status']) < 400:
                 with fits.open(fitsloc,show_progress=False) as hdus:
-                    spoclcs[key]=tools.openFits(hdus,fitsloc,mission='tess')
+                    spoclcs[key]=openFits(hdus,fitsloc,mission='tess')
                     lchdrs+=[hdus[0].header]
 
         if use_qlp is None or use_qlp is True:
@@ -821,7 +891,7 @@ def TESS_lc(tic, sectors='all',use_ppt=True, coords=None, use_qlp=None, use_elea
                 print(e, tic,"not observed by TESS in sector",key)
         
     if len(spoclcs)+len(qlplcs)+len(elenorlcs)>0:
-        lc=lcStackDicts(spoclcs,qlplcs,elenorlcs)
+        lc=lcStackDicts({'spoc':spoclcs,'qlp':qlplcs,'elen':elenorlcs},['spoc','qlp','elen'])
         return lc,lchdrs[0]
         #elif len(lcs)==1:
         #    #print(lcs,lchdrs)
@@ -868,8 +938,8 @@ def openLightCurve(ID,mission,coor=None,use_ppt=True,other_data=True,
             if tess_id is not None:
                 IDs['tess']=tess_id
             '''
-            tess_id=tess_id.iloc[np.argmin(tess_id['Tmag'])] if type(tess_id)==pd.DataFrame else tess_id
-            if tess_id is not None:
+            if tess_id is not None and len(tess_id)>0:
+                tess_id=tess_id.iloc[np.argmin(tess_id['Tmag'])] if type(tess_id)==pd.DataFrame else tess_id
                 IDs['tess']=tess_id['ID']
             else:
                 IDs['tess']=None
@@ -878,8 +948,16 @@ def openLightCurve(ID,mission,coor=None,use_ppt=True,other_data=True,
         if mission.lower()!='kepler':
             v = Vizier(catalog=['V/133/kic'])
             res=v.query_region(coor, radius=5*units.arcsec, catalog=['V/133/kic'])
-            if 'V/133/kic' in res and len(res['V/133/kic'])>0:
-                IDs['kepler'] = res['V/133/kic']['KIC'][0]
+            if 'V/133/kic' in res.keys():
+                if len(res['V/133/kic'])>1:
+                    print(res['V/133/kic'][['KIC','kepmag']], "MULTIPLE KICS FOUND")
+                    IDs['kepler'] = res['V/133/kic']['KIC'][np.argmin(res['V/133/kic']['kepmag'])]
+                elif len(res['V/133/kic'])==1:
+                    print(res['V/133/kic'][['KIC','kepmag']], "ONE KIC FOUND")
+                    IDs['kepler'] = res['V/133/kic']['KIC'][0]
+                elif len(res['V/133/kic'])==0:
+                    IDs['kepler'] = None
+                    print(res['V/133/kic'], "NO KICS FOUND")
             else:
                 IDs['kepler'] = None
     
@@ -890,7 +968,7 @@ def openLightCurve(ID,mission,coor=None,use_ppt=True,other_data=True,
         if lcs['tess'] is not None:
             lcs['tess']['time']-=(jd_base-2457000)
     if IDs['k2'] is not None:
-        lcs['k2'],hdrs['k2'] = K2_lc(IDs['k2'],pers=kwargs.get('periods',None),
+        lcs['k2'],hdrs['k2'] = K2_lc(IDs['k2'],coor,pers=kwargs.get('periods',None),
                                      durs=kwargs.get('initdurs',None),
                                      t0s=kwargs.get('initt0',None),
                                      use_ppt=use_ppt)
@@ -908,12 +986,13 @@ def openLightCurve(ID,mission,coor=None,use_ppt=True,other_data=True,
         lcs['corot']['jd_base']=jd_base
         hdrs['corot'] = None
     #print(IDs,lcs)
-    if len(lcs.keys())>1:
+    if len(lcs.keys())>=1:
         lc=lcStack([lcs[lc] for lc in lcs if lcs[lc] is not None])
     elif not other_data:
         lc=lcs[mission.lower()]
     else:
         lc=lcs[list(lcs.keys())[0]]
+    print(lc,type(lc))
     if lc is not None:
         lc['jd_base']=jd_base
 
@@ -1140,7 +1219,7 @@ def formwindow(dat,cent,size,boxsize,gapthresh=1.0):
 
 def lcFlatten(lc, winsize = 3.5, stepsize = 0.15, polydegree = 2, 
               niter = 10, sigmaclip = 3., gapthreshold = 1.0,
-              use_binned=False, use_mask=True, reflect=True, transit_mask=None):
+              use_binned=False, use_mask=True, reflect=True, transit_mask=None, debug=False):
     '''#Flattens any lightcurve while maintaining in-transit depth.
 
     Args:
@@ -1167,7 +1246,7 @@ def lcFlatten(lc, winsize = 3.5, stepsize = 0.15, polydegree = 2,
     if len(lc['mask'])==len(uselc[:,0]) and use_mask:
         initmask=(lc['mask']&(lc['flux']/lc['flux']==1.0)&(lc['flux_err']/lc['flux_err']==1.0)).astype(int)[:]
         if type(transit_mask)==np.ndarray:
-            print("transit mask:",type(initmask),len(initmask),
+            if debug: print("transit mask:",type(initmask),len(initmask),
                   initmask[0],type(transit_mask),len(transit_mask),transit_mask[0])
             initmask=(initmask.astype(bool)&transit_mask).astype(int)
 
@@ -1214,6 +1293,8 @@ def lcFlatten(lc, winsize = 3.5, stepsize = 0.15, polydegree = 2,
         #Checking that we have points in the box where the window is not entirely junk/masked
         if np.sum(newbox)>0 and np.sum(win&uselc[:,3].astype(bool))>0:
             #Forming the polynomial fit from the window around the box:
+            if debug: print("window size:",np.sum(win),"masked points:",np.sum(uselc[win,3]))
+            if debug: print("window lc:",uselc[win,:3])
             baseline = dopolyfit(uselc[win,:3],mask=uselc[win,3].astype(bool),
                                  stepcent=stepcent,d=polydegree,ni=niter,sigclip=sigmaclip)
             lc[prefix+'flux_flat'][newbox] = lc[prefix+'flux'][newbox] - np.polyval(baseline,lc[prefix+'time'][newbox]-stepcent)*lc['flux_unit']

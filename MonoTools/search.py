@@ -373,8 +373,8 @@ def MonoTransitSearch(lc,ID,mission, Rs=None,Ms=None,Teff=None,
     Teff=5800.0 if Teff is None else float(Teff)
 
     mincad=np.min([float(cad[1:])/1440 for cad in np.unique(lc['cadence'])])
-    interpmodels,tdurs = get_interpmodels(Rs,Ms,Teff,lc['time'],lc['flux_unit'],
-                                        n_durs=n_durs,texp=mincad, mission=mission)
+    interpmodels, tdurs = get_interpmodels(Rs,Ms,Teff,lc['time'],lc['flux_unit'],
+                                           n_durs=n_durs,texp=mincad, mission=mission)
     
     #print("Checking input model matches. flux:",np.nanmedian(uselc[:,0]),"std",np.nanstd(uselc[:,1]),"transit model:",
     #       interpmodels[0](10.0),"depth:",interpmodels[0](0.0))
@@ -1455,13 +1455,13 @@ def VariabilityCheck(lc, params, ID, modeltype='all',plot=False,plot_loc=None,nd
     # - 2) 'step': Discontinuity Model (two polynomials and a gap between them)
     # the BIC returned to judge against the transit model fit
     
-    
     #assuming QuickMonoFit has been run, we can replicate the exact x/y/yerr used there:
     x = params['monofit_x']-params['tcen']
-    round_trans=(abs(x)<ndurs*params['tdur'])
-    x=x[round_trans]
+    round_trans=(abs(x)<ndurs*np.clip(params['tdur'],0.1,5.0))
+    x = x[round_trans]
     y = params['monofit_y'][round_trans]
-    mask = lc['mask'][np.isin(lc['time'],params['monofit_x'][abs(params['monofit_x']-params['tcen'])<ndurs*params['tdur']])]
+    #mask = lc['mask'][np.isin(lc['time'],params['monofit_x'][abs(params['monofit_x']-params['tcen'])<ndurs*params['tdur']])]
+    #assert len(mask)==len(x)
     
     print(params['tdur'],np.sum(abs(x)>0.6*params['tdur']))
     
@@ -1489,9 +1489,12 @@ def VariabilityCheck(lc, params, ID, modeltype='all',plot=False,plot_loc=None,nd
         methods=['L-BFGS-B','Nelder-Mead','Powell']
         n=0
         while n<21:
+            print(np.sum(outTransit))
             #Running the minimization 7 times with different initial params to make sure we get the best fit
-            rand_choice=np.random.random(len(x))<0.95
-            
+            if np.sum(outTransit)>20:
+                rand_choice=np.random.random(len(x))<0.95
+            else:
+                rand_choice=np.tile(True,len(x))
             #non-dip is simple poly fit. Including 10% cut in points to add some randomness over n samples
             #log10(height), log10(dur), tcen
             if modeltype=='sin' or modeltype=='both' or modeltype=='all':
@@ -1531,7 +1534,8 @@ def VariabilityCheck(lc, params, ID, modeltype='all',plot=False,plot_loc=None,nd
                                      np.polyfit(x[(x>=step_guess)&rand_choice],
                                                 y[(x>=step_guess)&rand_choice],npolys[1])
                                     ))
-
+                #print(x[np.argsort(x)], y[np.argsort(x)], yerr[np.argsort(x)],
+                #      mod_args, dipmodel_step(mod_args,x[np.argsort(x)],npolys))
                 mod_res_step=optim.minimize(Step_neg_lnprob, mod_args,
                                        args=(x[np.argsort(x)],y[np.argsort(x)],yerr[np.argsort(x)],priors['step'],
                                              np.clip(polyorder+1,1,5),npolys),
@@ -1604,8 +1608,7 @@ def VariabilityCheck(lc, params, ID, modeltype='all',plot=False,plot_loc=None,nd
                 plot_loc=str(ID)+"_variability_check.pdf"
             elif plot_loc[-1]=='/':
                 plot_loc=plot_loc+str(ID)+"_variability_check.pdf"
-        
-        markers, caps, bars = ax.errorbar(x[mask],y[mask],yerr=yerr[mask],
+        markers, caps, bars = ax.errorbar(x,y,yerr=yerr,
                                           fmt='.k',ecolor='#AAAAAA',markersize=3.5,alpha=0.6,rasterized=True)
         [bar.set_alpha(0.2) for bar in bars]
         [cap.set_alpha(0.2) for cap in caps]
@@ -1807,7 +1810,7 @@ def CentroidCheck(lc,monoparams,interpmodel,ID,order=2,dur_region=3.5, plot=True
         
         for n in range(7):
             #Doing simple polynomial fits for non-dips. Excluding 10% of data each time to add some randomness
-            rand_choice=np.random.choice(len(x),int(0.9*len(x)),replace=False)
+            rand_choice=np.random.choice(len(x),int(len(x)//1.06),replace=False)
             xfit=optim.minimize(Poly_neg_lnprob, np.polyfit(t[rand_choice],x[rand_choice],order),
                                         args=(t,x,xerr,poly_priors,
                                         order),method=methods[n%3])
@@ -2550,7 +2553,7 @@ def get_interpmodels(Rs,Ms,Teff,lc_time,lc_flux_unit,mission='tess',n_durs=3,gap
 
 def VetCand(pl_dic,pl,ID,lc,mission,Rs=1.0,Ms=1.0,Teff=5800,
             mono_SNR_thresh=6.5,mono_SNR_r_thresh=4.75,variable_llk_thresh=5,
-            plot=False,file_loc=None,vet_do_fit=True,return_fit_lcs=False,**kwargs):
+            plot=False,file_loc=None,vet_do_fit=True,return_fit_lcs=False,do_cent=True,**kwargs):
     #Best-fit model params for the mono transit:
     if pl_dic['orbit_flag']=='mono' and vet_do_fit:
         #Making sure our lightcurve mask isn't artificially excluding in-transit points:
@@ -2664,23 +2667,24 @@ def VetCand(pl_dic,pl,ID,lc,mission,Rs=1.0,Ms=1.0,Teff=5800,
         if pl_dic['asteroid_DeltaBIC'] is not None and pl_dic['asteroid_DeltaBIC']<-10 and pl_dic['asteroid_snrr']>pl_dic['snr']:
             pl_dic['flag']='asteroid'
             print(pl,"asteroid. DeltaBic=",pl_dic['asteroid_DeltaBIC'])
-    #Checks to see if dip is combined with centroid
-    outs = CentroidCheck(deepcopy(lc), pl_dic, pl_dic['interpmodel'], plot=plot,
-                                                        return_fit_lcs=return_fit_lcs,ID=str(ID).zfill(11)+'_'+pl,
-                                                        plot_loc=cent_ax, **kwargs)
+    if do_cent:
+        #Checks to see if dip is combined with centroid
+        outs = CentroidCheck(deepcopy(lc), pl_dic, pl_dic['interpmodel'], plot=plot,
+                                                            return_fit_lcs=return_fit_lcs,ID=str(ID).zfill(11)+'_'+pl,
+                                                            plot_loc=cent_ax, **kwargs)
 
-    if outs is None or outs[0] is None:
-        pl_dic['centroid_llk_ratio']=None
-    else:
-        for col in outs[0]:
-            pl_dic[col]=outs[0][col]
-        centfig=outs[1]
-        if return_fit_lcs:
-            print(return_fit_lcs,outs[2])
-            pl_dic['centroid_models']=outs[2]
-    if pl_dic['centroid_llk_ratio'] is not None and pl_dic['centroid_llk_ratio']<-6:
-        pl_dic['flag']='EB'
-        print(pl,"EB - centroid. log lik ratio=",pl_dic['centroid_llk_ratio'])
+        if outs is None or outs[0] is None:
+            pl_dic['centroid_llk_ratio']=None
+        else:
+            for col in outs[0]:
+                pl_dic[col]=outs[0][col]
+            centfig=outs[1]
+            if return_fit_lcs:
+                print(return_fit_lcs,outs[2])
+                pl_dic['centroid_models']=outs[2]
+        if pl_dic['centroid_llk_ratio'] is not None and pl_dic['centroid_llk_ratio']<-6:
+            pl_dic['flag']='EB'
+            print(pl,"EB - centroid. log lik ratio=",pl_dic['centroid_llk_ratio'])
 
     pl_dic['instrumental_snr_ratio']=CheckInstrumentalNoise(deepcopy(lc),pl_dic)
     if pl_dic['snr']>mono_SNR_thresh and pl_dic['instrumental_snr_ratio']<(mono_SNR_thresh*0.66):
