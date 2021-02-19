@@ -2715,8 +2715,8 @@ def VetCand(pl_dic,pl,ID,lc,mission,Rs=1.0,Ms=1.0,Teff=5800,
         #vetfig.tight_layout()
         vetfig.subplots_adjust(left = 0.05,right = 0.97,bottom = 0.075,top = 0.925)
         if file_loc is not None:
-            vetfig.savefig(file_loc+"/"+str(ID).zfill(11)+'_'+pl+'_vetting.pdf', dpi=400)
-            return pl_dic, file_loc+"/"+str(ID).zfill(11)+'_'+pl+'_vetting.pdf'
+            vetfig.savefig(file_loc+"/"+tools.id_dic[mission]+str(int(ID)).zfill(11)+'_'+pl+'_vetting.pdf', dpi=400)
+            return pl_dic, file_loc+"/"+tools.id_dic[mission]+str(int(ID)).zfill(11)+'_'+pl+'_vetting.pdf'
         else:
             return pl_dic, None
     else:
