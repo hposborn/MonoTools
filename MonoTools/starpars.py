@@ -1262,7 +1262,7 @@ def getStellarInfoFromCsv(ID,mission,radec=None,k2tab=None,keptabs=None,use_isoc
     if mission.lower()=='tess':
         info = TICdata(int(ID)).iloc[0]
         info['source']='TICv8'
-        print("TESS object")
+        #print("TESS object")
         k2tab = None
         keptabs = None
         epicdat=None
@@ -1387,7 +1387,7 @@ def getStellarInfoFromCsv(ID,mission,radec=None,k2tab=None,keptabs=None,use_isoc
                 #info['e_rad']=0.5*(abs(info['eneg_rad'])+abs(info['epos_rad']))
                 #info['e_mass']=0.5*(abs(info['eneg_mass'])+abs(info['epos_mass']))
                 #info['e_logg']=0.5*(abs(info['eneg_logg'])+abs(info['epos_logg']))
-                print(info['GAIA'])
+                #print(info['GAIA'])
                 if not np.isnan(info['GAIA']) and radec is None:
                     gaiainfo=[]
                     #DR2:
@@ -1428,7 +1428,7 @@ def getStellarInfoFromCsv(ID,mission,radec=None,k2tab=None,keptabs=None,use_isoc
             except:
                 print(ID," not in TIC")
                 tic_dat=None
-    print(info)
+    #print(info)
     if info is not None:
         #Switching all e_, E_, etc to uniform column names:
         info=RenameSeries(info)
@@ -1461,7 +1461,7 @@ def getStellarInfoFromCsv(ID,mission,radec=None,k2tab=None,keptabs=None,use_isoc
                 info['source']='IsoClassify'
             except:
                 print("getStellarInfo fails")
-                print(info)
+                #print(info)
         
         if 'teff' not in info.index and 'rad' in info.index and 'lum' in info.index:
             info['teff']=5800*(info['lum']/info['rad']**2)**(1/4)

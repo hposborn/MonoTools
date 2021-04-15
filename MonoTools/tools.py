@@ -201,6 +201,10 @@ def openFits(f,fname,mission,cut_all_anom_lim=4.0,use_ppt=True,force_raw_flux=Fa
         print('cannot identify fits type to identify with')
         #logging.debug('Found fits file but cannot identify fits type to identify with')
         return None
+    if 'raw_flux' in lc:
+        if np.nanmedian(lc['raw_flux'])>0.1:
+            lc['raw_flux']/=np.nanmedian(lc['raw_flux'])
+            lc['raw_flux']-=1.0
     
     if force_raw_flux and 'raw_flux' in lc:
         #Here we'll force ourselves to use raw flux, and not the detrended flux, if it exists:
@@ -214,7 +218,7 @@ def openFits(f,fname,mission,cut_all_anom_lim=4.0,use_ppt=True,force_raw_flux=Fa
     
     # Only discard positive outliers
     
-    print(np.sum(~lc['mask']),"points masked in lc of",len(lc['mask']))
+    #print(np.sum(~lc['mask']),"points masked in lc of",len(lc['mask']))
     '''
     # Make sure that the data type is consistent
     lc['time'] = np.ascontiguousarray(x[m2], dtype=np.float64)
@@ -250,7 +254,7 @@ def maskLc(lc,fhead,cut_all_anom_lim=5.0,use_ppt=False,end_of_orbit=True,
     mask = np.isfinite(lc[prefix+'flux'+suffix]) & np.isfinite(lc[prefix+'time']) & np.isfinite(lc[prefix+'flux_err'])
     if np.sum(mask)>0:
         # & (lc[prefix+'flux'+suffix]>0.0)
-        print(np.sum(mask))
+        #print(np.sum(mask))
         if input_mask is not None:
             mask=mask&input_mask
         # Mask data if it's 4.2-sigma from its points either side (repeating at 7-sigma to get any points missed)
@@ -623,7 +627,7 @@ def lcStackDicts(lcdicts, ordered=None):
         if key not in lcdicts:
             ordered.remove(key)
     
-    print(allsects, lcdicts.keys())
+    #print(allsects, lcdicts.keys())
     #Stacking each timeseries on top of each other
     for sect in allsects:
         sec_lc={}
@@ -678,14 +682,14 @@ def lcStack(lcs):
             matching=[]
             for n1 in range(len(lcs)):
                 for n2 in range(n1+1,len(lcs)):
-                    if n1!=n2 and np.all(lcs[n1]['time']==lcs[n2]['time']) and np.all(lcs[n1]['flux']==lcs[n2]['flux']):
-                            match_deletes+=[n1,n2]
+                    if n1==n2 or (np.all(np.isin(lcs[n1]['time'],lcs[n2]['time'])) and np.all(np.isin(lcs[n1]['flux'],lcs[n2]['flux']))):
+                        match_deletes+=[n1,n2]
             if len(matching)==1:
                 lcs=lcs.remove(matching[0])
             elif len(matching)>1:
                 for match in matching[:-1]:
                     lcs=lcs.remove(match)
-            print("matching pairs = ",matching)
+            #print("matching pairs = ",matching)
 
 
         #Stacking each timeseries on top of each other
@@ -726,7 +730,7 @@ def observed(tic):
         page = requests.get('https://heasarc.gsfc.nasa.gov/cgi-bin/tess/webtess/wtv.py?Entry='+str(tic.ra.deg)+"%2C+"+str(tic.dec.deg))
     else:
         print(type(tic),"- unrecognised")
-    print('https://heasarc.gsfc.nasa.gov/cgi-bin/tess/webtess/wtv.py?Entry='+str(tic))
+    #print('https://heasarc.gsfc.nasa.gov/cgi-bin/tess/webtess/wtv.py?Entry='+str(tic))
     tree = html.fromstring(page.content)
     Lamp = tree.xpath('//pre/text()') #stores class of //pre html element in list Lamp
     tab=tree.xpath('//pre/text()')[0].split('\n')[2:-1]
@@ -799,7 +803,7 @@ def TESS_lc(tic, sectors='all',use_ppt=True, coords=None, use_qlp=None, use_elea
            21:'2020020091053_0167',22:'2020049080258_0174',23:'2020078014623_0177',24:'2020106103520_0180',
            25:'2020133194932_0182',26:'2020160202036_0188',27:'2020186164531_0189',28:'2020212050318_0190',
            29:'2020238165205_0193',30:'2020266004630_0195',31:'2020294194027_0198',32:'2020324010417_0200',
-           33:'2020351194500_0203'}
+           33:'2020351194500_0203',34:'2021014023720_0204'}
     sect_to_orbit={sect+1:[9+sect*2,10+sect*2] for sect in range(np.max(list(epoch.keys())))}
     lcs=[];lchdrs=[]
     if sectors == 'all':
@@ -824,7 +828,6 @@ def TESS_lc(tic, sectors='all',use_ppt=True, coords=None, use_qlp=None, use_elea
     qlplcs={}
     elenorlcs={}
     spoclcs={}
-    print(epochs,type(epochs))
     for key in epochs:
         #2=minute cadence data from tess website
         fitsloc="https://archive.stsci.edu/missions/tess/tid/s"+str(key).zfill(4)+"/"+str(tic).zfill(16)[:4]+"/"+str(tic).zfill(16)[4:8]+"/"+str(tic).zfill(16)[-8:-4]+"/"+str(tic).zfill(16)[-4:]+"/tess"+epoch[key].split('_')[0]+"-s"+str(key).zfill(4)+"-"+str(tic).zfill(16)+"-"+epoch[key].split('_')[1]+"-s_lc.fits"
@@ -848,9 +851,9 @@ def TESS_lc(tic, sectors='all',use_ppt=True, coords=None, use_qlp=None, use_elea
 
         if use_qlp is None or use_qlp is True:
             qlpfiles=[data_loc+"/orbit-"+str(int(sect_to_orbit[key][n]))+"_qlplc.h5" for n in range(2)]
-            print(key,
-                  qlpfiles[0],os.path.isfile(qlpfiles[0]),
-                  qlpfiles[1],os.path.isfile(qlpfiles[1]))
+            #print(key,
+            #      qlpfiles[0],os.path.isfile(qlpfiles[0]),
+            #      qlpfiles[1],os.path.isfile(qlpfiles[1]))
             if os.path.isfile(qlpfiles[0]) and os.path.isfile(qlpfiles[1]):
                 
                 f1=h5py.File(qlpfiles[0])
@@ -993,7 +996,7 @@ def openLightCurve(ID,mission,coor=None,use_ppt=True,other_data=True,
         lc=lcs[mission.lower()]
     else:
         lc=lcs[list(lcs.keys())[0]]
-    print(lc,type(lc))
+
     if lc is not None:
         lc['jd_base']=jd_base
 
@@ -1085,7 +1088,7 @@ def weighted_avg_and_std(values, errs, axis=None):
     else:
         return [values[0], errs[0]]
 
-def lcBin(lc,binsize=1/48,split_gap_size=0.8,use_flat=True,use_masked=True, extramask=None,modify_lc=True):
+def lcBin(lc,binsize=1/48,split_gap_size=0.8,use_flat=True,use_masked=True, use_raw=False,extramask=None,modify_lc=True):
     #Binning lightcurve to e.g. 30-min cadence for planet search
     # Can optionally use the flatted lightcurve
     binlc={}
@@ -1101,6 +1104,10 @@ def lcBin(lc,binsize=1/48,split_gap_size=0.8,use_flat=True,use_masked=True, extr
         flux_dic=['flux']
         binlc['flux']=[]
     binlc['bin_cadence']=[]
+        
+    if use_raw:
+        flux_dic+=['raw_flux']
+        binlc['raw_flux']=[]
         
     if np.nanmax(np.diff(lc['time']))>split_gap_size:
         loop_blocks=np.array_split(np.arange(len(lc['time'])),np.where(np.diff(lc['time'])>2.0)[0])
@@ -1169,6 +1176,12 @@ def bin_lc_segment(lc_segment, binsize,return_digi=False):
     else:
         return lc_segment
     
+def create_transit_mask(t,tcens,tdurs,maskdist=1.1):
+    in_trans=np.zeros_like(t).astype(bool)
+    for n in range(len(tcens)):
+        in_trans+=abs(t-tcens[n])<0.5*maskdist*tdurs[n]
+    return ~in_trans
+   
 def dopolyfit(win,mask=None,stepcent=0.0,d=3,ni=10,sigclip=3):
     mask=np.tile(True,len(win)) if mask is None else mask
     maskedwin=win[mask]
@@ -1265,7 +1278,7 @@ def lcFlatten(lc, winsize = 3.5, stepsize = 0.15, polydegree = 2,
         stepcentres+=[np.arange(uselc[jumps[n],0],
                                 uselc[np.clip(jumps[n+1],0,len(uselc)-1),0],
                                 stepsize) + 0.5*stepsize]
-        if reflect:
+        if reflect and (uselc[jumps[n]:jumps[n+1],0][-1]-uselc[jumps[n]:jumps[n+1],0][0])>0.8*winsize:
             partlc=uselc[jumps[n]:jumps[n+1]]
             incad=np.nanmedian(np.diff(partlc[:,0]))
             xx=[np.arange(np.nanmin(partlc[:,0])-winsize*0.4,np.nanmin(partlc[:,0])-incad,incad),
@@ -1279,6 +1292,8 @@ def lcFlatten(lc, winsize = 3.5, stepsize = 0.15, polydegree = 2,
             refl_bool=np.hstack((np.zeros(len(xx[0])),np.tile(1.0,len(partlc[:,0])),np.zeros(len(xx[1]))))
             #print(partlc.shape,len(xx[0]),len(xx[1]),refl_t.shape,refl_flux.shape,refl_bool.shape)
             uselc_w_reflect+=[np.column_stack((refl_t,refl_flux,refl_bool))]
+        elif (uselc[jumps[n]:jumps[n+1],0][-1]-uselc[jumps[n]:jumps[n+1],0][0])<0.8*winsize:
+            uselc_w_reflect+=[np.column_stack((uselc[jumps[n]:jumps[n+1]],np.tile(1.0,len(uselc[jumps[n]:jumps[n+1],0])) ))]
     stepcentres=np.hstack(stepcentres)
     if reflect:
         uselc=np.vstack(uselc_w_reflect)

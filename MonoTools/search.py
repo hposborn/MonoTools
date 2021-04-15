@@ -109,7 +109,7 @@ def QuickMonoFit(lc,it0,dur,Rs=None,Ms=None,Teff=None,useL2=False,fit_poly=True,
     
     if fluxindex=='flux_flat' and 'flux_flat' not in lc:
         #Reflattening and masking transit:
-        lc=tools.lcFlatten(lc,winsize=9*dur,stepsize=0.1*dur,transit_mask=abs(xinit)>dur*0.5)
+        lc=tools.lcFlatten(lc, winsize=9*dur, stepsize=0.1*dur, transit_mask=abs(xinit)>dur*0.5)
     if how=='periodic':
         assert np.sum(nearby&mask)>0
         #print(lc[timeindex][nearby])
@@ -303,20 +303,22 @@ def QuickMonoFit(lc,it0,dur,Rs=None,Ms=None,Teff=None,useL2=False,fit_poly=True,
           "\nfit stuff:",best_fit['r_pl'],best_fit['b'], best_fit['logror'],best_fit['tdur'],(1+best_fit['third_light'])/lc['flux_unit'],
           "\ndepth stuff:",best_fit['depth'],best_fit['depth_err'],lc['flux_unit'],np.min(transit_zoom),np.min(map_soln['light_curve']))'''
     #Calculating std in typical bin with width of the transit duration, to compute SNR_red
+    
     if how=='mono' or init_period is None:
-        oot_mask=mask&(abs(lc[timeindex]-best_fit['tcen'])>0.5)&(abs(lc[timeindex]-best_fit['tcen'])<25)
-        binlc=tools.bin_lc_segment(np.column_stack((lc[timeindex][oot_mask],lc[fluxindex][oot_mask],
+        oot_mask=mask*(abs(lc[timeindex]-best_fit['tcen'])>0.5)*(abs(lc[timeindex]-best_fit['tcen'])<25)
+        binlc=tools.bin_lc_segment(np.column_stack((lc[timeindex][oot_mask],lc[fluxindex.replace('_flat','')][oot_mask],
                                                     lc[fluxerrindex][oot_mask])),best_fit['tdur'])
-        best_fit['cdpp'] = np.nanstd(binlc[:,1])#np.nanmedian(abs(np.diff(binlc[:,1])))#np.nanstd(binlc[:,1])
+        best_fit['cdpp'] = np.nanmedian(abs(np.diff(binlc[:,1])))#np.nanstd(binlc[:,1])
         best_fit['Ntrans']=1
     else:
         phase=(abs(lc['time']-best_fit['tcen']+0.5*best_fit['tdur'])%init_period)
         if len(mask)==len(phase):
-            oot_mask=mask&(phase>best_fit['tdur'])
+            oot_mask=mask*(phase>best_fit['tdur'])
         else:
-            oot_mask=lc['mask']&(phase>best_fit['tdur'])
-        binlc=tools.bin_lc_segment(np.column_stack((lc['time'][oot_mask],lc['flux_flat'][oot_mask],
+            oot_mask=lc['mask']*(phase>best_fit['tdur'])
+        binlc=tools.bin_lc_segment(np.column_stack((lc['time'][oot_mask],lc['flux'][oot_mask],
                                                     lc['flux_err'][oot_mask])),best_fit['tdur'])
+        #Counting in-transit cadences:
         durobs=0
         for cad in np.unique(lc['cadence']):
             if len(mask)==len(phase):
@@ -325,7 +327,7 @@ def QuickMonoFit(lc,it0,dur,Rs=None,Ms=None,Teff=None,useL2=False,fit_poly=True,
                 durobs+=np.sum(phase[lc['mask']&(lc['cadence']==cad)]<best_fit['tdur'])*float(int(cad[1:]))/1440
 
         best_fit['Ntrans']=durobs/best_fit['tdur']
-        best_fit['cdpp'] = np.nanstd(binlc[:,1])
+        best_fit['cdpp'] = np.nanmedian(abs(np.diff(binlc[:,1])))#np.nanstd(binlc[:,1])
 
     best_fit['snr_r']=best_fit['depth']/(best_fit['cdpp']/np.sqrt(best_fit['Ntrans']))
     best_fit['interpmodel']=interp.interp1d(np.hstack((-10000,interpt-best_fit['tcen'],10000)),
@@ -838,8 +840,8 @@ def PeriodicPlanetSearch(lc, ID, planets, use_binned=False, use_flat=True, binsi
         lc=tools.lcBin(lc,binsize=binsize,use_flat=use_flat)
         #print("binned",lc.keys,np.sum(lc['mask']))
         suffix='_flat'
-    else:
-        print(use_binned, 'bin_flux' in lc)
+    #else:
+    #    print(use_binned, 'bin_flux' in lc)
     prefix='bin_' if use_binned else ''
     
     if plot:
@@ -890,7 +892,7 @@ def PeriodicPlanetSearch(lc, ID, planets, use_binned=False, use_flat=True, binsi
         model = transitleastsquares(modx[anommask], mody[anommask])
         results+=[model.power(period_min=1.1,period_max=p_max,duration_grid_step=1.0625,Rstar=Rs,Mstar=Ms,
                               use_threads=1,show_progress_bar=False, n_transits_min=3)]
-        print(results[-1])
+        #print(results[-1])
         
         if 'FAP' in results[-1] and 'snr' in results[-1] and not np.isnan(results[-1]['snr']) and 'transit_times' in results[-1]:
             #Defining transit times as those times where the SNR in transit is consistent with expectation (>-3sigma)
@@ -945,7 +947,7 @@ def PeriodicPlanetSearch(lc, ID, planets, use_binned=False, use_flat=True, binsi
             #print(n_pl,"pl_mask",np.sum(this_pl_masked)," total:",np.sum(plmask))
         elif SNR>multi_SNR_thresh:
             # pseudo-fails - we have a high-SNR detection but it's a duo or a mono.
-            print(plparams['tcen'],plparams['tdur'],"fails with transits at ",trans,"with durations",plparams['tdur'],"transits. Reserching")
+            #print(plparams['tcen'],plparams['tdur'],"fails with transits at ",trans,"with durations",plparams['tdur'],"transits. Reserching")
             this_pl_masked=np.min(abs((lc[prefix+'time'][np.newaxis,:]-t_zero)-np.array(trans)[:,np.newaxis]),axis=0)<(0.7*plparams['tdur'])
             #this_pl_masked=(((lc[prefix+'time']-plparams['tcen']+0.7*plparams['tdur'])%results[-1].period)<(1.4*plparams['tdur']))
             #print(n_pl,results[-1].period,plparams['tdur'],np.sum(this_pl_masked))
@@ -953,7 +955,7 @@ def PeriodicPlanetSearch(lc, ID, planets, use_binned=False, use_flat=True, binsi
             SNR_last_planet=SNR
         else:
             # Fails
-            print(n_pl,"detection at ",results[-1].period," with ",len(trans)," transits does not meet SNR ",SNR,"or FAP",results[-1].FAP)
+            #print(n_pl,"detection at ",results[-1].period," with ",len(trans)," transits does not meet SNR ",SNR,"or FAP",results[-1].FAP)
             SNR_last_planet=0
         n_pl+=1
 
@@ -1251,7 +1253,7 @@ def AsteroidCheck(lc,monoparams,ID,order=3,dur_region=3.5,
             s2=np.fft.ifft(fou*g) #filtered spectrum = spectrum * bandpass 
             fft_model = np.real(s2)[np.argmin(abs(newt[:,np.newaxis] - bg_lc[:,0][np.newaxis,:]),axis=0)]
             #fft_model += np.polyval(init_poly, bg_lc[nearTrans,0]
-            print(len(fft_model),len(bg_lc[:,0]))
+            #print(len(fft_model),len(bg_lc[:,0]))
             
             #Checking model is actually a good fit around transit by doing 1D poly + FFT model vs 2D poly:
             bg_fft_model     = np.polyval(np.polyfit(bg_lc[nearTrans&outTransit,0],
@@ -1265,7 +1267,7 @@ def AsteroidCheck(lc,monoparams,ID,order=3,dur_region=3.5,
                                   bg_lc[:,0])
             llk_polyfit  = -0.5 * np.sum((bg_lc[nearTrans&outTransit,1] - bg_model[nearTrans&outTransit]) ** 2 / \
                                          sigma2[nearTrans&outTransit])
-            print("polyfit llk:", llk_polyfit, "fft llk:", llk_bg_model)
+            #print("polyfit llk:", llk_polyfit, "fft llk:", llk_bg_model)
             if llk_polyfit > llk_bg_model-1:
                 print("Earthshine model not useful in this case - polynomial model is better by", llk_polyfit - llk_bg_model)
                 fft_model=np.tile(0,len(bg_lc[:,0]))
@@ -1301,7 +1303,7 @@ def AsteroidCheck(lc,monoparams,ID,order=3,dur_region=3.5,
             #BIC = 2*(neg_log_likelihood-log_prior) + log(n_points)*n_params 
             nodip_res['bic'] = np.log(np.sum(nearTrans))*len(nodip_res['x']) - 2 * nodip_res['llk']
             
-            print('no dip:',nodip_res['bic'])
+            #print('no dip:',nodip_res['bic'])
             if nodip_res['bic']<best_nodip_res['bic']:
                 best_nodip_res=nodip_res
                 
@@ -1378,8 +1380,8 @@ def AsteroidCheck(lc,monoparams,ID,order=3,dur_region=3.5,
                                        ( fit_dict['asteroid_bg_stdr'] / np.sqrt(fit_dict['asteroid_dur']/cad) )
             #print(ID,"| Ran Asteroid fitting "+str(n)+" times, and DeltaBIC="+str(DeltaBIC),
             #      "| params:",best_dip_res['x'],best_nodip_res['x'])
-        else:
-            print(lc['bg_flux'][nearTrans]-fft_model[nearTrans])
+        #else:
+        #    print(lc['bg_flux'][nearTrans]-fft_model[nearTrans])
         if plot:
             if plot_loc is not None and type(plot_loc)!=str:
                 ax = plot_loc
@@ -1390,8 +1392,8 @@ def AsteroidCheck(lc,monoparams,ID,order=3,dur_region=3.5,
                     plot_loc=str(ID)+"_asteroid_check.pdf"
                 elif plot_loc[-1]=='/':
                     plot_loc=plot_loc+str(ID)+"_asteroid_check.pdf"
-                print("Plotting asteroid",ID, np.sum(bg_lc[nearTrans,1]/bg_lc[nearTrans,1]==1.0),
-                      len(bg_lc[nearTrans,1]),plot_loc,best_nodip_res)
+                #print("Plotting asteroid",ID, np.sum(bg_lc[nearTrans,1]/bg_lc[nearTrans,1]==1.0),
+                #      len(bg_lc[nearTrans,1]),plot_loc,best_nodip_res)
             if plot:
                 #### PLOTTING ###
                 ax.scatter(bg_lc[nearTrans,0],bg_lc[nearTrans,1],s=2,alpha=0.75,rasterized=True,zorder=1)
@@ -1463,7 +1465,7 @@ def VariabilityCheck(lc, params, ID, modeltype='all',plot=False,plot_loc=None,nd
     #mask = lc['mask'][np.isin(lc['time'],params['monofit_x'][abs(params['monofit_x']-params['tcen'])<ndurs*params['tdur']])]
     #assert len(mask)==len(x)
     
-    print(params['tdur'],np.sum(abs(x)>0.6*params['tdur']))
+    #print(params['tdur'],np.sum(abs(x)>0.6*params['tdur']))
     
     yerr = params['monofit_yerr'][round_trans]
     y_trans = params['monofit_ymodel'][round_trans]
@@ -1489,7 +1491,7 @@ def VariabilityCheck(lc, params, ID, modeltype='all',plot=False,plot_loc=None,nd
         methods=['L-BFGS-B','Nelder-Mead','Powell']
         n=0
         while n<21:
-            print(np.sum(outTransit))
+            #print(np.sum(outTransit))
             #Running the minimization 7 times with different initial params to make sure we get the best fit
             if np.sum(outTransit)>20:
                 rand_choice=np.random.random(len(x))<0.95
@@ -1845,7 +1847,7 @@ def CentroidCheck(lc,monoparams,interpmodel,ID,order=2,dur_region=3.5, plot=True
         centinfo={}
         centinfo['centroid_DeltaBIC']   = best_dip_res['bic'] - best_nodip_res['bic'] # dip is better < 0 < no dip is better
         centinfo['centroid_llk_ratio']  = best_dip_res['fun'] - best_nodip_res['fun']
-        print(best_dip_res)
+        #print(best_dip_res)
         if 'x' in best_dip_res:
             centinfo['x_centroid'] = best_dip_res['x'][0]*monoparams['depth']
             centinfo['y_centroid'] = best_dip_res['x'][1]*monoparams['depth']
@@ -1970,7 +1972,7 @@ def CheckPeriodConfusedPlanets(lc,all_dets,mono_mono=True,multi_multi=True,mono_
                     new_trans_arr2=((lc['time'][lc['mask']]-all_dets[perpl2]['tcen']+0.5*all_dets[perpl2]['tdur'])%all_dets[perpl2]['period'])<all_dets[perpl2]['tdur']
                     sum_overlap=np.sum(new_trans_arr&new_trans_arr2)
                     prox_arr=np.hypot(sum_overlap/np.sum(new_trans_arr),sum_overlap/np.sum(new_trans_arr2))
-                    print("Multi-multi compare",perpl,all_dets[perpl]['period'],perpl2,all_dets[perpl2]['period'],prox_arr)
+                    #print("Multi-multi compare",perpl,all_dets[perpl]['period'],perpl2,all_dets[perpl2]['period'],prox_arr)
                     if prox_arr>0.6:
                         #These overlap - taking the highest SNR signal
                         if all_dets[perpl]['snr']>all_dets[perpl2]['snr']:
@@ -2002,10 +2004,10 @@ def CheckPeriodConfusedPlanets(lc,all_dets,mono_mono=True,multi_multi=True,mono_
                     prox_stat=np.hypot(np.sum(trans_perdic&trans_mono)/np.sum(trans_perdic),
                                        np.sum(trans_perdic&trans_mono)/np.sum(trans_mono))
                     '''
-                    print("Multi-mono compare",perpl,all_dets[perpl]['tdur'],"|",monopl,all_dets[monopl]['tcen'],all_dets[monopl]['tdur'],prox_stat)
+                    #print("Multi-mono compare",perpl,all_dets[perpl]['tdur'],"|",monopl,all_dets[monopl]['tcen'],all_dets[monopl]['tdur'],prox_stat)
                     if prox_stat>0.33:
                         #These overlap - taking the highest SNR signal
-                        print("correlation - ",all_dets[perpl]['snr'],all_dets[monopl]['snr'])
+                        #print("correlation - ",all_dets[perpl]['snr'],all_dets[monopl]['snr'])
                         if all_dets[perpl]['snr']>=all_dets[monopl]['snr']:
                             all_dets[monopl]['orbit_flag']= 'FP - confusion with '+perpl
                         elif all_dets[perpl]['snr']<all_dets[monopl]['snr']:
@@ -2045,7 +2047,7 @@ def CheckMonoPairs(lc_time, all_pls,prox_thresh=3.5, **kwargs):
                     proxs[-1]+=(20*(Npts_in_tr/Npts_from_known_transits-1))**2
                     proxs[-1]/=(all_pls[m2]['snr']/all_pls[m1]['snr'])**0.5 #Including SNR factor - higher SNR is favoured
                     #print(m1,m2,all_pls[m1]['depth'],all_pls[m2]['depth'],all_pls[m1]['tdur'],all_pls[m2]['tdur'],Npts_in_tr,Npts_from_known_transits,(all_pls[m2]['snr']/all_pls[m1]['snr'])**0.5,proxs[-1])
-            print("Mono pair searching",m1,proxs)
+            #print("Mono pair searching",m1,proxs)
 
             #Taking the best-fitting lower-SNR detection which matches:
             proxs=np.array(proxs)
@@ -2057,7 +2059,7 @@ def CheckMonoPairs(lc_time, all_pls,prox_thresh=3.5, **kwargs):
                 for key in all_pls[m1]:
                     if key in all_pls[m2]:
                         if key=='period':
-                            print("tcens = ",all_pls[m1]['tcen'],all_pls[m2]['tcen'])
+                            #print("tcens = ",all_pls[m1]['tcen'],all_pls[m2]['tcen'])
                             newm1['period']=abs(all_pls[m1]['tcen']-all_pls[m2]['tcen'])
                         elif key in ['snr','snr_r']:
                             newm1[key]=np.hypot(all_pls[m1][key],all_pls[m2][key])
@@ -2071,7 +2073,7 @@ def CheckMonoPairs(lc_time, all_pls,prox_thresh=3.5, **kwargs):
                 check_pers_ix=np.tile(False,len(check_pers))
                 Npts_from_known_transits=np.sum(abs(lc_time-newm1['tcen'])<0.35*newm1['tdur']) + \
                                          np.sum(abs(lc_time-newm1['tcen_2'])<0.35*newm1['tdur'])
-                print("check pers duos",check_pers,Npts_from_known_transits)
+                #print("check pers duos",check_pers,Npts_from_known_transits)
                 for nper,per in enumerate(check_pers):
                     phase=(lc_time-newm1['tcen']-per*0.5)%per-per*0.5
                     Npts_in_tr=np.sum(abs(phase)<0.35*newm1['tdur'])
@@ -2084,7 +2086,7 @@ def CheckMonoPairs(lc_time, all_pls,prox_thresh=3.5, **kwargs):
                 else:
                     newm1['P_min'] = 999
 
-                print("period aliases:",newm1['period_aliases'],"P_min:",newm1['P_min'])
+                #print("period aliases:",newm1['period_aliases'],"P_min:",newm1['P_min'])
                 all_pls[m1]=newm1
                 all_pls[m2]['orbit_flag']='FP - Confusion with '+m1
                 all_pls[m2]['flag']='FP - confusion'
@@ -2552,7 +2554,7 @@ def get_interpmodels(Rs,Ms,Teff,lc_time,lc_flux_unit,mission='tess',n_durs=3,gap
 
 
 def VetCand(pl_dic,pl,ID,lc,mission,Rs=1.0,Ms=1.0,Teff=5800,
-            mono_SNR_thresh=6.5,mono_SNR_r_thresh=4.75,variable_llk_thresh=5,
+            mono_SNR_thresh=6.5,mono_SNR_r_thresh=5,variable_llk_thresh=5,
             plot=False,file_loc=None,vet_do_fit=True,return_fit_lcs=False,do_cent=True,**kwargs):
     #Best-fit model params for the mono transit:
     if pl_dic['orbit_flag']=='mono' and vet_do_fit:
@@ -2566,8 +2568,8 @@ def VetCand(pl_dic,pl,ID,lc,mission,Rs=1.0,Ms=1.0,Teff=5800,
             #Running with solar values:
             monoparams2 = QuickMonoFit(deepcopy(lc),pl_dic['tcen'],np.clip(pl_dic['tdur'],0.1,2),
                                                    Rs=1.0,Ms=1.0,Teff=Teff,how='mono',**kwargs)
-            print("Star-param-free model llk:",monoparams2['log_lik_mono'],"dur:",monoparams2['tdur'],
-                  "versus:",monoparams['log_lik_mono'],"dur:",monoparams2['tdur'])
+            #print("Star-param-free model llk:",monoparams2['log_lik_mono'],"dur:",monoparams2['tdur'],
+            #      "versus:",monoparams['log_lik_mono'],"dur:",monoparams2['tdur'])
             if monoparams2['log_lik_mono']>(monoparams['log_lik_mono']+5):
                 monoparams=monoparams2
 
@@ -3150,8 +3152,9 @@ def MonoVetting(ID, mission, tcen=None, tdur=None, overwrite=None, do_search=Tru
         output = PdfFileWriter()
         pdfPages=[]
         for figname in figs:
-            #print(figname,type(figs[figname]))
-            output.addPage(PdfFileReader(open(figs[figname], "rb")).getPage(0))
+            if figs[figname] is not None:
+                #print(figname,type(figs[figname]))
+                output.addPage(PdfFileReader(open(figs[figname], "rb")).getPage(0))
         outputStream = open(MonoData_savepath+'/'+ID_string+"/"+ID_string+'_report.pdf', "wb")
         output.write(outputStream)
         outputStream.close()
