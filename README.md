@@ -27,12 +27,16 @@ Pip install the necessary python modules in requirements.txt (to avoid this brea
 
 #### Using MonoTools
 
-See [Example.ipynb](https://github.com/hposborn/MonoTools/blob/master/Example.ipynb) for an example of how to use it.
-If that doesn't render, try [this nbviewer link](https://nbviewer.jupyter.org/github/hposborn/MonoTools/blob/master/Example.ipynb).
+For examples how to run the tools (e.g. lightcurve, stellar parameters, etc) and the search (monotransit search and vetting) functions, see [Search_Example.ipynb](https://github.com/hposborn/MonoTools/blob/master/Search_Example.ipynb).
 
-To run the entire process from the command line, use `python -m MonoTools.main 000ID00 MISSION`
+For examples on how to run the fitting code, see [Fit_Example.ipynb](https://github.com/hposborn/MonoTools/blob/master/Fit_Example.ipynb).
 
-![alt text](https://github.com/hposborn/MonoTools/blob/master/data/TIC00296737508/00296737508_model_plot.pdf)
+<!--See [Search_Example.ipynb](https://github.com/hposborn/MonoTools/blob/master/Example.ipynb) for an example of how to use it.-->
+<!--If that doesn't render, try [this nbviewer link](https://nbviewer.jupyter.org/github/hposborn/MonoTools/blob/master/Example.ipynb)-->
+
+<!--To run the entire process from the command line, you can use `python -m MonoTools.main 000ID00 MISSION`-->
+
+![alt text](https://github.com/hposborn/MonoTools/blob/master/data/TIC00270341214/00270341214_Monotransit_Search.png)
 
 <!--MonoTools natively includes eccentricity and fits for period (rather than scaled transit velocity as before).-->
 <!--The period prior can be applied according to your prefered index - P^-8/3 (as suggested by [Kipping et al](https://iopscience.iop.org/article/10.3847/2515-5172/aaf50c) ), or the less-steep P^-5/3 (as used by [Osborn et al 2016](https://academic.oup.com/mnras/article/457/3/2273/2588921) and [Sandford et al 2019](https://arxiv.org/abs/1908.08548))-->
