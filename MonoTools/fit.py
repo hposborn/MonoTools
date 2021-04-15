@@ -680,7 +680,7 @@ class monoModel():
         self.fit_params=self.fit_params+['omega'] if self.assume_circ and 'omega' not in self.fit_params else self.fit_params
         assert self.use_multinest^self.use_pymc3 #Must have either use_multinest or use_pymc3, though use_multinest doesn't work
         assert not (self.assume_circ and self.interpolate_v_prior) #Cannot interpolate_v_prior and assume circular.
-        assert not (len(self.duos+self.monos)>1) and hasattr(self,'rvs') #Cannot fit more than one planet with uncertain orbits with RVs (currently)
+        assert (len(self.duos+self.monos)>1)^hasattr(self,'rvs') #Cannot fit more than one planet with uncertain orbits with RVs (currently)
 
         n_pl=len(self.planets)
         assert n_pl>0
@@ -1786,7 +1786,7 @@ class monoModel():
             ################################################
 
             if self.debug: print("before",model.check_test_point())
-            map_soln = xo.optimize(start=start)#, vars=initvars0,verbose=True)
+            map_soln = xo.optimize(start=start, vars=initvars0,verbose=True)
             map_soln = xo.optimize(start=map_soln, vars=initvars1,verbose=True)
             map_soln = xo.optimize(start=map_soln, vars=initvars2,verbose=True)
             map_soln = xo.optimize(start=map_soln, vars=initvars3,verbose=True)
