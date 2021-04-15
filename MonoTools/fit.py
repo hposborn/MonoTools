@@ -113,7 +113,7 @@ class monoModel():
                        'pred_all_time':False,   # pred_all_time - bool - use the GP to predict all times, or only near transits?
                        'fit_params':['logror','b','tdur', 't0'], # fit_params - list of strings - fit these parameters. Options: ['logror', 'b' or 'tdur', 'ecc', 'omega']
 
-                       'marginal_params':['per','ecc','omega'], # marginal_params - list of strings - marginalise over these parameters. Options: ['per', 'b' or 'tdur', 'ecc', 'omega','logror']
+                       'marginal_params':['per','ecc','omega'], # marginal_params - list of strings - marginalise over these parameters. Options: ['per', 'b' ´or 'tdur', 'ecc', 'omega','logror']
                        'interpolate_v_prior':True, # Whether to use interpolation to produce transit velocity prior
                        'ecc_prior':'auto',      # ecc_prior - string - 'uniform', 'kipping' or 'vaneylen'. If 'auto' we decide based on multiplicity
                        'per_index':-8/3,        # per_index - float - period prior index e.g. P^{index}. -8/3 in to Kipping 2018
@@ -2425,9 +2425,9 @@ class monoModel():
                     f_phase[pl][n].plot(np.hstack((0,np.sort(self.rvs_to_plot['t'][pl][alias]['phase']),1)),
               np.hstack((0,self.rvs_to_plot['t'][pl][alias]['med'][np.argsort(self.rvs_to_plot['t'][pl][alias]['phase'])],0)),
                                         ':', color='C'+str(ncol-1-int(n)), rasterized=raster)
-                    print(K)
-                    print(np.max(self.rvs_to_plot['t'][pl][alias]['med']),
-                          np.min(self.rvs_to_plot['t'][pl][alias]['med']))
+                    #print(K)
+                    #print(np.max(self.rvs_to_plot['t'][pl][alias]['med']),
+                    #      np.min(self.rvs_to_plot['t'][pl][alias]['med']))
                     f_phase[pl][n].set_ylim(-1.75*K,1.75*K)
                     f_phase[pl][n].yaxis.tick_right()
                     f_phase[pl][n].set_ylabel("RV [m/s]")
