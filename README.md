@@ -22,9 +22,9 @@ Here we wrap the ["exoplanet"](http://github.com/dfm/exoplanet) core model to sp
 
 Run `git clone http://github.com/hposborn/MonoTools`
 Make sure the folder where MonoTools is installed is included in your `$PYTHONPATH`, e.g. by adding `export PYTHONPATH=/path/to/dir:$PYTHONPATH` to your `.bashrc` file.
+MonoTools will look at the `$MONOTOOLSPATH` bash variable as the location to store files, and defaults to `MonoTools/data`. Include this in your `.bashrc` file to modify this location. 
 
-Pip install the necessary python modules in requirements.txt (to avoid this breaking at the first warning, use `cat requirements.txt | xargs -n 1 pip install`). Ideally you should do this within a virtual environment.
-
+To install, I recommend using a virtual environment. Then `cd` into the MonoTools folder and run `pip install .`.
 
 #### Using MonoTools
 
