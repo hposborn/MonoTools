@@ -239,6 +239,7 @@ class monoModel():
             if 'ror' in pl_dic:
                 pl_dic['log_ror']=np.log(pl_dic['ror'])
             elif 'depth' in pl_dic:
+                assert pl_dic['depth']<0.25 #Depth must be a ratio (not in mmags)
                 pl_dic['ror']=pl_dic['depth']**0.5
                 pl_dic['log_ror']=np.log(pl_dic['ror'])
         if 'ror' not in pl_dic:
@@ -269,6 +270,7 @@ class monoModel():
             pl_dic['period_err'] = 0.5*pl_dic['tdur']/pl_dic['period']
         
         if 'ror' not in pl_dic:
+            assert pl_dic['depth']<0.25 #Depth must be a ratio (not in mmags)
             pl_dic['ror']=np.sqrt(pl_dic['depth']) if hasattr(self,'depth') else 0.025
 
         if 'b' not in pl_dic:
@@ -304,12 +306,14 @@ class monoModel():
             if 'ror' in pl_dic:
                 pl_dic['log_ror']=np.log(pl_dic['ror'])
             elif 'depth' in pl_dic:
+                assert pl_dic['depth']<0.25 #Depth must be a ratio (not in mmags)
                 pl_dic['ror']=pl_dic['depth']**0.5
                 pl_dic['log_ror']=np.log(pl_dic['ror'])
         pl_dic['ngaps']=len(p_gaps)
         
         if 'b' not in pl_dic and 'depth' in pl_dic:
             rho_S=self.rhostar[0] if hasattr(self,'rhostar') else 1.0
+            assert pl_dic['depth']<0.25 #Depth must be a ratio (not in mmags)
             ror=np.sqrt(pl_dic['depth']) if hasattr(self,'depth') else 0.0
             #Estimating b from simple geometry:
             pl_dic['b']=np.clip((1+pl_dic['ror'])**2 - (pl_dic['tdur']*86400)**2 * \
@@ -694,7 +698,7 @@ class monoModel():
         self.marginal_params=self.marginal_params+['K'] if hasattr(self,'rvs') and self.derive_K else self.marginal_params
         assert self.use_multinest^self.use_pymc3 #Must have either use_multinest or use_pymc3, though use_multinest doesn't work
         assert not (self.assume_circ and self.interpolate_v_prior) #Cannot interpolate_v_prior and assume circular.
-        assert (len(self.duos+self.monos)>1)^hasattr(self,'rvs') #Cannot fit more than one planet with uncertain orbits with RVs (currently)
+        assert not ((len(self.duos+self.monos)>1)*hasattr(self,'rvs')) #Cannot fit more than one planet with uncertain orbits with RVs (currently)
 
         n_pl=len(self.planets)
         assert n_pl>0
@@ -830,7 +834,7 @@ class monoModel():
             # Transit jitter & GP parameters
             #logs2 = pm.Normal("logs2", mu=np.log(np.var(y[m])), sd=10)
             lcrange=uselc['time'][-1]-uselc['time'][0]
-            #max_cad = np.nanmax([np.nanmedian(np.diff(uselc['time'][uselc['near_trans']&(uselc['cadence']==c)])) for c in self.cads])
+            max_cad = np.nanmax([np.nanmedian(np.diff(uselc['time'][uselc['near_trans']&(uselc['cadence']==c)])) for c in self.cads])
             av_dur = np.nanmean([self.planets[pl]['tdur'] for pl in self.planets])
             #freqs bounded from 2pi/minimum_cadence to to 2pi/(4x lc length)
             success=False;target=0.05
