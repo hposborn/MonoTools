@@ -1857,7 +1857,7 @@ class monoModel():
                 if hasattr(self,'trace') and continuesampling:
                     print("Using already-generated MCMC trace as start point for new trace")
                     self.trace = pm.sample(tune=n_burn_in, draws=n_draws, chains=chains, trace=self.trace,
-                                           step=xo.get_dense_nuts_step(target_accept=0.9),compute_convergence_checks=False)
+                                           step=xo.get_dense_nuts_step(target_accept=0.9), compute_convergence_checks=False)
                 else:
                     self.trace = pm.sample(tune=n_burn_in, draws=n_draws, start=self.init_soln, chains=chains,
                                            step=xo.get_dense_nuts_step(target_accept=0.9),compute_convergence_checks=False)
@@ -3346,10 +3346,11 @@ class monoModel():
                         plt.ylabel("$\log_{10}{\\rm prob}$")
                     else:
                         plt.ylabel("prob")
-                    plt.xlim(0,pmax)
+                    plt.xlim(0.5*np.min(self.planets[pl]['per_gaps']['gap_starts']),pmax)
                     if xlog:
                         plt.xscale('log')
-                        plt.xticks([20,40,60,80,100,150,200,250],np.array([20,40,60,80,100,150,200,250]).astype(str))
+                        plt.xticks([20,40,60,80,100,150,200,250,300,350,400,450,500,600,700],
+                                   np.array([20,40,60,80,100,150,200,250,300,350,400,450,500,600,700]).astype(str))
                         #plt.xticklabels([20,40,60,80,100,150,200,250])
 
                     #plt.xlim(60,80)
