@@ -3266,7 +3266,7 @@ class monoModel():
             else:
                 plt.savefig(plot_loc)
 
-    def PlotPeriods(self, plot_loc=None, log=True, nbins=25, pmax=None, ymin=None,xlog=False):
+    def PlotPeriods(self, plot_loc=None, ylog=True, nbins=25, pmax=None, ymin=None,xlog=False):
         assert hasattr(self,'trace')
         import seaborn as sns
         from scipy.special import logsumexp
@@ -3275,6 +3275,8 @@ class monoModel():
         plot_pers=self.duos+self.monos
         if ymin is None and len(self.duos)>0:
             ymin=np.min(np.hstack([np.nanmedian(self.trace['logprob_marg_'+pl],axis=0) for pl in self.duos]))/np.log(10)-2.0
+        elif ymin is None:
+            ymin=1e-12
         
         if len(plot_pers)>0:
             plt.figure(figsize=(8.5,4.2))
@@ -3341,18 +3343,21 @@ class monoModel():
                                  color=pal[6+ncol],histtype="stepfilled")
 
                     plt.title("Mono - "+str(pl))
-                    if log:
+                    if ylog:
                         plt.yscale('log')
                         plt.ylabel("$\log_{10}{\\rm prob}$")
+                        plt.ylim(ymin,1.0)
                     else:
                         plt.ylabel("prob")
-                    plt.xlim(0.5*np.min(self.planets[pl]['per_gaps']['gap_starts']),pmax)
+                    
                     if xlog:
                         plt.xscale('log')
-                        plt.xticks([20,40,60,80,100,150,200,250,300,350,400,450,500,600,700],
-                                   np.array([20,40,60,80,100,150,200,250,300,350,400,450,500,600,700]).astype(str))
+                        plt.xlim(0.5*np.min(self.planets[pl]['per_gaps']['gap_starts']),pmax)
+                        plt.xticks([20,40,60,80,100,150,200,250,300,350,400,450,500,600,800,1000,1500,2000,2500,3000],
+                                   np.array([20,40,60,80,100,150,200,250,300,350,400,450,500,600,800,1000,1500,2000,2500,3000]).astype(str))
                         #plt.xticklabels([20,40,60,80,100,150,200,250])
-
+                    else:
+                        plt.xlim(0,pmax)
                     #plt.xlim(60,80)
                     plt.ylim(1e-12,1.0)
                     plt.xlabel("Period [d]")
