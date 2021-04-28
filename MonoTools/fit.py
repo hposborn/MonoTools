@@ -1802,7 +1802,9 @@ class monoModel():
                     #initvars3+=[logMp_wrt_normals[pl]]
 
             if hasattr(self,'rvs'):
-                initvars3+=[rv_polys,rv_logs2,Ms]
+                if self.rv_npoly>1:
+                    initvars3+=[rv_polys]
+                initvars3+=[rv_logs2,Ms]
             
             if self.use_GP:
                 initvars3+=[logs2, power, w0, mean]
