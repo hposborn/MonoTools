@@ -795,23 +795,15 @@ def TESS_lc(tic, sectors='all',use_ppt=True, coords=None, use_qlp=None, use_elea
     if data_loc is None:
         data_loc=MonoData_savepath+"/TIC"+str(int(tic)).zfill(11)
     
-    epoch={1:'2018206045859_0120',2:'2018234235059_0121',3:'2018263035959_0123',4:'2018292075959_0124',
-           5:'2018319095959_0125',6:'2018349182459_0126',7:'2019006130736_0131',8:'2019032160000_0136',
-           9:'2019058134432_0139',10:'2019085135100_0140',11:'2019112060037_0143',12:'2019140104343_0144',
-           13:'2019169103026_0146',14:'2019198215352_0150',15:'2019226182529_0151',16:'2019253231442_0152',
-           17:'2019279210107_0161',18:'2019306063752_0162',19:'2019331140908_0164',20:'2019357164649_0165',
-           21:'2020020091053_0167',22:'2020049080258_0174',23:'2020078014623_0177',24:'2020106103520_0180',
-           25:'2020133194932_0182',26:'2020160202036_0188',27:'2020186164531_0189',28:'2020212050318_0190',
-           29:'2020238165205_0193',30:'2020266004630_0195',31:'2020294194027_0198',32:'2020324010417_0200',
-           33:'2020351194500_0203',34:'2021014023720_0204',35:'2021039152502_0205'}
-    sect_to_orbit={sect+1:[9+sect*2,10+sect*2] for sect in range(np.max(list(epoch.keys())))}
+    epoch=pd.read_csv(MonoData_tablepath+"/tess_lc_locations.csv",index_col=0)
+    sect_to_orbit={sect+1:[9+sect*2,10+sect*2] for sect in range(np.max(epoch.index))}
     lcs=[];lchdrs=[]
     if sectors == 'all':
         if coords is not None and type(coords)==SkyCoord:
             sect_obs=observed(coords)
         else:
             sect_obs=observed(tic)
-        epochs=[key for key in epoch if sect_obs[key]]
+        epochs=[key for key in epoch.index if sect_obs[key]]
         
         if epochs==[]:
             #NO EPOCHS OBSERVABLE APPARENTLY. USING THE EPOCHS ON EXOFOP/TIC8
@@ -820,7 +812,7 @@ def TESS_lc(tic, sectors='all',use_ppt=True, coords=None, use_qlp=None, use_elea
                 print("FOUND TIC IN TOI LIST")
                 epochs=list(np.array(toi_df.loc[toi_df['TIC ID']==tic,'Sectors'].values[0].split(',')).astype(int))
     elif type(sectors)==list or type(sectors)==np.ndarray:
-        epochs=[s for s in sectors if s<=np.max(list(epoch.keys()))]
+        epochs=[s for s in sectors if s<=np.max(epoch.index)]
     else:
         epochs=[sectors]
 
@@ -830,7 +822,7 @@ def TESS_lc(tic, sectors='all',use_ppt=True, coords=None, use_qlp=None, use_elea
     spoclcs={}
     for key in epochs:
         #2=minute cadence data from tess website
-        fitsloc="https://archive.stsci.edu/missions/tess/tid/s"+str(key).zfill(4)+"/"+str(tic).zfill(16)[:4]+"/"+str(tic).zfill(16)[4:8]+"/"+str(tic).zfill(16)[-8:-4]+"/"+str(tic).zfill(16)[-4:]+"/tess"+epoch[key].split('_')[0]+"-s"+str(key).zfill(4)+"-"+str(tic).zfill(16)+"-"+epoch[key].split('_')[1]+"-s_lc.fits"
+        fitsloc="https://archive.stsci.edu/missions/tess/tid/s"+str(key).zfill(4)+"/"+str(tic).zfill(16)[:4]+"/"+str(tic).zfill(16)[4:8]+"/"+str(tic).zfill(16)[-8:-4]+"/"+str(tic).zfill(16)[-4:]+"/tess"+str(epoch.loc[key,'date'])+"-s"+str(key).zfill(4)+"-"+str(tic).zfill(16)+"-"+str(epoch.loc[key,'runid']).zfill(4)+"-s_lc.fits"
         h = httplib2.Http()
         strtid=str(int(tic)).zfill(16)
         resp = h.request(fitsloc, 'HEAD')
