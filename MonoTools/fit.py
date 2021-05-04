@@ -2355,17 +2355,17 @@ class monoModel():
         
         marg_pl=(self.monos+self.duos)[nmargtoplot]
         #Here we'll choose the best RV curves to plot (in the case of mono/duos)
-        nbests[marg_pl] = self.n_margs[marg_pl] if plot_alias=='all' else nbest
+        nbests = self.n_margs[marg_pl] if plot_alias=='all' else nbest
         if hasattr(self,'trace'):
             ibest = np.nanmedian(self.trace['logprob_marg_'+marg_pl],axis=0).argsort()[-1*nbests:]
             heights = np.array([np.clip(np.nanmedian(self.trace['K_'+marg_pl][:,i]),0.5*averr,10000) for i in ibest])
         elif hasattr(self,'init_soln'):
             ibest = self.init_soln['logprob_marg_'+marg_pl].argsort()[-1*nbests:]
-            heights = np.array([np.clip(self.init_soln['K_'+marg_pl][i],0.5*averr,10000) for i in ibest[pl]])
+            heights = np.array([np.clip(self.init_soln['K_'+marg_pl][i],0.5*averr,10000) for i in ibest])
         if len(other_pls)==1:
             heights=np.max(heights)+list(np.array(heights)+np.max(heights))
         heights= np.round(heights[::-1]*24/np.sum(heights[::-1]))
-        heights_sort = np.hstack((0,np.cumsum(heights).astype(int)))+6*other_pls
+        heights_sort = np.hstack((0,np.cumsum(heights).astype(int)))+6*len(other_pls)
         print(heights_sort)
                     
         if interactive:
@@ -2382,18 +2382,19 @@ class monoModel():
         
         if not interactive:
             fig=plt.figure(figsize=(7*(0.5 * (1+np.sqrt(5))), 7))
+            print("gs init",heights_sort[-1],3*(3+len(all_pls_in_rvs)))
             gs = fig.add_gridspec(heights_sort[-1],3*(3+len(all_pls_in_rvs)),wspace=0.3,hspace=0.001)
             f_all_resids = fig.add_subplot(gs[int(np.floor(0.75*heights_sort[-1])):,:2*(3+len(all_pls_in_rvs))])
             #f_all_resids=fig.add_subplot(gs[4,:(2*len(all_pls_in_rvs))])
             f_alls=fig.add_subplot(gs[:int(np.floor(0.75*heights_sort[-1])),:2*(3+len(all_pls_in_rvs))],sharex=f_all_resids)
             #looping through each planet and each alias we want to plot:
             pl=(self.duos+self.monos)[nmargtoplot]
-            npl=1
-            for nplot in range(nbests[pl]):
-                #print(pl,npl,heights_sort[pl][::-1][nplot+1],"->",heights_sort[pl][::-1][nplot],",",
-                #          (2+npl)*(3+len(all_pls_in_rvs)),"->",(3+npl)*(3+len(all_pls_in_rvs)),"/",
-                #          heights_sort[pl][-1],3*(3+len(all_pls_in_rvs)))
-                #print(heights_sort[pl][::-1][nplot+1],heights_sort[pl][::-1][nplot])
+            npl=0
+            for nplot in range(nbests):
+                print(pl,npl,heights_sort[::-1][nplot+1],"->",heights_sort[::-1][nplot],",",
+                          (2+npl)*(3+len(all_pls_in_rvs)),"->",(3+npl)*(3+len(all_pls_in_rvs)),"/",
+                          heights_sort[-1],3*(3+len(all_pls_in_rvs)) )
+                print(heights_sort[::-1][nplot+1],heights_sort[::-1][nplot])
                 if nplot==0:
                     f_phase[pl]+=[fig.add_subplot(gs[heights_sort[::-1][nplot+1]:heights_sort[::-1][nplot],
                                                       (2+npl)*(3+len(all_pls_in_rvs)):(3+npl)*(3+len(all_pls_in_rvs))])]
@@ -2403,9 +2404,6 @@ class monoModel():
                                                    sharex=f_phase[pl][0])]
                 f_phase[pl][-1].yaxis.tick_right()
 
-                f_phase[pl]+=[fig.add_subplot(gs[heights_sort[::-1][nplot+1]:heights_sort[::-1][nplot],
-                                                  (2+npl)*(3+len(all_pls_in_rvs)):(3+npl)*(3+len(all_pls_in_rvs))],
-                                               sharex=f_phase[pl][0])]
             for n_oth,othpl in enumerate(other_pls):
                 f_phase[othpl]=fig.add_subplot(gs[(n_oth*6):((n_oth+1)*6),
                                                   (2+npl)*(3+len(all_pls_in_rvs)):(3+npl)*(3+len(all_pls_in_rvs))],
@@ -2534,8 +2532,9 @@ class monoModel():
                 other_plsx=np.zeros(len(self.rvs['time']))
                 other_plst=np.zeros(len(self.rvs_to_plot['t']['time']))
             
-            if pl in self.duos or pl in self.monos:
-                for n,alias in enumerate(ibest[pl]):
+            if pl==(self.duos+self.monos)[nmargtoplot]:
+                for n,alias in enumerate(ibest):
+                    print(pl,n,alias)
                     if hasattr(self,'trace'):
                         K=np.clip(np.nanmedian(self.trace['K_'+pl][:,alias]),averr,100000)
                     else:
@@ -2630,6 +2629,79 @@ class monoModel():
                     else:
                         if not interactive:
                             plt.setp(f_phase[pl][n].get_xticklabels(), visible=False)
+                
+            elif pl in other_pls:
+                if hasattr(self,'trace'):
+                    K=np.clip(np.nanmedian(self.trace['K_'+pl]),averr,100000)
+                else:
+                    K=np.clip(self.init_soln['K_'+pl],averr,100000)
+                    if interactive:
+                        sdbuffer=3
+                if interactive:
+                    errors = ColumnDataSource(data=dict(base=self.rvs_to_plot['x'][pl]['phase'],
+                                            lower=self.rvs['rv']-other_plsx-self.rvs_to_plot['x']['trend+offset']['med'] - self.rvs['rv_err'],
+                                            upper=self.rvs['rv']-other_plsx-self.rvs_to_plot['x']['trend+offset']['med'] + self.rvs['rv_err']))
+                    f_phase[pl].add_layout(Whisker(source=errors, base='base', upper='upper',lower='lower',
+                                                 line_color='#dddddd', line_alpha=0.5,
+                                                 upper_head=TeeHead(line_color='#dddddd',line_alpha=0.5),
+                                                 lower_head=TeeHead(line_color='#dddddd',line_alpha=0.5)))
+                    f_phase[pl].circle(self.rvs_to_plot['x'][pl]['phase'],
+                                          self.rvs['rv']-other_plsx-self.rvs_to_plot['x']['trend+offset']['med'],
+                                      color='C0', alpha=0.6, size=4)
+
+                    f_alls.circle(self.rvs_to_plot['t']['time'],
+                                self.rvs_to_plot['t']['trend']['med']+self.rvs_to_plot['t'][pl]['med'],
+                                c='C'+str(9-int(n)),label=str(np.round(p,1)),
+                                alpha=1.0)
+
+
+                    if '-2sig' in self.rvs_to_plot['t'][pl]:
+                        trband = ColumnDataSource(data=dict(
+                            base=np.hstack((0,np.sort(self.rvs_to_plot['t'][pl]['phase']),1)),
+       lower=np.hstack((0,self.rvs_to_plot['t'][pl]['-2sig'][np.argsort(self.rvs_to_plot['t'][pl]['phase'])],0)),
+       upper=np.hstack((0,self.rvs_to_plot['t'][pl]['+2sig'][np.argsort(self.rvs_to_plot['t'][pl]['phase'])],0))
+                                                           ))
+                        f_phase[pl].add_layout(Band(source=trband,base='base',lower='lower',upper='upper',
+                               level='underlay',fill_alpha=0.25, line_width=0.0, fill_color=pal[1]))
+                        trband = ColumnDataSource(data=dict(
+                            base=np.hstack((0,np.sort(self.rvs_to_plot['t'][pl]['phase']),1)),
+       lower=np.hstack((0,self.rvs_to_plot['t'][pl]['-1sig'][np.argsort(self.rvs_to_plot['t'][pl]['phase'])],0)),
+       upper=np.hstack((0,self.rvs_to_plot['t'][pl]['+1sig'][np.argsort(self.rvs_to_plot['t'][pl]['phase'])],0))
+                                                           ))
+                        f_phase[pl].add_layout(Band(source=trband,base='base',lower='lower',upper='upper',
+                                                  level='underlay',fill_alpha=0.25, line_width=0.0, fill_color=pal[2+n]))
+                        f_phase[pl].line(np.hstack((0,np.sort(self.rvs_to_plot['t'][pl]['phase']),1)),
+             np.hstack((0,self.rvs_to_plot['t'][pl]['marg']['med'][np.argsort(self.rvs_to_plot['t'][pl]['phase'])],0)),
+                                    color=pal[1])
+                        f_phase[pl].y_range=Range1d(-1.75*K,1.75*K)
+                else:
+                    f_alls.plot(self.rvs_to_plot['t']['time'],
+                                self.rvs_to_plot['t']['trend']['med']+self.rvs_to_plot['t'][pl]['marg']['med'],'-',
+                                c='C1',label=pl+'_'+str(np.round(per,1)),linewidth=3.0,
+                                alpha=0.4)
+
+                    f_phase[pl].errorbar(self.rvs_to_plot['x'][pl]['phase'],
+                                            self.rvs['rv']-other_plsx - self.rvs_to_plot['x']['trend+offset']['med'], 
+                                        yerr=self.rvs['rv_err'], fmt='.',c='C1',
+                                        alpha=0.75, markersize=8,ecolor='#bbbbbb', rasterized=raster)
+                    if '+2sig' in self.rvs_to_plot['t'][pl]:                        
+                        f_phase[pl].fill_between(np.hstack((0,np.sort(self.rvs_to_plot['t'][pl]['phase']),1)),
+              np.hstack((0,self.rvs_to_plot['t'][pl]['-2sig'][np.argsort(self.rvs_to_plot['t'][pl]['phase'])],0)),
+              np.hstack((0,self.rvs_to_plot['t'][pl]['+2sig'][np.argsort(self.rvs_to_plot['t'][pl]['phase'])],0)),
+                               alpha=0.25, color='C1', rasterized=raster)
+                        f_phase[pl].fill_between(np.hstack((0,np.sort(self.rvs_to_plot['t'][pl]['phase']),1)),
+              np.hstack((0,self.rvs_to_plot['t'][pl]['-1sig'][np.argsort(self.rvs_to_plot['t'][pl]['phase'])],0)),
+              np.hstack((0,self.rvs_to_plot['t'][pl]['+1sig'][np.argsort(self.rvs_to_plot['t'][pl]['phase'])],0)),
+                               alpha=0.25, color='C1', rasterized=raster)
+                    f_phase[pl].plot(np.hstack((0,np.sort(self.rvs_to_plot['t'][pl]['phase']),1)),
+              np.hstack((0,self.rvs_to_plot['t'][pl]['marg']['med'][np.argsort(self.rvs_to_plot['t'][pl]['phase'])],0)),
+                                        '-', color='C1', linewidth=3.0, rasterized=raster,alpha=0.4)
+
+                    f_phase[pl].set_ylim(-2.5*K,2.5*K)
+                    f_phase[pl].yaxis.tick_right()
+                    f_phase[pl].set_ylabel("RV [m/s]")
+                    f_phase[pl].yaxis.set_label_position("right")
+                    f_phase[pl].set_xlim(0.0,1)
                 
             f_all_resids.set_xlabel("Time [HJD-"+str(self.rvs['jd_base'])+"]")
             f_alls.set_ylabel("RVs [m/s]")
