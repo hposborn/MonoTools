@@ -1561,13 +1561,15 @@ class monoModel():
                         
                         if not hasattr(model,'nonmarg_rvs'):
                             if (len(self.multis)+len(self.rvplanets))>1:
-                                nonmarg_rvs = pm.Deterministic("nonmarg_rvs", (rv_trend + tt.sum([model_rvs[ipl] for ipl in self.multis+list(self.rvplanets.keys())],axis=1)).dimshuffle(0,'x'))
+                                nonmarg_rvs = pm.Deterministic("nonmarg_rvs", (rv_trend + tt.sum([model_rvs[ipl] for ipl in self.multis+list(self.rvplanets.keys())],axis=1)))
                             elif (len(self.multis)+len(self.rvplanets))==1:
                                 onlypl=self.multis+list(self.rvplanets.keys())
-                                nonmarg_rvs = pm.Deterministic("nonmarg_rvs",(rv_trend+model_rvs[onlypl[0]]).dimshuffle(0,'x'))
+                                nonmarg_rvs = pm.Deterministic("nonmarg_rvs",(rv_trend+model_rvs[onlypl[0]]))
                             else:
-                                nonmarg_rvs = pm.Deterministic("nonmarg_rvs",rv_trend.dimshuffle(0,'x'))                        
-
+                                nonmarg_rvs = pm.Deterministic("nonmarg_rvs",rv_trend)                        
+                        tt.printing.Print("nonmarg_rvs")(nonmarg_rvs)
+                        tt.printing.Print("self.rvs['rv'] - nonmarg_rvs")(self.rvs['rv'] - nonmarg_rvs)
+                        tt.printing.Print("BEFORE")(rv_trend + tt.sum([model_rvs[ipl] for ipl in self.multis+list(self.rvplanets.keys())],axis=1))
                         if pl in self.duos+self.monos:
                             #Mono or duo. Removing multi orbit if we have one:
                             Ks[pl] = pm.Deterministic("K_"+pl, tt.clip(tt.batched_tensordot(tt.tile(self.rvs['rv'] - nonmarg_rvs,(self.n_margs[pl],1)), normalised_rv_models[pl].T, axes=1) / tt.sum(normalised_rv_models[pl]**2,axis=0),0.05,1e5))
@@ -1684,13 +1686,13 @@ class monoModel():
                     if pl in self.duos+self.monos and hasattr(self,'rvs'):
                         if not hasattr(model,'nonmarg_rvs'):
                             if (len(self.multis)+len(self.rvplanets))>1:
-                                nonmarg_rvs = pm.Deterministic("nonmarg_rvs", (rv_trend + tt.sum([model_rvs[ipl] for ipl in self.multis+list(self.rvplanets.keys())],axis=1)).dimshuffle(0,'x'))
+                                nonmarg_rvs = pm.Deterministic("nonmarg_rvs", (rv_trend + tt.sum([model_rvs[ipl] for ipl in self.multis+list(self.rvplanets.keys())],axis=1)))
                             elif (len(self.multis)+len(self.rvplanets))==1:
                                 onlypl=self.multis+list(self.rvplanets.keys())
-                                nonmarg_rvs = pm.Deterministic("nonmarg_rvs",(rv_trend+model_rvs[onlypl[0]]).dimshuffle(0,'x'))
+                                nonmarg_rvs = pm.Deterministic("nonmarg_rvs",(rv_trend+model_rvs[onlypl[0]]))
                             else:
-                                nonmarg_rvs = pm.Deterministic("nonmarg_rvs",rv_trend.dimshuffle(0,'x'))                        
-                        rvlogliks[pl]=pm.Deterministic("rv_loglik_"+pl, tt.tile(sum_log_rverr,self.n_margs[pl]) - tt.sum((self.rvs['rv'][:,None] - (nonmarg_rvs + model_rvs[pl]))**2/(new_rverr.dimshuffle(0,'x')**2),axis=0))
+                                nonmarg_rvs = pm.Deterministic("nonmarg_rvs",rv_trend)                        
+                        rvlogliks[pl]=pm.Deterministic("rv_loglik_"+pl, tt.tile(sum_log_rverr,self.n_margs[pl]) - tt.sum((self.rvs['rv'][:,None] - (nonmarg_rvs.dimshuffle(0,'x') + model_rvs[pl]))**2/(new_rverr.dimshuffle(0,'x')**2),axis=0))
                     elif hasattr(self,'rvs'):
                         rvlogliks[pl] = pm.Deterministic("rv_loglik_"+pl, sum_log_rverr - tt.sum((self.rvs['rv'] - (model_rvs[pl] + rv_trend))**2/new_rverr**2))
 
@@ -2334,7 +2336,7 @@ class monoModel():
     
 
     def PlotRVs(self, interactive=False, plot_alias='best', nbest=4, n_samp=None, overwrite=False, return_fig=False, 
-                plot_loc=None, palette=None, pointcol='k', plottype='png',raster=False):
+                plot_loc=None, palette=None, pointcol='k', plottype='png',raster=False, nmargtoplot=0):
         ################################################################
         #     Varied plotting function for RVs of MonoTransit model
         ################################################################
@@ -2346,27 +2348,29 @@ class monoModel():
         self.init_plot(plottype='rv', pointcol=pointcol, ncols=ncol)
         
         if not hasattr(self,'rvs_to_plot') or n_samp!=self.rvs_to_plot['n_samp'] or overwrite:
-            self.init_rvs_to_plot(n_samp,plot_alias)
+            self.init_rvs_to_plot(n_samp, plot_alias)
 
         averr=np.nanmedian(self.rvs['rv_err'])
-        ibest={}
-        heights={};heights_sort={}
-        nbests={}
         
         all_pls_in_rvs=list(self.planets.keys())+list(self.rvplanets.keys())
         
-        for pl in all_pls_in_rvs:
-            nbests[pl] = self.n_margs[pl] if plot_alias=='all' else nbest
-            if hasattr(self,'trace'):
-                ibest[pl] = np.nanmedian(self.trace['logprob_marg_'+pl],axis=0).argsort()[-1*nbests[pl]:]
-                heights[pl] = np.array([np.clip(np.nanmedian(self.trace['K_'+pl][:,i]),0.5*averr,10000) for i in ibest[pl]])
-            elif hasattr(self,'init_soln'):
-                ibest[pl] = self.init_soln['logprob_marg_00'].argsort()[-1*nbests[pl]:]
-                heights[pl] = np.array([np.clip(self.init_soln['K_00'][i],0.5*averr,10000) for i in ibest[pl]])
-            
-            heights[pl] = np.round(heights[pl][::-1]*24/np.sum(heights[pl][::-1]))
-            heights_sort[pl] = np.hstack((0,np.cumsum(heights[pl]).astype(int)))
-
+        other_pls=self.multis+list(self.rvplanets.keys())
+        
+        marg_pl=(self.monos+self.duos)[nmargtoplot]
+        #Here we'll choose the best RV curves to plot (in the case of mono/duos)
+        nbests[marg_pl] = self.n_margs[marg_pl] if plot_alias=='all' else nbest
+        if hasattr(self,'trace'):
+            ibest = np.nanmedian(self.trace['logprob_marg_'+marg_pl],axis=0).argsort()[-1*nbests:]
+            heights = np.array([np.clip(np.nanmedian(self.trace['K_'+marg_pl][:,i]),0.5*averr,10000) for i in ibest])
+        elif hasattr(self,'init_soln'):
+            ibest = self.init_soln['logprob_marg_'+marg_pl].argsort()[-1*nbests:]
+            heights = np.array([np.clip(self.init_soln['K_'+marg_pl][i],0.5*averr,10000) for i in ibest[pl]])
+        if len(other_pls)==1:
+            heights=np.max(heights)+list(np.array(heights)+np.max(heights))
+        heights= np.round(heights[::-1]*24/np.sum(heights[::-1]))
+        heights_sort = np.hstack((0,np.cumsum(heights).astype(int)))+6*other_pls
+        print(heights_sort)
+                    
         if interactive:
             if plot_loc is None:
                 savename=self.savenames[0]+'_model_plot.html'
@@ -2381,25 +2385,35 @@ class monoModel():
         
         if not interactive:
             fig=plt.figure(figsize=(7*(0.5 * (1+np.sqrt(5))), 7))
-            gs = fig.add_gridspec(heights_sort[pl][-1],3*(3+len(all_pls_in_rvs)),wspace=0.3,hspace=0.001)
-            f_all_resids = fig.add_subplot(gs[int(np.floor(0.75*heights_sort[pl][-1])):,:2*(3+len(all_pls_in_rvs))])
+            gs = fig.add_gridspec(heights_sort[-1],3*(3+len(all_pls_in_rvs)),wspace=0.3,hspace=0.001)
+            f_all_resids = fig.add_subplot(gs[int(np.floor(0.75*heights_sort[-1])):,:2*(3+len(all_pls_in_rvs))])
             #f_all_resids=fig.add_subplot(gs[4,:(2*len(all_pls_in_rvs))])
-            f_alls=fig.add_subplot(gs[:int(np.floor(0.75*heights_sort[pl][-1])),:2*(3+len(all_pls_in_rvs))],sharex=f_all_resids)
+            f_alls=fig.add_subplot(gs[:int(np.floor(0.75*heights_sort[-1])),:2*(3+len(all_pls_in_rvs))],sharex=f_all_resids)
             #looping through each planet and each alias we want to plot:
-            for npl,pl in enumerate((self.duos+self.monos)[::-1]):
-                for nplot in range(nbests[pl]):
-                    #print(pl,npl,heights_sort[pl][::-1][nplot+1],"->",heights_sort[pl][::-1][nplot],",",
-                    #          (2+npl)*(3+len(all_pls_in_rvs)),"->",(3+npl)*(3+len(all_pls_in_rvs)),"/",
-                    #          heights_sort[pl][-1],3*(3+len(all_pls_in_rvs)))
-                    #print(heights_sort[pl][::-1][nplot+1],heights_sort[pl][::-1][nplot])
-                    if nplot==0:
-                        f_phase[pl]+=[fig.add_subplot(gs[heights_sort[pl][::-1][nplot+1]:heights_sort[pl][::-1][nplot],
-                                                          (2+npl)*(3+len(all_pls_in_rvs)):(3+npl)*(3+len(all_pls_in_rvs))])]
-                    else:
-                        f_phase[pl]+=[fig.add_subplot(gs[heights_sort[pl][::-1][nplot+1]:heights_sort[pl][::-1][nplot],
-                                                          (2+npl)*(3+len(all_pls_in_rvs)):(3+npl)*(3+len(all_pls_in_rvs))],
-                                                       sharex=f_phase[pl][0])]
-                    f_phase[pl][-1].yaxis.tick_right()
+            pl=(self.duos+self.monos)[nmargtoplot]
+            npl=1
+            for nplot in range(nbests[pl]):
+                #print(pl,npl,heights_sort[pl][::-1][nplot+1],"->",heights_sort[pl][::-1][nplot],",",
+                #          (2+npl)*(3+len(all_pls_in_rvs)),"->",(3+npl)*(3+len(all_pls_in_rvs)),"/",
+                #          heights_sort[pl][-1],3*(3+len(all_pls_in_rvs)))
+                #print(heights_sort[pl][::-1][nplot+1],heights_sort[pl][::-1][nplot])
+                if nplot==0:
+                    f_phase[pl]+=[fig.add_subplot(gs[heights_sort[::-1][nplot+1]:heights_sort[::-1][nplot],
+                                                      (2+npl)*(3+len(all_pls_in_rvs)):(3+npl)*(3+len(all_pls_in_rvs))])]
+                else:
+                    f_phase[pl]+=[fig.add_subplot(gs[heights_sort[::-1][nplot+1]:heights_sort[::-1][nplot],
+                                                      (2+npl)*(3+len(all_pls_in_rvs)):(3+npl)*(3+len(all_pls_in_rvs))],
+                                                   sharex=f_phase[pl][0])]
+                f_phase[pl][-1].yaxis.tick_right()
+
+                f_phase[pl]+=[fig.add_subplot(gs[heights_sort[::-1][nplot+1]:heights_sort[::-1][nplot],
+                                                  (2+npl)*(3+len(all_pls_in_rvs)):(3+npl)*(3+len(all_pls_in_rvs))],
+                                               sharex=f_phase[pl][0])]
+            for n_oth,othpl in enumerate(other_pls):
+                f_phase[othpl]=fig.add_subplot(gs[(n_oth*6):((n_oth+1)*6),
+                                                  (2+npl)*(3+len(all_pls_in_rvs)):(3+npl)*(3+len(all_pls_in_rvs))],
+                                               sharex=f_phase[pl][0])
+
             f_alls.plot(self.rvs_to_plot['t']['time'], self.rvs_to_plot['t']["trend"]["med"],c='C6')
             if "-2sig" in self.rvs_to_plot['t']["trend"]:
                 f_alls.fill_between(self.rvs_to_plot['t']['time'], self.rvs_to_plot['t']["trend"]["-2sig"],
@@ -2439,15 +2453,19 @@ class monoModel():
             #For Bokeh plots, we can just use the size in pixels
             f_all_resids=figure(width=800-200*len(all_pls_in_rvs), plot_height=150, title=None)
             f_alls=figure(width=800-200*len(all_pls_in_rvs), plot_height=350, title=None, x_range=f_all_resids.x_range)
-            for npl,pl in enumerate(all_pls_in_rvs[::-1]):
-                for nplot in range(nbests[pl])[::-1]:
-                    if nplot==nbests[pl]-1:
-                        f_phase[pl]+=[figure(width=140, plot_height=500*(heights_sort[pl][nplot+1]-heights_sort[pl][nplot])/heights_sort[pl][-1],
-                                              title=None, y_axis_location="right")]
-                        f_phase[pl][-1].xaxis.axis_label = 'Phase' 
-                    else:
-                        f_phase[pl]+=[figure(width=140, plot_height=500*(heights_sort[pl][nplot+1]-heights_sort[pl][nplot])/heights_sort[pl][-1],
-                                              title=None, y_axis_location="right")]+f_phase[pl]
+            pl=(self.duos+self.monos)[nmargtoplot]
+            npl=1
+            for nplot in range(nbests)[::-1]:
+                if nplot==nbests-1:
+                    f_phase[pl]+=[figure(width=140,plot_height=500*(heights_sort[nplot+1]-heights_sort[nplot])/heights_sort[-1],
+                                          title=None, y_axis_location="right")]
+                    f_phase[pl][-1].xaxis.axis_label = 'Phase' 
+                else:
+                    f_phase[pl]+=[figure(width=140,plot_height=500*(heights_sort[nplot+1]-heights_sort[nplot])/heights_sort[-1],
+                                          title=None, y_axis_location="right")]+f_phase[pl]
+            for n_oth,othpl in enumerate(other_pls):
+                f_phase[othpl]=figure(width=140,plot_height=500*6/heights_sort[-1],title=None, y_axis_location="right")
+
             for nc in range(len(self.rvs['scopes'])):
                 scope_ix=self.rvs['tele_index']==self.rvs['scopes'][nc]
                 f_alls.circle(self.rvs['time'][scope_ix], self.rvs['rv'][scope_ix]-self.rvs_to_plot['x']["offsets"]["med"][nc], 
