@@ -227,8 +227,10 @@ def QueryCats(n,ser,mission,APASS):
             nrby_apas=nrby_apas.rename(index={col:'ap_'+col for col in nrby_apas.index if col not in ser.index})
 
             alldattemp=alldattemp.append(nrby_apas.drop([col for col in ser.index if col in nrby_apas.index]))
-
-    dr=int(ser['designation'].decode("utf-8")[7])
+    try:
+        dr=int(ser['designation'].decode("utf-8")[7])
+    except:
+        dr=int(ser['designation'][7])
     gid=ser['source_id']
     #Now searching the cross-matched cats with the GAIA ID
     jobs={}
