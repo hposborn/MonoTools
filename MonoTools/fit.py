@@ -1567,9 +1567,6 @@ class monoModel():
                                 nonmarg_rvs = pm.Deterministic("nonmarg_rvs",(rv_trend+model_rvs[onlypl[0]]))
                             else:
                                 nonmarg_rvs = pm.Deterministic("nonmarg_rvs",rv_trend)                        
-                        tt.printing.Print("nonmarg_rvs")(nonmarg_rvs)
-                        tt.printing.Print("self.rvs['rv'] - nonmarg_rvs")(self.rvs['rv'] - nonmarg_rvs)
-                        tt.printing.Print("BEFORE")(rv_trend + tt.sum([model_rvs[ipl] for ipl in self.multis+list(self.rvplanets.keys())],axis=1))
                         if pl in self.duos+self.monos:
                             #Mono or duo. Removing multi orbit if we have one:
                             Ks[pl] = pm.Deterministic("K_"+pl, tt.clip(tt.batched_tensordot(tt.tile(self.rvs['rv'] - nonmarg_rvs,(self.n_margs[pl],1)), normalised_rv_models[pl].T, axes=1) / tt.sum(normalised_rv_models[pl]**2,axis=0),0.05,1e5))
