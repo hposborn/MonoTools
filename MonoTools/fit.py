@@ -3882,7 +3882,8 @@ class monoModel():
                         transits=np.nanpercentile(np.vstack([self.trace['t0_'+pl][nd]+ntr*self.trace['per_'+pl] for ntr in np.arange(trans_p0[nd],trans_p1[nd])]),percentiles,axis=1)
 
                         logprobs=np.array([0.0])
-                    idf=pd.DataFrame({'transit_mid_med':transits[2],
+                    idf=pd.DataFrame({'transit_mid_date':Time(transits[2]+self.lc['jd_base'],format='jd').isot,
+                                      'transit_mid_med':transits[2],
                                       'transit_dur_med':np.tile(dur[2],len(transits[2])),
                                       'transit_dur_-1sig':np.tile(dur[1],len(transits[2])),
                                       'transit_dur_+1sig':np.tile(dur[3],len(transits[2])),
