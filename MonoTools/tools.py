@@ -38,9 +38,9 @@ import glob
 import warnings
 warnings.filterwarnings("ignore")
 
-MonoData_tablepath = os.path.join(os.path.dirname(os.path.dirname( __file__ )),'data','tables')
+MonoData_tablepath = os.path.join(os.path.dirname(__file__),'data','tables')
 if os.environ.get('MONOTOOLSPATH') is None:
-    MonoData_savepath = os.path.join(os.path.dirname(os.path.dirname( __file__ )),'data')
+    MonoData_savepath = os.path.join(os.path.dirname( __file__ ),'data')
 else:
     MonoData_savepath = os.environ.get('MONOTOOLSPATH')
 
