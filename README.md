@@ -20,13 +20,15 @@ This uses a PyMC3/Theano back-end, a differentiable Keplerian orbital model, and
 
 Here we wrap the ["exoplanet"](http://github.com/dfm/exoplanet) core model to specify it for single transits, and plot/analyse the results.
 
-#### Downloading
+#### Installing
+To install, I recommend using a virtual environment, as some of the packages required are not at their most recent versions.
+MonoTools should be pip installable, therefore run `pip install MonoTools`.
 
-Run `git clone http://github.com/hposborn/MonoTools`
-Make sure the folder where MonoTools is installed is included in your `$PYTHONPATH`, e.g. by adding `export PYTHONPATH=/path/to/dir:$PYTHONPATH` to your `.bashrc` file.
+Alternatively, to run the most up-to-date development version, you can run `git clone http://github.com/hposborn/MonoTools`, `cd` into the MonoTools folder, then run `pip install .` (plus make sure the folder where MonoTools is installed is included in your `$PYTHONPATH`, e.g. by adding `export PYTHONPATH=/path/to/dir:$PYTHONPATH` to your `.bashrc` file).
+
 MonoTools will look at the `$MONOTOOLSPATH` bash variable as the location to store files, and defaults to `MonoTools/data`. Include this in your `.bashrc` file to modify this location.
 
-To install, I recommend using a virtual environment. Then `cd` into the MonoTools folder and run `pip install .`.
+Mac OSX users may need to make sure GCC is correctly installed (.e.g with `brew install gcc`) and C libraries are present.
 
 #### Using MonoTools
 
