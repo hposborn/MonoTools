@@ -30,9 +30,11 @@ To install, I recommend using a virtual environment. Then `cd` into the MonoTool
 
 #### Using MonoTools
 
-For examples how to run the tools (e.g. lightcurve, stellar parameters, etc) and the search (monotransit search and vetting) functions, see [Search_Example.ipynb](https://github.com/hposborn/MonoTools/blob/master/Search_Example.ipynb).
+For examples how to run the tools (e.g. lightcurve, stellar parameters, etc) and the search (monotransit search and vetting) functions, see [Search_Example.ipynb](https://github.com/hposborn/MonoTools/blob/master/examples/Search_Example.ipynb).
 
-For examples on how to run the fitting code, see [Fit_Example.ipynb](https://github.com/hposborn/MonoTools/blob/master/Fit_Example.ipynb).
+For examples on how to run the fitting code, see [Fit_Example.ipynb](https://github.com/hposborn/MonoTools/blob/master/examples/Fit_Example.ipynb).
+
+For info on how to include RVs in the fitting, see [Fit_with_RVs_Example.ipynb](https://github.com/hposborn/MonoTools/blob/master/examples/Fit_with_RVs_Example.ipynb).
 
 <!--See [Search_Example.ipynb](https://github.com/hposborn/MonoTools/blob/master/Example.ipynb) for an example of how to use it.-->
 <!--If that doesn't render, try [this nbviewer link](https://nbviewer.jupyter.org/github/hposborn/MonoTools/blob/master/Example.ipynb)-->
