@@ -59,7 +59,7 @@ extrafiles =['MonoTools/data/tables/GKSPCPapTable1_Final.txt',
 
 setup(
     name='MonoTools',
-    version='0.1.2',
+    version='0.1.3',
     description='A package for detecting, vetting and modelling transiting exoplanets on uncertain periods',
     url='https://github.com/hposborn/MonoTools',
     author='Hugh P. Osborn',
@@ -70,6 +70,7 @@ setup(
     project_urls={
         "Bug Tracker": "https://github.com/hposborn/MonoTools/issues",
     },
+    include_package_data=True,
     packages=['MonoTools'],
     package_data={'MonoTools': extrafiles},
     install_requires=['matplotlib',
