@@ -1,4 +1,5 @@
 from setuptools import setup
+import setuptools
 
 with open("README.md", "r", encoding="utf-8") as fh:
     long_description = fh.read()
@@ -57,7 +58,7 @@ extrafiles =['data/tables/GKSPCPapTable1_Final.txt',
              'stellar/isoclassify/examples/grid.ipynb',
              'stellar/isoclassify/examples/direct.ipynb']
 
-setup(
+setuptools.setup(
     name='MonoTools',
     version='0.1.3',
     description='A package for detecting, vetting and modelling transiting exoplanets on uncertain periods',
@@ -70,8 +71,7 @@ setup(
     project_urls={
         "Bug Tracker": "https://github.com/hposborn/MonoTools/issues",
     },
-    include_package_data=True,
-    packages=['MonoTools'],
+    packages=setuptools.find_packages(),
     package_data={'MonoTools': extrafiles},
     install_requires=['matplotlib',
                       'numpy',
