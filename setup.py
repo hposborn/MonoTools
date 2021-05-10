@@ -4,6 +4,25 @@ import setuptools
 with open("README.md", "r", encoding="utf-8") as fh:
     long_description = fh.read()
 
+extrafiles =['data/tables/GKSPCPapTable1_Final.txt.gz',
+             'data/tables/BolMag_interpolations.models',
+             'data/tables/Cheops_Quad_LDs.txt',
+             'data/tables/KeplerLDlaws.txt',
+             'data/tables/tess_lc_locations.csv',
+             'data/tables/GKSPCPapTable2_Final.txt.gz',
+             'data/tables/logprob_array_kip.txt.gz',
+             'data/tables/logprob_array_flat.txt.gz',
+             'data/tables/emarg_array_flat.txt.gz',
+             'data/tables/tessLDs.txt',
+             'data/tables/emarg_array_vve.txt.gz',
+             'data/tables/emarg_array_kip.txt.gz',
+             'data/tables/interpolated_functions_for_vcirc.pkl',
+             'data/tables/tces_per_cadence.txt.gz',
+             'data/tables/logprob_array_vve.txt.gz',
+             'data/tables/LogMePriorFromRe.txt',
+             'data/tables/Cheops_Quad_LDs_AllFeHs.txt',
+             'tests/test_fit.py']
+
 setuptools.setup(
     name='MonoTools',
     version='0.1.3',
