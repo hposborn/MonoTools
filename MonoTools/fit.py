@@ -3821,12 +3821,16 @@ class monoModel():
             else:
                 self.trace=loaded
     
-    def PredictFutureTransits(self, time_start, time_end, include_multis=False):
+    def PredictFutureTransits(self, time_start, time_end, include_multis=True):
         '''
-        # Return a dataframe of potential transits of Duo candidates between time_start & time_end dates.
+        # Return a dataframe of potential transits of all Duo candidates between time_start & time_end dates.
         # time_start - Astropy.Time date or julian date (in same base as lc) for the start of the observing period
         # time_end - Astropy.Time date or julian date for the start of the period we might want to observe aliases
-        # include_multis - boolean - default:False - whether to also generate transits for multi-transiting planets.
+        # include_multis - boolean - default:True - whether to also generate transits for multi-transiting planets.
+        #
+        #
+        e.g. after running model.RunMcmc():
+        df = model.PredictFutureTransits(Time('2021-06-01T00:00:00.000',format='isot'),Time('2021-10-01T00:00:00.000',format='isot'))
         '''
         from astropy.time import Time
         import fractions

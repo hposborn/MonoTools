@@ -1,16 +1,24 @@
 from setuptools import setup
 
+with open("README.md", "r", encoding="utf-8") as fh:
+    long_description = fh.read()
+
 setup(
     name='MonoTools',
-    version='0.1.0',    
+    version='0.1.0',
     description='A package for detecting, vetting and modelling transiting exoplanets on uncertain periods',
     url='https://github.com/hposborn/MonoTools',
     author='Hugh P. Osborn',
     author_email='hugh.osborn@space.unibe.ch',
+    long_description=long_description,
+    long_description_content_type="text/markdown",
     license='BSD 2-clause',
+    project_urls={
+        "Bug Tracker": "https://github.com/hposborn/MonoTools/issues",
+    },
     packages=['MonoTools'],
     install_requires=['matplotlib',
-                      'numpy',  
+                      'numpy',
                       'pandas',
                       'scipy',
                       'astropy',
@@ -29,6 +37,7 @@ setup(
                       'ipython',
                       'bokeh',
                       'corner',
+                      'batman-package==2.4.7',
                       'transitleastsquares',
                       'eleanor',
                       'seaborn',

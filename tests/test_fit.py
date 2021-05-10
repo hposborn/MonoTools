@@ -49,7 +49,7 @@ class TestModelFit(unittest.TestCase):
                     'mono_ecc':0.001,'mono_omega':0.4,'mono_tdur':4/24,'mono_b':0.3,'mono_K':12.5,
                     'duo_period':33.61,'duo_t0':105.57,'duo_depth':0.003,'duo_tdur':0.2,
                     'duo_ecc':0.001,'duo_omega':0.4,'duo_b':0.6,'duo_K':8.25,
-                    'multi_period':8.4789,'multi_t0':101.7892,'multi_depth':0.0014,
+                    'multi_period':8.4789,'multi_t0':101.7892,'multi_depth':0.0014,'multi_tdur':0.13,
                     'multi_ecc':0.05,'multi_omega':0.4,'multi_b':0.12,'multi_K':3.25,
                     'nontr_period':4.822,'nontr_t0':106.7892,
                     'nontr_ecc':0.05,'nontr_omega':0.4,'nontr_K':2.5,
