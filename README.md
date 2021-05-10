@@ -12,6 +12,8 @@ MonoSearch includes scripts specifically for searching and assessing a lightcurv
  - Fitting planets in a Bayesian way to account for uncertain periods (i.e. mono or duo-transits), lightcurve gaps, stellar variability, etc.
  - Compiling all the steps and various plots into a report for each planet candidate
 
+Full documentation is are taking shape at [readthedocs](https://monotools.readthedocs.io/en/latest/).
+
 MonoTools.fit is an update to my [previous Namaste code](http://github.com/hposborn/Namaste) using the ["exoplanet" models of Dan Foreman-Mackey et al](http://github.com/dfm/exoplanet).
 
 This uses a PyMC3/Theano back-end, a differentiable Keplerian orbital model, and the Gaussian process modeling of [Celerite](http://github.com/dfm/celerite) to fit exoplanetary transits.
@@ -22,7 +24,7 @@ Here we wrap the ["exoplanet"](http://github.com/dfm/exoplanet) core model to sp
 
 Run `git clone http://github.com/hposborn/MonoTools`
 Make sure the folder where MonoTools is installed is included in your `$PYTHONPATH`, e.g. by adding `export PYTHONPATH=/path/to/dir:$PYTHONPATH` to your `.bashrc` file.
-MonoTools will look at the `$MONOTOOLSPATH` bash variable as the location to store files, and defaults to `MonoTools/data`. Include this in your `.bashrc` file to modify this location. 
+MonoTools will look at the `$MONOTOOLSPATH` bash variable as the location to store files, and defaults to `MonoTools/data`. Include this in your `.bashrc` file to modify this location.
 
 To install, I recommend using a virtual environment. Then `cd` into the MonoTools folder and run `pip install .`.
 
