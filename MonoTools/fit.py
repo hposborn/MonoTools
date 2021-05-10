@@ -954,12 +954,15 @@ class monoModel():
     
     def init_interpolated_v_prior(self):
         #Initialising the interpolated functions for log prob vs log velocity and marginalised eccentricity vs log velocity
+        import gzip
+        import io
         
         #Four potential sources of data:
         interp_locs={'kipping':"kip", 'vaneylen':"vve",'flat':"flat",'apogee':'apo'}
         interp_locs['auto']='vve' if len(self.planets)>1 else 'kip'
-        
-        emarg_arr  = np.genfromtxt(os.path.join(MonoData_tablepath,"emarg_array_"+interp_locs[self.ecc_prior.lower()]+".txt"))
+        f_emarg=gzip.open(os.path.join(MonoData_tablepath,
+                                                  "emarg_array_"+interp_locs[self.ecc_prior.lower()]+".txt.gz"), "rb")
+        emarg_arr  = np.genfromtxt(io.BytesIO(f_emarg.read()))
         #pd.read_csv(os.path.join(MonoData_tablepath,"emarg_array_"+interp_locs[self.ecc_prior.lower()]+".csv"),
         #                          index_col=0)
         emarg_arr  = np.nan_to_num(emarg_arr,1.025)
@@ -969,8 +972,11 @@ class monoModel():
                                                                       np.column_stack((np.tile(1.025,len(emarg_arr[1:,0])),
                                                                                        emarg_arr[1:,1:]))[:,:,None],
                                                                       nout=1)
+        f_logprob=gzip.open(os.path.join(MonoData_tablepath,
+                                         "logprob_array_"+interp_locs[self.ecc_prior.lower()]+".txt.gz"),"rb")
+        logprob_arr=np.genfromtxt(io.BytesIO(f_logprob.read()))
         
-        logprob_arr=np.genfromtxt(os.path.join(MonoData_tablepath,"logprob_array_"+interp_locs[self.ecc_prior.lower()]+".txt"))
+        np.genfromtxt(os.path.join(MonoData_tablepath,"logprob_array_"+interp_locs[self.ecc_prior.lower()]+".txt"))
         #logprob_arr = pd.read_csv(os.path.join(MonoData_tablepath,"logprob_array_"+interp_locs[self.ecc_prior.lower()]+".csv"),
         #                          index_col=0)
         #Rewriting infinite or nan values as <-300:

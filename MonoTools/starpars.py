@@ -1290,8 +1290,12 @@ def getStellarInfoFromCsv(ID,mission,radec=None,k2tab=None,keptabs=None,use_isoc
                 radec=None
 
             if keptabs is None:
-                keptabs=[ascii.read(os.path.join(MonoData_tablepath,'GKSPCPapTable1_Final.txt'),delimiter='&').to_pandas(),
-                         ascii.read(os.path.join(MonoData_tablepath,'GKSPCPapTable2_Final.txt'),delimiter='&').to_pandas()]
+                import io
+                import gzip
+                f1 = gzip.open(os.path.join(MonoData_tablepath,'GKSPCPapTable1_Final.txt.gz'),'rb')
+                f2 = gzip.open(os.path.join(MonoData_tablepath,'GKSPCPapTable2_Final.txt.gz'),'rb')
+                keptabs=[ascii.read(io.BytesIO(f1.read()),delimiter='&').to_pandas(),
+                         ascii.read(io.BytesIO(f2.read()),delimiter='&').to_pandas()]
             if ID in keptabs[0]['KIC'].values:
                 info1=keptabs[0].loc[keptabs[0]['KIC']==ID]
                 info2=keptabs[1].loc[keptabs[1]['KIC']==ID]

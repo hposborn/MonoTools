@@ -1674,7 +1674,10 @@ def CheckInstrumentalNoise(lc,monodic,jd_base=None, **kwargs):
     - lc
     - monotransit dic
     - jd_base (assumed to be that of TESS)'''
-    tces_per_cadence=np.loadtxt(MonoData_tablepath+'/tces_per_cadence.txt')
+    import io
+    import gzip
+    f=gzip.open(MonoData_tablepath+'/tces_per_cadence.txt.gz','rb')
+    tces_per_cadence=np.loadtxt(io.BytesIO(f.read()))
     if 'jd_base' in lc and jd_base is None:
         jd_base=lc['jd_base']
     elif jd_base is None:
