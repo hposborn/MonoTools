@@ -12,10 +12,10 @@ authors:
     orcid: 0000-0002-4047-4724
     affiliation: 1, 2
 
-
 affiliations:
  - name: NCCR/Planet S, Centre for Space and Habitability, University of Bern, Switzerland
    index: 1
+
  - name: Kavli Institute for Space Sciences, Massacussets Institute of Technology, Cambridge, MA, USA
    index: 2
 date: 1 June 2021
@@ -28,8 +28,8 @@ bibliography: paper.bib
 The transit method has proved the most productive technique for detecting extrasolar planets, especially since the era of space-based photometric survey missions began with *CoRoT* [@auvergne2009corot] and *Kepler* [@borucki2010kepler] in the late 2000s.
 This continued with *K2* [@howell2014k2] and *TESS* [@ricker2014transiting], and will extend into the 2030s with *PLATO* [@rauer2014plato].
 Typically, the planets detected by these surveys show multiple consecutive transits.
-This means planet candidates are most often detected through algorithms which search the frequency domain [e.g. @kovacs2002box, @hippke2019optimized], vetted using metrics that require multiple detected transits [e.g. @thompson2018planetary, @shallue2018identifying], and modelled (and sometimes statistically validated) using the assumption that the orbital period is well-constrained and approximated by a Gaussian distribution [e.g. @eastman2013exofast, @morton2012efficient].
-However, planet candidates continue to be found that do not show multiple consecutive transits - the single (or "Mono-") transits [e.g. @wang2015planet, @osborn2016single, @gill2020ngts].
+This means planet candidates are most often detected through algorithms which search the frequency domain [e.g.; @kovacs2002box; @hippke2019optimized], vetted using metrics that require multiple detected transits [e.g.; @thompson2018planetary; @shallue2018identifying], and modelled (and sometimes statistically validated) using the assumption that the orbital period is well-constrained and approximated by a Gaussian distribution [e.g.; @eastman2013exofast; @morton2012efficient].
+However, planet candidates continue to be found that do not show multiple consecutive transits - the single (or "Mono-") transits [e.g.; @wang2015planet; @osborn2016single; @gill2020ngts].
 For these transit candidates - where orbital period is not a priori known from the detection - a special approach to exoplanet detection, vetting and modelling must be taken.
 
 In this work, we detail ``MonoTools``, a python package capable of performing detection, vetting and modelling of Mono (and Duo) transit candidates.
