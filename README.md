@@ -32,9 +32,9 @@ Mac OSX users may need to make sure GCC is correctly installed (.e.g with `brew 
 
 #### Using MonoTools
 
-For examples how to run the tools (e.g. lightcurve, stellar parameters, etc) and the search (monotransit search and vetting) functions, see [Search_Example.ipynb](https://github.com/hposborn/MonoTools/blob/master/examples/Search_Example.ipynb).
+For examples how to run the tools (e.g. lightcurve, stellar parameters, etc) and the search (monotransit search and vetting) functions, see [Search_Example.ipynb](https://github.com/hposborn/MonoTools/blob/master/MonoTools/examples/Search_Example.ipynb).
 
-For examples on how to run the fitting code, see [Fit_Example.ipynb](https://github.com/hposborn/MonoTools/blob/master/examples/Fit_Example.ipynb).
+For examples on how to run the fitting code, see [Fit_Example.ipynb](https://github.com/hposborn/MonoTools/blob/master/MonoTools/examples/Fit_Example.ipynb).
 
 For info on how to include RVs in the fitting, see [Fit_with_RVs_Example.ipynb](https://github.com/hposborn/MonoTools/blob/master/examples/Fit_with_RVs_Example.ipynb).
 

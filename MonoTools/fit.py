@@ -691,7 +691,7 @@ class monoModel():
             rv_dic['rv_unit']='ms'
         elif 'rv_unit' not in rv_dic or rv_dic['rv_unit']!='ms':
             print("Assuming RV unit is in m/s")
-        if 'tele_index' not in rv_dic or (rv_dic['tele_index'])!=len(rv_dic['time']):
+        if 'tele_index' not in rv_dic or len(rv_dic['tele_index'])!=len(rv_dic['time']):
             print("Assuming all one telescope (HARPS).")
             rv_dic['tele_index']=np.tile('h',len(rv_dic['time']))
         rv_dic['scopes'] = np.unique(rv_dic['tele_index'])
@@ -1422,7 +1422,7 @@ class monoModel():
             ################################################
             #  Creating function to generate transit models
             ################################################
-            def gen_lc(i_orbit, i_r, n_pl, mask=None,prefix='',make_deterministic=False):
+            def gen_lc(i_orbit, i_rpl, n_pl, mask=None,prefix='',make_deterministic=False):
                 # Short method to create stacked lightcurves, given some input time array and some input cadences:
                 # This function is needed because we may have
                 #   -  1) multiple cadences and
@@ -1432,9 +1432,9 @@ class monoModel():
                 cad_index=[]
 
                 if n_pl>1:
-                    r=tt.tile(i_r,n_pl)
+                    r=tt.tile(i_rpl,n_pl)
                 else:
-                    r=i_r
+                    r=i_rpl
 
                 for cad in self.cads:
                     cadmask=mask&(lc['cadence']==cad)
@@ -1532,19 +1532,19 @@ class monoModel():
                 #Making orbit and lightcurve(s)
                 if self.assume_circ:
                     orbits[pl] = create_orbit(pl, Rs, rho_S, pers[pl], t0s[pl], bs[pl], n_marg=self.n_margs[pl])
-                    light_curves[pl] = gen_lc(orbits[pl], rors[pl], self.n_margs[pl], mask=None,
+                    light_curves[pl] = gen_lc(orbits[pl], rpls[pl]/109.2, self.n_margs[pl], mask=None,
                                               prefix=pl+'_', make_deterministic=True)
                 elif self.interpolate_v_prior and pl in self.duos+self.monos:
                     #  We only need to create one orbit if we're not marginalising over N periods
                     #      (i.e. when we only have the lightcurve and we're interpolating a velocity prior)
                     orbits[pl] = create_orbit(pl, Rs, rho_S, pers[pl][tt.argmin(min_eccs[pl])], t0s[pl], bs[pl], n_marg=1,
                                               omegas=omegas[pl][tt.argmin(min_eccs[pl])], eccs=tt.min(min_eccs[pl]))
-                    light_curves[pl] = gen_lc(orbits[pl], rors[pl], 1, mask=None,
+                    light_curves[pl] = gen_lc(orbits[pl], rpls[pl]/109.2, 1, mask=None,
                                               prefix=pl+'_', make_deterministic=True)
                 else:
                     orbits[pl] = create_orbit(pl, Rs, rho_S, pers[pl], t0s[pl], bs[pl], n_marg=self.n_margs[pl],
                                               eccs=eccs[pl], omegas=omegas[pl])
-                    light_curves[pl] = gen_lc(orbits[pl], rors[pl], 1, mask=None,
+                    light_curves[pl] = gen_lc(orbits[pl], rpls[pl]/109.2, 1, mask=None,
                                               prefix=pl+'_', make_deterministic=pl in self.multis)
                 if hasattr(self,'rvs'):
                     if pl in self.duos+self.monos and self.interpolate_v_prior:
@@ -2005,7 +2005,7 @@ class monoModel():
                                        savefileloc=None, tracemask=tracemask)
 
 
-    def init_gp_to_plot(self,n_samp=7,max_gp_len=12000):
+    def init_gp_to_plot(self, n_samp=7, max_gp_len=12000):
         n_samp = 7 if n_samp is None else n_samp
         print("Initalising GP models for plotting with n_samp=",n_samp)
         import celerite
@@ -2101,13 +2101,12 @@ class monoModel():
                                      np.sqrt(self.lc['flux_err'][limit_mask_bool[n][nc]]**2 + \
                                       np.dot(self.lc['flux_err_index'][limit_mask_bool[n][nc]], np.exp(sample['logs2']))))
                         marg_lc=np.tile(0.0,len(self.lc['time']))
-                        if hasattr(self,'pseudo_binlc') and len(self.trans_to_plot_i['all']['med'])==len(self.pseudo_binlc['time']):
+                        if hasattr(self,'pseudo_binlc') and len(self.trans_to_plot['all']['med'])==len(self.pseudo_binlc['time']):
                             marg_lc[self.lc['near_trans']]=sample['marg_all_lc_model'][self.pseudo_binlc['near_trans']]
-                        elif hasattr(self,'lc_near_trans') and len(self.trans_to_plot_i['all']['med'])==len(self.lc_near_trans['time']):
+                        elif hasattr(self,'lc_near_trans') and len(self.trans_to_plot['all']['med'])==len(self.lc_near_trans['time']):
                             marg_lc[self.lc['near_trans']]=sample['marg_all_lc_model'][key1][key2]
-                        elif len(self.trans_to_plot_i['all']['med'])==len(self.lc['time']):
+                        elif len(self.trans_to_plot['all']['med'])==len(self.lc['time']):
                             marg_lc[self.lc['near_trans']]=sample['marg_all_lc_model'][key1][key2][self.lc['near_trans']]
-
 
                         #marg_lc[self.lc['near_trans']]=sample['marg_all_lc_model'][self.lc['near_trans']]
                         ii_gp_pred, ii_gp_var= i_gp.predict(self.lc['flux'][limit_mask_bool[n][nc]] - marg_lc[limit_mask_bool[n][nc]],
@@ -3727,7 +3726,7 @@ class monoModel():
 
         if cols=='all':
             #Removing lightcurve, GP and reparameterised hyper-param columns
-            cols_to_remove=['gp_', '_gp', 'light_curve','__']
+            cols_to_remove=['gp_', '_gp', 'light_curve','__','model_rv','marg_all_lc','marg_all_rv']
             if short:
                 #If we want just the short table, let's remove those params which we derived and which we marginalised
                 cols_to_remove+=['mono_uniform_index','logliks','_priors','logprob_marg','mean', 'logrho_S']
@@ -3844,9 +3843,9 @@ class monoModel():
         assert hasattr(self,'trace') #We need to have run Mcmc to have samples first.
 
         if type(time_start)==Time:
-            time_start = time_start.jd - self.lc['jd_base']
-            time_end   = time_start.jd - self.lc['jd_base']
             print("time range",time_start.isot,"->",time_end.isot)
+            time_start = time_start.jd - self.lc['jd_base']
+            time_end   = time_end.jd - self.lc['jd_base']
         elif type(time_start) in [int, np.int64, float, np.float64] and abs(time_start-np.nanmedian(self.trace['t0_'+list(self.planets.keys())[0]]))>5000:
             #This looks like a proper julian date. Let's reformat to match the lightcurve
             time_start -= self.lc['jd_base']
@@ -3860,18 +3859,20 @@ class monoModel():
 
         all_trans=pd.DataFrame()
         loopplanets = self.duos+self.multis if include_multis else self.duos
+        all_trans=pd.DataFrame()
         for pl in loopplanets:
             if pl in self.duos:
                 sum_all_probs=np.logaddexp.reduce(np.nanmedian(self.trace['logprob_marg_'+pl],axis=0))
                 trans_p0=np.floor(np.nanmedian(time_start - self.trace['t0_2_'+pl])/np.nanmedian(self.trace['per_'+pl],axis=0))
                 trans_p1=np.ceil(np.nanmedian(time_end -  self.trace['t0_2_'+pl])/np.nanmedian(self.trace['per_'+pl],axis=0))
+                n_trans=trans_p1-trans_p0
             elif pl in self.multis:
-                trans_p0=np.floor(np.nanmedian(time_start - self.trace['t0_'+pl])/np.nanmedian(self.trace['per_'+pl],axis=0))
-                trans_p1=np.ceil(np.nanmedian(time_end -  self.trace['t0_'+pl])/np.nanmedian(self.trace['per_'+pl],axis=0))
+                trans_p0=[np.floor(np.nanmedian(time_start - self.trace['t0_'+pl])/np.nanmedian(self.trace['per_'+pl],axis=0))]
+                trans_p1=[np.ceil(np.nanmedian(time_end -  self.trace['t0_'+pl])/np.nanmedian(self.trace['per_'+pl],axis=0))]
+                n_trans=[trans_p1[0]-trans_p0[0]]
+            print(pl,trans_p0,trans_p1,n_trans)
             #print(np.nanmedian(self.trace['t0_2_'+pl])+np.nanmedian(self.trace['per_'+pl],axis=0)*trans_p0)
             #print(np.nanmedian(self.trace['t0_2_'+pl])+np.nanmedian(self.trace['per_'+pl],axis=0)*trans_p1)
-            n_trans=trans_p1-trans_p0
-            all_trans=pd.DataFrame()
 
             nms=['-2sig','-1sig','med','+1sig','+2sig']
             percentiles=(2.2750132, 15.8655254, 50., 84.1344746, 97.7249868)
@@ -3879,7 +3880,7 @@ class monoModel():
             #Getting the important trace info (tcen, dur, etc) for each alias:
             if 'tdur' in self.fit_params or pl in self.multis:
                 dur=np.nanpercentile(self.trace['tdur_'+pl],percentiles)
-            naliases=[1] if pl in self.multis else np.arange(self.planets[pl]['npers'])
+            naliases=[0] if pl in self.multis else np.arange(self.planets[pl]['npers'])
             for nd in naliases:
                 if n_trans[nd]>0:
                     if pl in self.duos:
@@ -3889,7 +3890,7 @@ class monoModel():
                             dur=np.nanpercentile(self.trace['tdur_'+pl][:,nd],percentiles)
                         logprobs=np.nanmedian(self.trace['logprob_marg_'+pl][:,nd])-sum_all_probs
                     else:
-                        transits=np.nanpercentile(np.vstack([self.trace['t0_'+pl][nd]+ntr*self.trace['per_'+pl] for ntr in np.arange(trans_p0[nd],trans_p1[nd])]),percentiles,axis=1)
+                        transits=np.nanpercentile(np.vstack([self.trace['t0_'+pl]+ntr*self.trace['per_'+pl] for ntr in np.arange(trans_p0[nd],trans_p1[nd])]),percentiles,axis=1)
 
                         logprobs=np.array([0.0])
                     idf=pd.DataFrame({'transit_mid_date':Time(transits[2]+self.lc['jd_base'],format='jd').isot,
@@ -3911,7 +3912,7 @@ class monoModel():
                                       '2sig_window_dur':transits[4]-transits[0]+dur[4],
                                       'transit_fractions':np.array([str(fractions.Fraction(i1,int(nd+1))) for i1 in np.arange(trans_p0[nd],trans_p1[nd]).astype(int)]),
                                       'log_prob':np.tile(logprobs,len(transits[2])),
-                                      'prob':np.exp(logprobs),
+                                      'prob':np.tile(np.exp(logprobs),len(transits[2])),
                                       'planet_name':np.tile('multi_'+pl,len(transits[2])) if pl in self.multis else np.tile('duo_'+pl,len(transits[2])),
                                       'alias_n':np.tile(nd,len(transits[2])),
                                       'alias_p':np.tile(np.nanmedian(self.trace['per_'+pl][:,nd]),len(transits[2])) if pl in self.duos else np.nanmedian(self.trace['per_'+pl])})
@@ -3931,6 +3932,135 @@ class monoModel():
                 unq_trans.loc[i,'total_prob']=np.sum(oths['prob'].values)
         unq_trans = unq_trans.loc[(unq_trans['transit_end_+2sig']>time_start)*(unq_trans['transit_start_-2sig']<time_end)].sort_values('transit_mid_med')
         return unq_trans.set_index(np.arange(len(unq_trans)))
+
+    def MakeCheopsOR(self, pl, DR2ID, min_eff=0.45, oot_orbits=2, t_start=None, t_end=None, Texp=None,
+                     observe_threshold=0.018, prio_1_threshold=0.25, min_orbits=4.0, outfilesuffix='_output_ORs.csv'):
+        '''#Given a list of observable transits (which are outputted from trace_to_cheops_transits), created a csv which can be run by pycheops make_xml_files to produce input observing requests (both to FC and observing tool).
+        INPUTS:
+        # pl - name of planet in self.planets dict to process
+        # radec - RA & Dec in astropy SkyCoord object
+        # SpTy - Spectral type (e.g. K1)
+        # Vmag - Vmag
+        # e_Vmag - error on Vmag
+        # DR2ID - Gaia DR2 ID
+        # min_eff - minimum efficiency. Default:50%
+        # oot_orbits - number of out-of-transit orbits Default=2
+        # t_start - time of start of Cheops observations, in same jd as model (e.g. TESS HJD BJD-2457000). Default: tcen
+        # t_end - time of end of Cheops observations, in TESS HJD (BJD-2457000). Default: 6months after max visibility in 2022
+        # observe_threshold - threshold above which to create ORs Default=0.018
+        # prio_1_threshold=0.25 - percentage of ORs we want to make P1 on Cheops
+        # min_orbits=4
+        # outfilename - place to save CSV Default=_output_ORs.csv
+
+        OUTPUTS:
+        # panda DF to save as csv in location where one can run make_xml_files. e.g. `make_xml_files output.csv --auto-expose -f`
+        '''
+        #radec, SpTy, Vmag, e_Vmag,
+
+        #Deriving spectral type:
+        from astropy.io import ascii
+        from astroquery.gaia import Gaia
+        from astropy.coordinates import SkyCoord, Distance
+        from astropy import units as u
+        from astropy.time import Time
+
+        tab=ascii.read("https://www.pas.rochester.edu/~emamajek/EEM_dwarf_UBVIJHK_colors_Teff.txt",header_start=23,data_start=24,data_end=118).to_pandas().loc[:,['SpT','Teff']]
+        SpTy = tab['SpT'].values[np.argmin(abs(self.Teff[0]-tab['Teff']))][:2]
+
+        gaiainfo=Gaia.launch_job_async("SELECT * \
+                                        FROM gaiadr2.gaia_source \
+                                        WHERE gaiadr2.gaia_source.source_id="+str(DR2ID)).results.to_pandas().iloc[0]
+
+        gaia_colour=(gaiainfo['phot_bp_mean_mag']-gaiainfo['phot_rp_mean_mag'])
+        V=gaiainfo['phot_g_mean_mag']+0.0176+0.00686*gaia_colour+0.1732*gaia_colour**2
+        Verr=1.09/gaiainfo['phot_g_mean_flux_over_error']+0.045858
+
+        c = SkyCoord(ra=gaiainfo['ra']* u.deg,dec=gaiainfo['dec']* u.deg,
+                     distance=Distance(parallax=gaiainfo['parallax'] * u.mas),
+                     pm_ra_cosdec=gaiainfo['pmra'] * u.mas/u.yr, pm_dec=gaiainfo['pmdec'] * u.mas/u.yr,
+                     obstime=Time(gaiainfo['ref_epoch'], format='jyear'))
+        old_radec=c.apply_space_motion(Time(2000, format='jyear'))
+
+        #if Texp is None:
+        #    print("* WARNING - MUST SET EXPOSURE TIME (Texp) FOR REAL OBSERVATIONS. USING 1SEC HERE *")
+        #    Texp=1
+
+        if t_start is None:
+            import datetime
+            from astropy.time import Time
+            today=Time(datetime.datetime.now()).jd-self.lc['jd_base']
+            vernal2022=2459659.14792-self.lc['jd_base']
+            if today < (vernal2022-365.25+60):
+                #observable now?
+                t_start=today
+            else:
+                t_start = vernal2022+(old_radec.ra.deg/360)*365.25-60
+        if t_end is None:
+            #Using date 60d after it's at opposition in 2022:
+            vernal2022=2459659.14792
+            t_end = (vernal2022-self.lc['jd_base'])+(old_radec.ra.deg/360)*365.25+60
+
+        if not hasattr(self,'savenames'):
+            self.GetSavename(how='save')
+
+        out_tab=pd.DataFrame()
+        allprobs=np.sort(np.exp(np.nanmedian(self.trace['logprob_marg_'+pl],axis=1)))
+
+        for nper in np.arange(self.trace['per_'+pl].shape[1]):
+            if np.exp(np.nanmedian(self.trace['logprob_marg_'+pl][:,nper]))>observe_threshold:
+                ser={}
+                ser['ObsReqName']=self.id_dic[self.mission]+str(self.ID)+'_'+pl+'_period'+str(np.round(np.nanmedian(self.trace['per_'+pl][:,nper]),2)).replace('.',';')
+                ser['Target']=self.id_dic[self.mission]+str(self.ID)
+                ser['_RAJ2000']=old_radec.ra.to_string(unit=u.hourangle, sep=':')
+                ser['_DEJ2000']=old_radec.dec.to_string(sep=':')
+                ser['SpTy']=SpTy
+                ser['Gmag']=gaiainfo['phot_g_mean_mag']
+                ser['e_Gmag']=1.09/gaiainfo['phot_g_mean_flux_over_error']
+
+                ser['Vmag']=V
+                ser['e_Vmag']=Verr
+
+                ser['Programme_ID']='0048'
+                ser['BJD_early']=self.lc['jd_base']+t_start
+                ser['BJD_late']=self.lc['jd_base']+t_end
+                #Duration
+                ser['T_visit']=np.clip(np.ceil(np.nanmedian(self.trace['tdur_'+pl])*1440/98.77+oot_orbits),min_orbits,14)*98.77*60#abs(np.diff(np.nanpercentile())
+                #np.clip(*86400,(min_orbits*99.77*60), 2.5e5)
+                ser['N_Visits']=1
+                sprob=allprobs[nper]
+                rank=list(np.sort(allprobs)).index(sprob)/len(allprobs)
+                if rank>(1-prio_1_threshold):
+                    ser['Priority']=1
+                else:
+                    ser['Priority']=2
+                if Texp is not None:
+                    ser['Texp']=Texp
+                ser['MinEffDur']=min_eff
+                ser['Gaia_DR2']=str(DR2ID)
+                ser['BJD_0']=self.lc['jd_base']+np.nanmedian(self.trace['t0_'+pl])
+                ser['Period']=np.nanmedian(self.trace['per_'+pl][:,nper])
+                ser['Ph_early']=((-0.5*np.nanmedian(self.trace['tdur_'+pl])-1.5*99.77/1440)/ser['Period'])+1
+                ser['Ph_late']=((-0.5*np.nanmedian(self.trace['tdur_'+pl])-0.5*99.77/1440)/ser['Period'])+1
+                ser['Old_T_eff']=-99.
+                #ser["BegPh1"]=1-(row['mid']-row['start_latest'])/100
+                #ser["EndPh1"]=((row['end_earliest']-row['mid'])/100)
+                #ser["Effic1"]=50
+                ser['N_Ranges']=0
+                out_tab=out_tab.append(pd.Series(ser,name=nper))
+        out_tab['MinEffDur']=out_tab['MinEffDur'].values.astype(int)
+        out_tab['T_visit']=out_tab['T_visit'].values.astype(int)
+        out_tab['N_Ranges']=out_tab['N_Ranges'].values.astype(int)
+        out_tab['N_Visits']=out_tab['N_Visits'].values.astype(int)
+        out_tab['Priority']=out_tab['Priority'].values.astype(int)
+
+        out_tab.to_csv(self.savenames[0]+outfilesuffix)
+
+        command="make_xml_files "+self.savenames[0]+outfilesuffix
+        if Texp is None:
+            command+=" --auto-expose"
+        command+=" -f"
+        print("Run the following command in a terminal to generate ORs:\n\""+command+"\"")
+        return out_tab
 
     def getLDs(self,n_samples,mission='tess',how='2'):
         #Gets theoretical Limb Darkening parameters

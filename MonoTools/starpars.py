@@ -471,7 +471,7 @@ def GetExoFop(icid, mission='tess',file=''):
 
 def LoadModel():
     #Loading isoclassify "mesa" model from file:
-    from ..stellar.isoclassify import classify, pipeline
+    from .stellar.isoclassify import classify, pipeline
     mist_loc='/'.join(classify.__file__.split('/')[:-3])+'/mesa.h5'
     import h5py
     file = h5py.File(mist_loc,'r+', driver='core', backing_store=False)
@@ -1053,7 +1053,6 @@ def IsoClass(icid,mission,coor,ic_info=None,return_best=True,errboost=0.05,
         kwars={order_of_kw_to_remove[nkw]:(True if nkw>=n_kw_to_remove else False) for nkw in range(len(order_of_kw_to_remove))}
         #print(n_kw_to_remove,'/',len(order_of_kw_to_remove),kwars)
         try:
-
             isoclass_df, paras = Assemble_and_run_isoclassify(icid,coor,mission,survey_dat,ic_info,
                                                errboost=errboost*(1+0.33*n_kw_to_remove),spec_dat=spec_dat,**kwars)
             #print(isoclass_df[['rho_gcm3','rho_gcm3ep','rho_gcm3em']])
@@ -1508,10 +1507,11 @@ def getStellarInfoFromCsv(ID,mission,radec=None,k2tab=None,keptabs=None,use_isoc
                 #Problem here - not enough info for rho... Doing IsoClassify to get that info:
                 isoinfo = IsoClass(ID,mission,radec,ic_info=info)
                 #Overwriting current info with isoclassify outputs:
-                for col in info.keys():
-                    info[col] =  isoinfo[col] if col in isoinfo.keys() and not pd.isnull(isoinfo[col]) else info[col]
-                for col in isoinfo.keys():
-                    info[col]=isoinfo[col]
+                if isoinfo is not None:
+                    for col in info.keys():
+                        info[col] =  isoinfo[col] if col in isoinfo.keys() and not pd.isnull(isoinfo[col]) else info[col]
+                    for col in isoinfo.keys():
+                        info[col]=isoinfo[col]
 
         #Problem here - need rho. Derive from Teff and Rs, plus Dist vs. mag?
         allrhos={}
