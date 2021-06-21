@@ -3754,6 +3754,9 @@ class monoModel():
                 df.to_csv(self.savenames[0]+'_mcmc_output.csv')
         return df
 
+    def CheopsPlanetPropertiesTable(self,planet=None):
+        "target,gaia_id,planet_id,T0,e_T0,P,e_P,ecosw,e_ecosw,esinw,e_esinw,D,e_D,W,e_W,K,e_K"
+
     def PlotTable(self,plot_loc=None,return_table=False):
 
         df = self.MakeTable(short=True)
@@ -3884,14 +3887,14 @@ class monoModel():
             for nd in naliases:
                 if n_trans[nd]>0:
                     if pl in self.duos:
+                        int_alias=int(self.planets['00']['period_int_aliases'][nd])
                         transits=np.nanpercentile(np.vstack([self.trace['t0_2_'+pl]+ntr*self.trace['per_'+pl][:,nd] for ntr in np.arange(trans_p0[nd],trans_p1[nd])]),percentiles,axis=1)
-
                         if 'tdur' in self.marginal_params:
                             dur=np.nanpercentile(self.trace['tdur_'+pl][:,nd],percentiles)
                         logprobs=np.nanmedian(self.trace['logprob_marg_'+pl][:,nd])-sum_all_probs
                     else:
                         transits=np.nanpercentile(np.vstack([self.trace['t0_'+pl]+ntr*self.trace['per_'+pl] for ntr in np.arange(trans_p0[nd],trans_p1[nd])]),percentiles,axis=1)
-
+                        int_alias=1
                         logprobs=np.array([0.0])
                     idf=pd.DataFrame({'transit_mid_date':Time(transits[2]+self.lc['jd_base'],format='jd').isot,
                                       'transit_mid_med':transits[2],
@@ -3910,7 +3913,7 @@ class monoModel():
                                       'transit_end_+2sig':transits[4]+0.5*dur[4],
                                       '1sig_window_dur':transits[3]-transits[1]+dur[3],
                                       '2sig_window_dur':transits[4]-transits[0]+dur[4],
-                                      'transit_fractions':np.array([str(fractions.Fraction(i1,int(nd+1))) for i1 in np.arange(trans_p0[nd],trans_p1[nd]).astype(int)]),
+                                      'transit_fractions':np.array([str(fractions.Fraction(i1,int_alias)) for i1 in np.arange(trans_p0[nd],trans_p1[nd]).astype(int)]),
                                       'log_prob':np.tile(logprobs,len(transits[2])),
                                       'prob':np.tile(np.exp(logprobs),len(transits[2])),
                                       'planet_name':np.tile('multi_'+pl,len(transits[2])) if pl in self.multis else np.tile('duo_'+pl,len(transits[2])),
@@ -3933,16 +3936,12 @@ class monoModel():
         unq_trans = unq_trans.loc[(unq_trans['transit_end_+2sig']>time_start)*(unq_trans['transit_start_-2sig']<time_end)].sort_values('transit_mid_med')
         return unq_trans.set_index(np.arange(len(unq_trans)))
 
-    def MakeCheopsOR(self, pl, DR2ID, min_eff=0.45, oot_orbits=2, t_start=None, t_end=None, Texp=None,
+    def MakeCheopsOR(self, DR2ID, pl=None, min_eff=45, oot_orbits=2, t_start=None, t_end=None, Texp=None,
                      observe_threshold=0.018, prio_1_threshold=0.25, min_orbits=4.0, outfilesuffix='_output_ORs.csv'):
         '''#Given a list of observable transits (which are outputted from trace_to_cheops_transits), created a csv which can be run by pycheops make_xml_files to produce input observing requests (both to FC and observing tool).
         INPUTS:
-        # pl - name of planet in self.planets dict to process
-        # radec - RA & Dec in astropy SkyCoord object
-        # SpTy - Spectral type (e.g. K1)
-        # Vmag - Vmag
-        # e_Vmag - error on Vmag
         # DR2ID - Gaia DR2 ID
+        # pl - name of planet in self.planets dict to process (Default= None - i.e. assumes all planets)
         # min_eff - minimum efficiency. Default:50%
         # oot_orbits - number of out-of-transit orbits Default=2
         # t_start - time of start of Cheops observations, in same jd as model (e.g. TESS HJD BJD-2457000). Default: tcen
@@ -3984,74 +3983,87 @@ class monoModel():
         #if Texp is None:
         #    print("* WARNING - MUST SET EXPOSURE TIME (Texp) FOR REAL OBSERVATIONS. USING 1SEC HERE *")
         #    Texp=1
-
         if t_start is None:
             import datetime
             from astropy.time import Time
-            today=Time(datetime.datetime.now()).jd-self.lc['jd_base']
-            vernal2022=2459659.14792-self.lc['jd_base']
-            if today < (vernal2022-365.25+60):
+            today=Time(datetime.datetime.now()).jd
+            print(today)
+            vernal2022   = 2459659.14792
+
+            #RA is defined as 0 for the Sun at the vernal equinox.
+            #Therefore their RA, converted to fractional days and shifted by half a year, gives the time of opposition.
+            end_obs_21   = vernal2022-365.25+(old_radec.ra.deg/360-0.5)*365.25+90
+            start_obs_22 = vernal2022+(old_radec.ra.deg/360-0.5)*365.25-90
+            print(end_obs_21,today,start_obs_22)
+
+            if today < end_obs_21:
                 #observable now?
-                t_start=today
+                t_start= today
+                t_end  = end_obs_21
             else:
-                t_start = vernal2022+(old_radec.ra.deg/360)*365.25-60
+                t_start = start_obs_22
         if t_end is None:
             #Using date 60d after it's at opposition in 2022:
             vernal2022=2459659.14792
-            t_end = (vernal2022-self.lc['jd_base'])+(old_radec.ra.deg/360)*365.25+60
+            t_end = vernal2022-(old_radec.ra.deg/360)*365.25+60
 
         if not hasattr(self,'savenames'):
             self.GetSavename(how='save')
 
         out_tab=pd.DataFrame()
-        allprobs=np.sort(np.exp(np.nanmedian(self.trace['logprob_marg_'+pl],axis=1)))
+        if pl is None:
+            searchpls=list(self.planets.keys())
+        else:
+            searchpls=[pl]
+        for ipl in searchpls:
+            allprobs=np.sort(np.exp(np.nanmedian(self.trace['logprob_marg_'+ipl],axis=1)))
 
-        for nper in np.arange(self.trace['per_'+pl].shape[1]):
-            if np.exp(np.nanmedian(self.trace['logprob_marg_'+pl][:,nper]))>observe_threshold:
-                ser={}
-                ser['ObsReqName']=self.id_dic[self.mission]+str(self.ID)+'_'+pl+'_period'+str(np.round(np.nanmedian(self.trace['per_'+pl][:,nper]),2)).replace('.',';')
-                ser['Target']=self.id_dic[self.mission]+str(self.ID)
-                ser['_RAJ2000']=old_radec.ra.to_string(unit=u.hourangle, sep=':')
-                ser['_DEJ2000']=old_radec.dec.to_string(sep=':')
-                ser['SpTy']=SpTy
-                ser['Gmag']=gaiainfo['phot_g_mean_mag']
-                ser['e_Gmag']=1.09/gaiainfo['phot_g_mean_flux_over_error']
+            for nper in np.arange(self.trace['per_'+ipl].shape[1]):
+                if np.exp(np.nanmedian(self.trace['logprob_marg_'+ipl][:,nper]))>observe_threshold:
+                    ser={}
+                    ser['ObsReqName']=self.id_dic[self.mission]+str(self.ID)+'_'+ipl+'_period'+str(np.round(np.nanmedian(self.trace['per_'+ipl][:,nper]),2)).replace('.',';')
+                    ser['Target']=self.id_dic[self.mission]+str(self.ID)
+                    ser['_RAJ2000']=old_radec.ra.to_string(unit=u.hourangle, sep=':')
+                    ser['_DEJ2000']=old_radec.dec.to_string(sep=':')
+                    ser['SpTy']=SpTy
+                    ser['Gmag']=gaiainfo['phot_g_mean_mag']
+                    ser['e_Gmag']=1.09/gaiainfo['phot_g_mean_flux_over_error']
 
-                ser['Vmag']=V
-                ser['e_Vmag']=Verr
+                    ser['Vmag']=V
+                    ser['e_Vmag']=Verr
 
-                ser['Programme_ID']='0048'
-                ser['BJD_early']=self.lc['jd_base']+t_start
-                ser['BJD_late']=self.lc['jd_base']+t_end
-                #Duration
-                ser['T_visit']=np.clip(np.ceil(np.nanmedian(self.trace['tdur_'+pl])*1440/98.77+oot_orbits),min_orbits,14)*98.77*60#abs(np.diff(np.nanpercentile())
-                #np.clip(*86400,(min_orbits*99.77*60), 2.5e5)
-                ser['N_Visits']=1
-                sprob=allprobs[nper]
-                rank=list(np.sort(allprobs)).index(sprob)/len(allprobs)
-                if rank>(1-prio_1_threshold):
-                    ser['Priority']=1
-                else:
-                    ser['Priority']=2
-                if Texp is not None:
-                    ser['Texp']=Texp
-                ser['MinEffDur']=min_eff
-                ser['Gaia_DR2']=str(DR2ID)
-                ser['BJD_0']=self.lc['jd_base']+np.nanmedian(self.trace['t0_'+pl])
-                ser['Period']=np.nanmedian(self.trace['per_'+pl][:,nper])
-                ser['Ph_early']=((-0.5*np.nanmedian(self.trace['tdur_'+pl])-1.5*99.77/1440)/ser['Period'])+1
-                ser['Ph_late']=((-0.5*np.nanmedian(self.trace['tdur_'+pl])-0.5*99.77/1440)/ser['Period'])+1
-                ser['Old_T_eff']=-99.
-                #ser["BegPh1"]=1-(row['mid']-row['start_latest'])/100
-                #ser["EndPh1"]=((row['end_earliest']-row['mid'])/100)
-                #ser["Effic1"]=50
-                ser['N_Ranges']=0
-                out_tab=out_tab.append(pd.Series(ser,name=nper))
-        out_tab['MinEffDur']=out_tab['MinEffDur'].values.astype(int)
-        out_tab['T_visit']=out_tab['T_visit'].values.astype(int)
-        out_tab['N_Ranges']=out_tab['N_Ranges'].values.astype(int)
-        out_tab['N_Visits']=out_tab['N_Visits'].values.astype(int)
-        out_tab['Priority']=out_tab['Priority'].values.astype(int)
+                    ser['Programme_ID']='0048'
+                    ser['BJD_early']=t_start
+                    ser['BJD_late']=t_end
+                    #Duration
+                    ser['T_visit']=np.clip(np.ceil(np.nanmedian(self.trace['tdur_'+ipl])*1440/98.77+oot_orbits),min_orbits,14)*98.77*60#abs(np.diff(np.nanpercentile())
+                    #np.clip(*86400,(min_orbits*99.77*60), 2.5e5)
+                    ser['N_Visits']=1
+                    sprob=allprobs[nper]
+                    rank=list(np.sort(allprobs)).index(sprob)/len(allprobs)
+                    if rank>(1-prio_1_threshold):
+                        ser['Priority']=1
+                    else:
+                        ser['Priority']=2
+                    if Texp is not None:
+                        ser['Texp']=Texp
+                    ser['MinEffDur']=min_eff
+                    ser['Gaia_DR2']=str(DR2ID)
+                    ser['BJD_0']=self.lc['jd_base']+np.nanmedian(self.trace['t0_'+ipl])
+                    ser['Period']=np.nanmedian(self.trace['per_'+ipl][:,nper])
+                    ser['Ph_early']=((-0.5*np.nanmedian(self.trace['tdur_'+ipl])-1.5*99.77/1440)/ser['Period'])+1
+                    ser['Ph_late']=((-0.5*np.nanmedian(self.trace['tdur_'+ipl])-0.5*99.77/1440)/ser['Period'])+1
+                    ser['Old_T_eff']=-99.
+                    #ser["BegPh1"]=1-(row['mid']-row['start_latest'])/100
+                    #ser["EndPh1"]=((row['end_earliest']-row['mid'])/100)
+                    #ser["Effic1"]=50
+                    ser['N_Ranges']=0
+                    out_tab=out_tab.append(pd.Series(ser,name=nper))
+            out_tab['MinEffDur']=out_tab['MinEffDur'].values.astype(int)
+            out_tab['T_visit']=out_tab['T_visit'].values.astype(int)
+            out_tab['N_Ranges']=out_tab['N_Ranges'].values.astype(int)
+            out_tab['N_Visits']=out_tab['N_Visits'].values.astype(int)
+            out_tab['Priority']=out_tab['Priority'].values.astype(int)
 
         out_tab.to_csv(self.savenames[0]+outfilesuffix)
 

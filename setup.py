@@ -44,7 +44,7 @@ setuptools.setup(
                       'scipy',
                       'astropy',
                       'astroquery',
-                      'batman-package==2.4.7',
+                      'batman-package',
                       'lightkurve==1.11.0',
                       'arviz==0.11',
                       'Theano==1.0.4',

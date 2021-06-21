@@ -60,7 +60,7 @@ def openFits(f,fname,mission,cut_all_anom_lim=4.0,use_ppt=True,force_raw_flux=Fa
     #print(type(f),"opening ",fname,fname.find('everest')!=-1,f[1].data,f[0].header['TELESCOP']=='Kepler')
     mask=None
     end_of_orbit=False #Boolean as to whether we need to cut/fix the end-of-orbit flux
-    
+
     if type(f)==fits.hdu.hdulist.HDUList or type(f)==fits.fitsrec.FITS_rec:
         if f[0].header['TELESCOP']=='Kepler' or fname.find('kepler')!=-1:
             if fname.find('k2sff')!=-1:
@@ -113,7 +113,7 @@ def openFits(f,fname,mission,cut_all_anom_lim=4.0,use_ppt=True,force_raw_flux=Fa
                 lc['cent_1']  = f[1].data['SAP_X']
                 lc['cent_2']  = f[1].data['SAP_Y']
                 lc['flux_xl_ap']=f[1].data['KSPSAP_FLUX_LAG']
-                lc['flux_sm_ap']=f[1].data['KSPSAP_FLUX_SML']            
+                lc['flux_sm_ap']=f[1].data['KSPSAP_FLUX_SML']
             else:
                 lc['flux'] = f[1].data['PDCSAP_FLUX']/np.nanmedian(f[1].data['PDCSAP_FLUX'])
                 lc['flux_err'] = f[1].data['PDCSAP_FLUX_ERR']/np.nanmedian(f[1].data['PDCSAP_FLUX'])
@@ -127,11 +127,11 @@ def openFits(f,fname,mission,cut_all_anom_lim=4.0,use_ppt=True,force_raw_flux=Fa
             else:
                 mag=f[0].header['MAGNIT_R']
             lc={'time':f[1].data['DATEHEL'],'quality':f[1].data['STATUS'],'mask':np.tile(True,len(f[1].data['DATEHEL']))}
-            
+
             if f[0].header['FILENAME'][9:12]=='MON':
                 lc['flux']=f[1].data['WHITEFLUX']
                 lc['flux_err']=f[1].data['WHITEFLUXDEV']
-                
+
             elif f[0].header['FILENAME'][9:12]=='CHR':
                 logging.debug('3-colour CoRoT lightcurve')
                 #Adding colour fluxes together...
@@ -207,19 +207,19 @@ def openFits(f,fname,mission,cut_all_anom_lim=4.0,use_ppt=True,force_raw_flux=Fa
         if np.nanmedian(lc['raw_flux'])>0.1:
             lc['raw_flux']/=np.nanmedian(lc['raw_flux'])
             lc['raw_flux']-=1.0
-    
+
     if force_raw_flux and 'raw_flux' in lc:
         #Here we'll force ourselves to use raw flux, and not the detrended flux, if it exists:
         lc['detrended_flux']=lc.pop('flux')
         lc['flux']=lc['raw_flux'][:]
-    
+
     lc['mask']=maskLc(lc,fname,cut_all_anom_lim=cut_all_anom_lim,use_ppt=use_ppt,end_of_orbit=end_of_orbit,input_mask=mask)
-    
+
     #Including the cadence in the lightcurve as ["t2","t30","k1","k30"] mission letter + cadence
     lc['cadence']=np.tile(mission[0]+str(np.round(np.nanmedian(np.diff(lc['time']))*1440).astype(int)),len(lc['time']))
-    
+
     # Only discard positive outliers
-    
+
     #print(np.sum(~lc['mask']),"points masked in lc of",len(lc['mask']))
     '''
     # Make sure that the data type is consistent
@@ -227,7 +227,7 @@ def openFits(f,fname,mission,cut_all_anom_lim=4.0,use_ppt=True,force_raw_flux=Fa
     lc['flux'] = np.ascontiguousarray(y[m2], dtype=np.float64)
     lc['flux_err'] = np.ascontiguousarray(yerr[m2], dtype=np.float64)
     lc['trend_rem'] = np.ascontiguousarray(smooth[m2], dtype=np.float64)
-    
+
     for key in lc:
         if key not in ['time','flux','flux_err','trend_rem']:
             lc[key]=np.ascontiguousarray(lc[key][m][m2], dtype=np.float64)
@@ -236,23 +236,23 @@ def openFits(f,fname,mission,cut_all_anom_lim=4.0,use_ppt=True,force_raw_flux=Fa
     for key in [key for key in lc if key!='time' and type(lc[key])==np.ndarray and len(lc[key])==len(lc['time'])]:
         lc[key] = lc[key][np.isfinite(lc['time'])]
     lc['time'] = lc['time'][np.isfinite(lc['time'])]
-    
+
     lc['flux_unit']=0.001 if use_ppt else 1.0
-    
+
     return lc
 
-    
+
 def maskLc(lc,fhead,cut_all_anom_lim=5.0,use_ppt=False,end_of_orbit=True,
            use_binned=False,use_flat=False,mask_islands=True,input_mask=None):
-    # Mask bad data (nans, infs and negatives) 
-    
+    # Mask bad data (nans, infs and negatives)
+
     prefix= 'bin_' if use_binned else ''
     suffix='_flat' if use_flat else ''
     if 'flux_unit' in lc:
         lc['flux']*=lc['flux_unit']
         if lc['flux_unit']==0.001:
             use_ppt=True
-    
+
     mask = np.isfinite(lc[prefix+'flux'+suffix]) & np.isfinite(lc[prefix+'time']) & np.isfinite(lc[prefix+'flux_err'])
     if np.sum(mask)>0:
         # & (lc[prefix+'flux'+suffix]>0.0)
@@ -272,7 +272,7 @@ def maskLc(lc,fhead,cut_all_anom_lim=5.0,use_ppt=False,end_of_orbit=True,
             #Stacking 20 point-shifted lightcurves on top of each other for quick median filter: is (flux - median of 20pts)<threshold*MAD of 20pts
             stack_shitfed_flux=np.column_stack([lc[prefix+'flux'+suffix][mask][n:(-20+n)] for n in range(20)])
             mask[mask][10:-10]=abs(lc[prefix+'flux'+suffix][mask][10:-10] - np.nanmedian(stack_shitfed_flux,axis=1))<cut_all_anom_lim*np.nanmedian(abs(np.diff(stack_shitfed_flux,axis=1)),axis=1)
-            #Now doing difference 
+            #Now doing difference
             mask[mask]=CutAnomDiff(lc[prefix+'flux'+suffix][mask],cut_all_anom_lim)
             '''
             #Doing this a second time with more stringent limits to cut two-point outliers:
@@ -352,7 +352,7 @@ def maskLc(lc,fhead,cut_all_anom_lim=5.0,use_ppt=False,end_of_orbit=True,
     else:
         return mask
 
-    
+
 def CutHighRegions(lc,std_thresh=3.2,n_pts=25,n_loops=2):
     # Masking anomalous high region using a running 25-point median and std comparison
     # This is best used for e.g. Corot data which has SAA crossing events.
@@ -362,7 +362,7 @@ def CutHighRegions(lc,std_thresh=3.2,n_pts=25,n_loops=2):
     stacked_fluxes=np.vstack([lc['flux'][digi[n]] for n in range(n_pts)])
 
     std_threshs=np.linspace(std_thresh-1.5,std_thresh,n_loops)
-    
+
     for n in range(n_loops):
         stacked_masks=np.vstack([mask[digi[n]] for n in range(n_pts)])
         stacked_masks=stacked_masks.astype(int).astype(float)
@@ -447,6 +447,7 @@ def openEverest(epic,camp,pers=None,durs=None,t0s=None,use_ppt=True,**kwargs):
     lcs=[]
     lcev={}
     camp=np.unique(np.array(camp))
+    hdr=None
     for c in camp:
         try:
             st1=everest.Everest(int(epic),season=c,show_progress=False)
@@ -476,14 +477,17 @@ def openEverest(epic,camp,pers=None,durs=None,t0s=None,use_ppt=True,**kwargs):
         except:
             print(c,"not possible to load")
             continue
-    lc=openFits(lcev,hdr,mission='k2',use_ppt=use_ppt)
-    #elif int(camp)>=14:
-    #    lcloc='https://archive.stsci.edu/hlsps/everest/v2/c'+str(int(camp))+'/'+str(epic)[:4]+'00000/'+str(epic)[4:]+'/hlsp_everest_k2_llc_'+str(epic)+'-c'+str(int(camp))+'_kepler_v2.0_lc.fits'
-    #    lcev=openFits(fits.open(lcloc),lcloc)
-    #lc=lcStack(lcs)
-    lc['src']='K2_ev'
-    return lc
-   
+    if hdr is not None:
+        lc=openFits(lcev,hdr,mission='k2',use_ppt=use_ppt)
+        #elif int(camp)>=14:
+        #    lcloc='https://archive.stsci.edu/hlsps/everest/v2/c'+str(int(camp))+'/'+str(epic)[:4]+'00000/'+str(epic)[4:]+'/hlsp_everest_k2_llc_'+str(epic)+'-c'+str(int(camp))+'_kepler_v2.0_lc.fits'
+        #    lcev=openFits(fits.open(lcloc),lcloc)
+        #lc=lcStack(lcs)
+        lc['src']='K2_ev'
+        return lc
+    else:
+        return None
+
 
 def getK2lc(epic,camp,saveloc=None,pers=None,durs=None,t0s=None,use_ppt=True):
     '''
@@ -500,7 +504,7 @@ def getK2lc(epic,camp,saveloc=None,pers=None,durs=None,t0s=None,use_ppt=True):
     if len(lcs.keys())>1:
         lens = {l:len(lcs[l][camp]['flux'][lcs[l][camp]['mask']]) for l in lcs}
         stds = {l:np.nanmedian(abs(np.diff(lcs[l][camp]['flux'][lcs[l][camp]['mask']])))/(lens[l]/np.nanmax(lens[l]))**3 for l in lcs}
-        #Making a metric from std and length - std/len_norm**3. i.e. a lc 75% as long as the longest is downweighted by 0.42 (e.g. std increased by 2.4 
+        #Making a metric from std and length - std/len_norm**3. i.e. a lc 75% as long as the longest is downweighted by 0.42 (e.g. std increased by 2.4
         ordered_keys = [k for k, v in sorted(stds.items(), key=lambda item: item[1])]
         list(np.array(list(lcs.keys()))[np.argsort(stds)])
         lc=lcStackDicts(lcs,ordered=ordered_keys)
@@ -559,7 +563,7 @@ def K2_lc(epic,coor=None,pers=None,durs=None,t0s=None, use_ppt=True):
 def getKeplerLC(kic,cadence='long',use_ppt=True,**kwargs):
     '''
     This module uses the KIC of a planet candidate to download lightcurves
-    
+
     Args:
         kic: EPIC (K2) or KIC (Kepler) id number
 
@@ -615,9 +619,9 @@ def getKeplerLC(kic,cadence='long',use_ppt=True,**kwargs):
 def lcStackDicts(lcdicts, ordered=None):
     #Stacks multiple lcs together while keeping info from secondary data sources.
     #lcdicts must be in form {'src1':{'camp1':{'time':[],'flux:[], ...},'sect2':{'time':...}},'src2':{'camp1':...}}}
-    
-    # Ordered should be ordered 
-    
+
+    # Ordered should be ordered
+
     outlc_by_sect=[]
     #Getting all sectors/campaigns across all lightcurve extractions:
     allsects=np.unique([key_i for lcsrc in lcdicts for key_i in lcdicts[lcsrc]])
@@ -628,7 +632,7 @@ def lcStackDicts(lcdicts, ordered=None):
     for key in ordered:
         if key not in lcdicts:
             ordered.remove(key)
-    
+
     #print(allsects, lcdicts.keys())
     #Stacking each timeseries on top of each other
     for sect in allsects:
@@ -665,7 +669,7 @@ def lcStackDicts(lcdicts, ordered=None):
             fu=elenlcs[sec]['flux_unit']
         else:
             sec_lc=None
-        
+
         outlc_by_sect+=[sec_lc]
     '''
     lc=lcStack(outlc_by_sect)
@@ -793,10 +797,10 @@ def getCorotLC(corid,use_ppt=True,**kwargs):
         return None
 
 def TESS_lc(tic, sectors='all',use_ppt=True, coords=None, use_qlp=None, use_eleanor=None, data_loc=None,**kwargs):
-    #Downloading TESS lc     
+    #Downloading TESS lc
     if data_loc is None:
         data_loc=MonoData_savepath+"/TIC"+str(int(tic)).zfill(11)
-    
+
     epoch=pd.read_csv(MonoData_tablepath+"/tess_lc_locations.csv",index_col=0)
     sect_to_orbit={sect+1:[9+sect*2,10+sect*2] for sect in range(np.max(epoch.index))}
     lcs=[];lchdrs=[]
@@ -806,7 +810,7 @@ def TESS_lc(tic, sectors='all',use_ppt=True, coords=None, use_qlp=None, use_elea
         else:
             sect_obs=observed(tic)
         epochs=[key for key in epoch.index if sect_obs[key]]
-        
+
         if epochs==[]:
             #NO EPOCHS OBSERVABLE APPARENTLY. USING THE EPOCHS ON EXOFOP/TIC8
             toi_df=pd.read_csv("https://exofop.ipac.caltech.edu/tess/download_toi.php?sort=toi&output=csv")
@@ -849,7 +853,7 @@ def TESS_lc(tic, sectors='all',use_ppt=True, coords=None, use_qlp=None, use_elea
             #      qlpfiles[0],os.path.isfile(qlpfiles[0]),
             #      qlpfiles[1],os.path.isfile(qlpfiles[1]))
             if os.path.isfile(qlpfiles[0]) and os.path.isfile(qlpfiles[1]):
-                
+
                 f1=h5py.File(qlpfiles[0])
                 f2=h5py.File(qlpfiles[1])
                 qlplcs[key]=lcStack([openFits(f1,sect_to_orbit[key][0],mission='tess',use_ppt=use_ppt,**kwargs),
@@ -887,7 +891,7 @@ def TESS_lc(tic, sectors='all',use_ppt=True, coords=None, use_qlp=None, use_elea
                 lchdrs+=[elen_hdr]
             except Exception as e:
                 print(e, tic,"not observed by TESS in sector",key)
-        
+
     if len(spoclcs)+len(qlplcs)+len(elenorlcs)>0:
         lc=lcStackDicts({'spoc':spoclcs,'qlp':qlplcs,'elen':elenorlcs},['spoc','qlp','elen'])
         return lc,lchdrs[0]
@@ -909,7 +913,7 @@ def openLightCurve(ID,mission,coor=None,use_ppt=True,other_data=True,
             coor=SkyCoord(ra,dec,unit=(units.hourangle,units.deg))
         elif (type(ra)==float)|(type(ra)==np.float64) or (type(ra)==str)&(ra.find(',')!=-1):
             coor=SkyCoord(ra,dec,unit=units.deg)
-    
+
     #Finding IDs for other missions:
     IDs={mission.lower():ID}
     if not other_data:
@@ -926,8 +930,8 @@ def openLightCurve(ID,mission,coor=None,use_ppt=True,other_data=True,
                 IDs['k2']=None
         if mission.lower()!='tess':
             # Let's search for associated TESS lightcurve:
-            
-            
+
+
             tess_id = Catalogs.query_criteria("TIC",coordinates=coor,radius=12*units.arcsec,
                                               objType="STAR",columns=['ID','KIC','Tmag']).to_pandas()
             #print(tess_id)
@@ -958,7 +962,7 @@ def openLightCurve(ID,mission,coor=None,use_ppt=True,other_data=True,
                     print(res['V/133/kic'], "NO KICS FOUND")
             else:
                 IDs['kepler'] = None
-    
+
     #Opening using url search:
     lcs={};hdrs={}
     if IDs['tess'] is not None:
@@ -1000,13 +1004,13 @@ def openLightCurve(ID,mission,coor=None,use_ppt=True,other_data=True,
                 lc[key]=lc[key][~np.isnan(lc['time'])]
                 lc[key]=lc[key][:][np.argsort(lc['time'][~np.isnan(lc['time'])])]
         lc['time']=np.sort(lc['time'][~np.isnan(lc['time'])])
-    
+
     if save:
         ID_string=id_dic[mission]+str(ID).zfill(11)
         if not os.path.isdir(MonoData_savepath+'/'+ID_string):
             os.system("mkdir "+MonoData_savepath+'/'+ID_string)
         pickle.dump(lc,open(MonoData_savepath+'/'+ID_string+'/'+ID_string+'_lc.pickle','wb'))
-    
+
     return lc,hdrs[mission.lower()]
 
 def LoadLc(lcid,mission='tess',file_loc=None):
@@ -1067,7 +1071,7 @@ def cutLc(lctimes,max_len=10000,return_bool=True,transit_mask=None):
         else:
             return [lctimes]
 
-def weighted_avg_and_std(values, errs, axis=None): 
+def weighted_avg_and_std(values, errs, axis=None):
     """
     Return the weighted average and standard deviation.
 
@@ -1086,23 +1090,23 @@ def lcBin(lc,binsize=1/48,split_gap_size=0.8,use_flat=True,use_masked=True, use_
     #Binning lightcurve to e.g. 30-min cadence for planet search
     # Can optionally use the flatted lightcurve
     binlc={}
-        
+
     #Using flattened lightcurve as well as normal one:
     if use_flat and 'flux_flat' not in lc:
         lc=lcFlatten(lc)
     if use_flat:
-        flux_dic=['flux_flat','flux'] 
+        flux_dic=['flux_flat','flux']
         binlc['flux_flat']=[]
         binlc['flux']=[]
     else:
         flux_dic=['flux']
         binlc['flux']=[]
     binlc['bin_cadence']=[]
-        
+
     if use_raw:
         flux_dic+=['raw_flux']
         binlc['raw_flux']=[]
-        
+
     if np.nanmax(np.diff(lc['time']))>split_gap_size:
         loop_blocks=np.array_split(np.arange(len(lc['time'])),np.where(np.diff(lc['time'])>2.0)[0])
     else:
@@ -1169,32 +1173,32 @@ def bin_lc_segment(lc_segment, binsize,return_digi=False):
             return binlc
     else:
         return lc_segment
-    
+
 def create_transit_mask(t,tcens,tdurs,maskdist=1.1):
     in_trans=np.zeros_like(t).astype(bool)
     for n in range(len(tcens)):
         in_trans+=abs(t-tcens[n])<0.5*maskdist*tdurs[n]
     return ~in_trans
-   
+
 def dopolyfit(win,mask=None,stepcent=0.0,d=3,ni=10,sigclip=3):
     mask=np.tile(True,len(win)) if mask is None else mask
     maskedwin=win[mask]
-    
+
     #initial fit and llk:
     best_base = np.polyfit(maskedwin[:,0]-stepcent,maskedwin[:,1],w=1.0/maskedwin[:,2]**2,deg=d)
     best_offset = (maskedwin[:,1]-np.polyval(best_base,maskedwin[:,0]))**2/maskedwin[:,2]**2
     best_llk=-0.5 * np.sum(best_offset)
-    
+
     #initialising this "random mask"
     randmask=np.tile(True,len(maskedwin))
 
     for iter in range(ni):
-        # If a point's offset to the best model is great than a normally-distributed RV, it gets masked 
+        # If a point's offset to the best model is great than a normally-distributed RV, it gets masked
         # This should have the effect of cutting most "bad" points,
         #   but also potentially creating a better fit through bootstrapping:
         randmask = abs(np.random.normal(0.0,1.0,len(maskedwin)))<best_offset
         randmask = np.tile(True,len(maskedwin)) if np.sum(randmask)==0 else randmask
-        
+
         new_base = np.polyfit(maskedwin[randmask,0]-stepcent,maskedwin[randmask,1],
                               w=1.0/np.power(maskedwin[randmask,2],2),deg=d)
         #winsigma = np.std(win[:,1]-np.polyval(base,win[:,0]))
@@ -1208,7 +1212,7 @@ def dopolyfit(win,mask=None,stepcent=0.0,d=3,ni=10,sigclip=3):
     return best_base
 
 def formwindow(dat,cent,size,boxsize,gapthresh=1.0):
-    
+
     win = (dat[:,0]>cent-size/2.)&(dat[:,0]<cent+size/2.)
     box = (dat[:,0]>cent-boxsize/2.)&(dat[:,0]<cent+boxsize/2.)
     if np.sum(win)>0:
@@ -1225,7 +1229,7 @@ def formwindow(dat,cent,size,boxsize,gapthresh=1.0):
         win = win&(~box)
     return win, box
 
-def lcFlatten(lc, winsize = 3.5, stepsize = 0.15, polydegree = 2, 
+def lcFlatten(lc, winsize = 3.5, stepsize = 0.15, polydegree = 2,
               niter = 10, sigmaclip = 3., gapthreshold = 1.0,
               use_binned=False, use_mask=True, reflect=True, transit_mask=None, debug=False):
     '''#Flattens any lightcurve while maintaining in-transit depth.
@@ -1245,9 +1249,9 @@ def lcFlatten(lc, winsize = 3.5, stepsize = 0.15, polydegree = 2,
     '''
     winsize=3.9 if np.isnan(winsize) else winsize
     stepsize=0.15 if np.isnan(stepsize) else stepsize
-    
+
     prefix='bin_' if use_binned else ''
-    
+
     lc[prefix+'flux_flat']=np.zeros(len(lc[prefix+'time']))
     #general setup
     uselc=np.column_stack((lc[prefix+'time'][:],lc[prefix+'flux'][:],lc[prefix+'flux_err'][:]))
@@ -1263,11 +1267,11 @@ def lcFlatten(lc, winsize = 3.5, stepsize = 0.15, polydegree = 2,
     uselc=np.column_stack((uselc,initmask))
     uselc[:,1:3]/=lc['flux_unit']
     uselc[:,1]-=np.nanmedian(lc[prefix+'flux'])
-    
+
     jumps=np.hstack((0,np.where(np.diff(uselc[:,0])>winsize*0.8)[0]+1,len(uselc[:,3]) )).astype(int)
     stepcentres=[]
     uselc_w_reflect=[]
-    
+
     for n in range(len(jumps)-1):
         stepcentres+=[np.arange(uselc[jumps[n],0],
                                 uselc[np.clip(jumps[n+1],0,len(uselc)-1),0],
@@ -1277,11 +1281,11 @@ def lcFlatten(lc, winsize = 3.5, stepsize = 0.15, polydegree = 2,
             incad=np.nanmedian(np.diff(partlc[:,0]))
             xx=[np.arange(np.nanmin(partlc[:,0])-winsize*0.4,np.nanmin(partlc[:,0])-incad,incad),
                 np.arange(np.nanmax(partlc[:,0])+incad,np.nanmax(partlc[:,0])+winsize*0.4,incad)]
-            #Adding the lc, plus a reflected region either side of each part. 
+            #Adding the lc, plus a reflected region either side of each part.
             # Also adding a boolean array to show where the reflected parts are
             refl_t=np.hstack((xx[0],partlc[:,0],xx[1]))
             refl_flux=np.vstack((partlc[:len(xx[0]),1:][::-1],
-                                 partlc[:,1:], 
+                                 partlc[:,1:],
                                  partlc[-1*len(xx[1]):,1:][::-1]  ))
             refl_bool=np.hstack((np.zeros(len(xx[0])),np.tile(1.0,len(partlc[:,0])),np.zeros(len(xx[1]))))
             #print(partlc.shape,len(xx[0]),len(xx[1]),refl_t.shape,refl_flux.shape,refl_bool.shape)
@@ -1308,11 +1312,11 @@ def lcFlatten(lc, winsize = 3.5, stepsize = 0.15, polydegree = 2,
             baseline = dopolyfit(uselc[win,:3],mask=uselc[win,3].astype(bool),
                                  stepcent=stepcent,d=polydegree,ni=niter,sigclip=sigmaclip)
             lc[prefix+'flux_flat'][newbox] = lc[prefix+'flux'][newbox] - np.polyval(baseline,lc[prefix+'time'][newbox]-stepcent)*lc['flux_unit']
-            #Here we have 
-        
+            #Here we have
+
     return lc
-    
-def RunFromScratch(ID, mission, tcen, tdur, ra=None, dec=None, 
+
+def RunFromScratch(ID, mission, tcen, tdur, ra=None, dec=None,
                    mono_SNRthresh=6.0,
                    other_planet_SNRthresh=6.0, PL_ror_thresh=0.2):
     '''
@@ -1322,24 +1326,24 @@ def RunFromScratch(ID, mission, tcen, tdur, ra=None, dec=None,
     # - Search for other transits and/or planets in the lightcurve
     # - Run the required Namaste model for all high-SNR planet candidates
     '''
-    
+
     #Gets stellar info
     Rstar, rhostar, Teff, logg, src = starpars.getStellarInfo(ID, hdr, mission, overwrite=overwrite,
                                                              fileloc=savenames[1].replace('_mcmc.pickle','_starpars.csv'),
                                                              savedf=True)
-    
+
     #Gets Lightcurve
     lc,hdr=openLightCurve(ID,mission,use_ppt=False)
     lc=lcFlatten(lc,winsize=9*tdur,stepsize=0.1*tdur)
-    
+
     #Runs Quick Model fit
     monoparams, interpmodel = search.QuickMonoFit(lc,tc,dur,Rs=Rstar[0],Ms=rhostar[0]*Rstar[0]**3)
-    
+
     #Checks to see if dip is due to background asteroid
     asteroidDeltaBIC=search.AsteroidCheck(lc, monoparams, interpmodel)
     if asteroidDeltaBIC>6:
         planet_dic_1['01']['flag']='asteroid'
-    
+
     #Checks to see if dip is combined with centroid
     centroidDeltaBIC=search.CentroidCheck(lc, monoparams, interpmodel)
     if centroidDeltaBIC>6:
@@ -1347,7 +1351,7 @@ def RunFromScratch(ID, mission, tcen, tdur, ra=None, dec=None,
 
     #Searches for other dips in the lightcurve
     planet_dic_1=search.SearchForSubsequentTransits(lc, interpmodel, tc, dur, Rs=Rstar[0],Ms=rhostar[0]*Rstar[0]**3)
-    
+
     #Asses whether any dips are significant enough:
     if planet_dic_1['01']['SNR']>mono_SNRthresh:
         #Check if the Depth/Rp suggests we have a very likely EB, we search for a secondary
@@ -1362,7 +1366,7 @@ def RunFromScratch(ID, mission, tcen, tdur, ra=None, dec=None,
             #Likely EB
             planet_dic_1['01']['flag']='EB'
     #If other dips exist, we need to figure out if there are possible integer periods to search between:
-    
+
     #We then do an EB model here
     if planet_dic_1['01']['flag']=='EB':
         #Either doing Namaste model with "third light" switched on.
@@ -1428,10 +1432,10 @@ def GetSavename(ID, mission, how='load', suffix='mcmc.pickle', overwrite=False, 
         else:
             #Finding next unused number with this date:
             nsim=1+np.max([int(nmdp.split('_')[2]) for nmdp in datepickles])
-    
+
     return [os.path.join(savefileloc,id_dic[mission]+str(ID).zfill(11)+"_"+date+"_"+str(int(nsim))+"_"+suffix), os.path.join(savefileloc,id_dic[mission]+str(ID).zfill(11)+'_'+suffix)]
-                                
-    
+
+
 def LoadPickle(ID, mission,loadname=None,savefileloc=None):
     #Pickle file style: folder/TIC[11-number ID]_[20YY-MM-DD]_[n]_mcmc.pickle
     if loadname is None:
@@ -1454,7 +1458,7 @@ def LoadPickle(ID, mission,loadname=None,savefileloc=None):
 def SavePickle(trace,ID,mission,savename=None,overwrite=False,savefileloc=None):
     if savename is None:
         savename=GetSavename(ID, mission, how='save', suffix='mcmc.pickle', overwrite=overwrite, savefileloc=savefileloc)[0]
-        
+
     n_bytes = 2**31
     max_bytes = 2**31 - 1
 
@@ -1484,7 +1488,7 @@ def getLDs(Ts,logg=4.43812,FeH=0.0,mission="TESS"):
         else:
             outarr=np.column_stack((a_interp(np.clip(Ts,2300,12000),logg),b_interp(np.clip(Ts,2300,12000),logg)))
         return outarr
-    elif mission[0]=="k" or mission[0]=="K": 
+    elif mission[0]=="k" or mission[0]=="K":
         #Get Kepler Limb darkening coefficients.
         #print(label)
         types={'1':[3],'2':[4, 5],'3':[6, 7, 8],'4':[9, 10, 11, 12]}
@@ -1515,14 +1519,14 @@ def PlotCorner(trace, ID, mission='TESS', varnames=["b", "ecc", "period", "r_pl"
     import corner
     import matplotlib.pyplot as plt
     print("varnames = ",varnames)
-    
+
     if savename is None:
-        savename=GetSavename(ID, mission, how='save', suffix='_corner.png', 
+        savename=GetSavename(ID, mission, how='save', suffix='_corner.png',
                              overwrite=overwrite, savefileloc=savefileloc)[0]
-    
+
     if tracemask is None:
         tracemask=np.tile(True,len(trace['Rs']))
-    
+
 
     samples = pm.trace_to_dataframe(trace, varnames=varnames)
     samples=samples.loc[tracemask]
@@ -1537,7 +1541,7 @@ def PlotCorner(trace, ID, mission='TESS', varnames=["b", "ecc", "period", "r_pl"
         fig = corner.corner(samples)
 
     fig.savefig(savename,dpi=250)
-    
+
     if returnfig:
         return fig
 
@@ -1559,7 +1563,7 @@ def vals_to_latex(vals):
                 return " $ "+str(np.round(vals[1],roundval))+"^{+"+str(np.round(errs[0],roundval))+"}_{-"+str(np.round(errs[1],roundval))+"} $ "
     except:
         return " - "
-    
+
 def ToLatexTable(trace, ID, mission='TESS', varnames='all',order='columns',
                savename=None, overwrite=False, savefileloc=None, tracemask=None):
     #Plotting corner of the parameters to see correlations
@@ -1570,14 +1574,14 @@ def ToLatexTable(trace, ID, mission='TESS', varnames='all',order='columns',
         tracemask=np.tile(True,len(trace['Rs']))
     if varnames is None or varnames == 'all':
         varnames=[var for var in trace.varnames if var[-2:]!='__' and var not in ['gp_pred','light_curves']]
-    
+
     samples = pm.trace_to_dataframe(trace, varnames=varnames)
     samples = samples.loc[tracemask]
     facts={'r_pl':109.07637,'Ms':1.0,'rho':1.0,"t0":1.0,"period":1.0,"vrel":1.0,"tdur":24}
     units={'r_pl':"$ R_\\oplus $",'Ms':"$ M_\\odot $",'rho':"$ \\rho_\\odot $",
            "t0":"BJD-2458433","period":'d',"vrel":"$R_s/d$","tdur":"hours"}
     if order=="rows":
-        #Table has header as a single row and data as a single row 
+        #Table has header as a single row and data as a single row
         rowstring=str("ID")
         valstring=str(ID)
         for row in samples.columns:
@@ -1590,7 +1594,7 @@ def ToLatexTable(trace, ID, mission='TESS', varnames='all',order='columns',
                 valstring+=' & '+vals_to_latex(np.percentile(samples[row],[16,50,84]))
         outstring=rowstring+"\n"+valstring
     else:
-        #Table has header as a single column and data as a single column 
+        #Table has header as a single column and data as a single column
         outstring="ID & "+str(ID)
         for row in samples.columns:
             fact=[fact for fact in list(facts.keys()) if fact in row]
