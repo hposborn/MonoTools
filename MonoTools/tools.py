@@ -1,3 +1,6 @@
+import warnings
+warnings.filterwarnings("ignore")
+
 import numpy as np
 import exoplanet as xo
 
@@ -8,6 +11,7 @@ import pandas as pd
 from astropy.io import fits
 from astropy.io import ascii
 from scipy.signal import savgol_filter
+from scipy.interpolate import LSQUnivariateSpline, BSpline,splev,splrep
 
 import h5py
 
@@ -19,10 +23,10 @@ from astropy import constants as c
 
 from astropy import units
 from astropy.coordinates.sky_coordinate import SkyCoord
-from astropy.units import Quantity
-from astroquery.gaia import Gaia
 from astroquery.vizier import Vizier
 from astroquery.mast import Catalogs
+from astropy.units import Quantity
+from astroquery.gaia import Gaia
 
 from eleanor import eleanor
 
@@ -35,8 +39,6 @@ from lxml import html
 
 import glob
 
-import warnings
-warnings.filterwarnings("ignore")
 
 MonoData_tablepath = os.path.join(os.path.dirname(__file__),'data','tables')
 if os.environ.get('MONOTOOLSPATH') is None:
@@ -48,19 +50,28 @@ from . import starpars
 
 id_dic={'TESS':'TIC','tess':'TIC','Kepler':'KIC','kepler':'KIC','KEPLER':'KIC',
         'K2':'EPIC','k2':'EPIC','CoRoT':'CID','corot':'CID'}
+lc_dic={'tess':'ts','kepler':'k1','k2':'k2','corot':'co','cheops':'ch'}
 
 #goto='/Users/hosborn' if 'Users' in os.path.dirname(os.path.realpath(__file__)).split('/') else '/home/hosborn'
 
 
-def openFits(f,fname,mission,cut_all_anom_lim=4.0,use_ppt=True,force_raw_flux=False,**kwargs):
-    '''
-    # opens and processes all lightcurve files (especially, but not only, fits files).
-    # Processing involvesd iteratively masking anomlaous flux values
-    '''
-    #print(type(f),"opening ",fname,fname.find('everest')!=-1,f[1].data,f[0].header['TELESCOP']=='Kepler')
-    mask=None
-    end_of_orbit=False #Boolean as to whether we need to cut/fix the end-of-orbit flux
+def openFits(f,fname,mission,cut_all_anom_lim=4.0,use_ppt=True,force_raw_flux=False,end_of_orbit=False,mask=None,**kwargs):
+    """opens and processes all lightcurve files (especially, but not only, fits files).
 
+    Args:
+        f ([type]): [description]
+        fname ([type]): [description]
+        mission ([type]): [description]
+        cut_all_anom_lim (float, optional): [description]. Defaults to 4.0.
+        use_ppt (bool, optional): [description]. Defaults to True.
+        force_raw_flux (bool, optional): [description]. Defaults to False.
+        end_of_orbit (bool, optional): Cut/fix the end-of-orbit flux? Defaults to False.
+        mask ([type], optional): [description]. Defaults to None.
+
+    Returns:
+        [type]: [description]
+    """
+    
     if type(f)==fits.hdu.hdulist.HDUList or type(f)==fits.fitsrec.FITS_rec:
         if f[0].header['TELESCOP']=='Kepler' or fname.find('kepler')!=-1:
             if fname.find('k2sff')!=-1:
@@ -133,7 +144,7 @@ def openFits(f,fname,mission,cut_all_anom_lim=4.0,use_ppt=True,force_raw_flux=Fa
                 lc['flux_err']=f[1].data['WHITEFLUXDEV']
 
             elif f[0].header['FILENAME'][9:12]=='CHR':
-                logging.debug('3-colour CoRoT lightcurve')
+                #logging.debug('3-colour CoRoT lightcurve')
                 #Adding colour fluxes together...
                 lc['flux'] = f[1].data['REDFLUX']+f[1].data['BLUEFLUX']+f[1].data['GREENFLUX']
                 lc['flux_err'] = f[1].data['GREENFLUXDEV']+f[1].data['BLUEFLUXDEV']+f[1].data['REDFLUXDEV']
@@ -144,7 +155,7 @@ def openFits(f,fname,mission,cut_all_anom_lim=4.0,use_ppt=True,force_raw_flux=Fa
             lc['flux_err'][(lc['flux_err']>0.0)*(~np.isnan(lc['flux_err']))]=mederr
             lc['flux_err']/=np.nanmedian(lc['flux'])
             lc['flux']/=np.nanmedian(lc['flux'])
-            lc['mask']=CutHighRegions(lc,std_thresh=4.5,n_pts=25,n_loops=2)
+            lc['mask']=CutHighRegions(lc['flux'],np.isfinite(lc['flux']),std_thresh=4.5,n_pts=25,n_loops=2)
     elif type(f).__name__=='TessLightCurve':
         import lightkurve
         lc={'time':f.time,'flux':f.flux,'flux_err':f.flux_err,'quality':f.quality,
@@ -241,18 +252,27 @@ def openFits(f,fname,mission,cut_all_anom_lim=4.0,use_ppt=True,force_raw_flux=Fa
 
     return lc
 
+def find_time_regions(time,split_gap_size=1.5):
+    if np.nanmax(np.diff(np.sort(time)))>split_gap_size:
+        #We have gaps in the lightcurve, so we'll find the bins by looping through those gaps
+        time_starts = np.hstack((np.nanmin(time),np.sort(time)[1+np.where(np.diff(np.sort(time))>split_gap_size)[0]]))
+        time_ends   = np.hstack((time[np.where(np.diff(np.sort(time))>split_gap_size)[0]],np.nanmax(time)))
+        return [(time_starts[i],time_ends[i]) for i in range(len(time_starts))]
+    else:
+        return [(np.nanmin(time),np.nanmax(time))]
 
-def maskLc(lc,fhead,cut_all_anom_lim=5.0,use_ppt=False,end_of_orbit=True,
+def maskLc(lc,fhead,cut_all_anom_lim=5.0,use_ppt=False,end_of_orbit=True,mask=None,
            use_binned=False,use_flat=False,mask_islands=True,input_mask=None):
     # Mask bad data (nans, infs and negatives)
 
     prefix= 'bin_' if use_binned else ''
     suffix='_flat' if use_flat else ''
-    if 'flux_unit' in lc:
-        lc['flux']*=lc['flux_unit']
-        if lc['flux_unit']==0.001:
-            use_ppt=True
-
+    #if 'flux_unit' in lc:
+    #    lc['flux']*=lc['flux_unit']
+    #    lc['flux_err']*=lc['flux_unit']
+    #    if lc['flux_unit']==0.001:
+    #        use_ppt=True
+    mask = np.ones(len(lc['time'])) if mask is None else mask
     mask = np.isfinite(lc[prefix+'flux'+suffix]) & np.isfinite(lc[prefix+'time']) & np.isfinite(lc[prefix+'flux_err'])
     if np.sum(mask)>0:
         # & (lc[prefix+'flux'+suffix]>0.0)
@@ -353,13 +373,12 @@ def maskLc(lc,fhead,cut_all_anom_lim=5.0,use_ppt=False,end_of_orbit=True,
         return mask
 
 
-def CutHighRegions(lc,std_thresh=3.2,n_pts=25,n_loops=2):
+def CutHighRegions(flux, mask, std_thresh=3.2,n_pts=25,n_loops=2):
     # Masking anomalous high region using a running 25-point median and std comparison
     # This is best used for e.g. Corot data which has SAA crossing events.
-    mask=lc['mask']
 
-    digi=np.vstack([np.arange(f,len(lc['flux'])-(n_pts-f)) for f in range(n_pts)])
-    stacked_fluxes=np.vstack([lc['flux'][digi[n]] for n in range(n_pts)])
+    digi=np.vstack([np.arange(f,len(flux)-(n_pts-f)) for f in range(n_pts)])
+    stacked_fluxes=np.vstack([flux[digi[n]] for n in range(n_pts)])
 
     std_threshs=np.linspace(std_thresh-1.5,std_thresh,n_loops)
 
@@ -375,8 +394,7 @@ def CutHighRegions(lc,std_thresh=3.2,n_pts=25,n_loops=2):
                                               stacked_fluxes[n2]*stacked_masks[n2]>(meds+std_threshs[n]*stds),
                                               np.tile(False,n_pts-n2+1))) for n2 in range(n_pts)])
                            ,axis=0)[1:-1]<20
-    lc['mask']=mask
-    return lc
+    return mask
 
 def openPDC(epic,camp,use_ppt=True,**kwargs):
     if camp == '10':
@@ -727,20 +745,26 @@ def CutAnomDiff(flux,thresh=4.2):
                      abs(flux[-1]-np.median(flux[-3:-1]))<(np.median(abs(diffarr[0,:]))*thresh*5)))
     return anoms
 
-def observed(tic):
-    # Using "webtess" page to check if TESS object was observed:
+def observed(tic,radec=None,maxsect=50):
+    # Using either "webtess" page or Chris Burke's tesspoint to check if TESS object was observed:
     # Returns dictionary of each sector and whether it was observed or not
-    if type(tic)==int or type(tic)==float:
-        page = requests.get('https://heasarc.gsfc.nasa.gov/cgi-bin/tess/webtess/wtv.py?Entry='+str(int(tic)))
-    elif type(tic)==SkyCoord:
-        page = requests.get('https://heasarc.gsfc.nasa.gov/cgi-bin/tess/webtess/wtv.py?Entry='+str(tic.ra.deg)+"%2C+"+str(tic.dec.deg))
+    if radec is None:
+        if type(tic) in [np.int64,np.float64,int,float]:
+            page = requests.get('https://heasarc.gsfc.nasa.gov/cgi-bin/tess/webtess/wtv.py?Entry='+str(int(tic)))
+        elif type(tic)==SkyCoord:
+            page = requests.get('https://heasarc.gsfc.nasa.gov/cgi-bin/tess/webtess/wtv.py?Entry='+str(tic.ra.deg)+"%2C+"+str(tic.dec.deg))
+        else:
+            print(type(tic),"- unrecognised")
+        #print('https://heasarc.gsfc.nasa.gov/cgi-bin/tess/webtess/wtv.py?Entry='+str(tic))
+        tree = html.fromstring(page.content)
+        Lamp = tree.xpath('//pre/text()') #stores class of //pre html element in list Lamp
+        tab=tree.xpath('//pre/text()')[0].split('\n')[2:-1]
+        out_dic={int(t[7:9]): True if t.split(':')[1][1]=='o' else False for t in tab}
     else:
-        print(type(tic),"- unrecognised")
-    #print('https://heasarc.gsfc.nasa.gov/cgi-bin/tess/webtess/wtv.py?Entry='+str(tic))
-    tree = html.fromstring(page.content)
-    Lamp = tree.xpath('//pre/text()') #stores class of //pre html element in list Lamp
-    tab=tree.xpath('//pre/text()')[0].split('\n')[2:-1]
-    out_dic={int(t[7:9]): True if t.split(':')[1][1]=='o' else False for t in tab}
+        from tess_stars2px import tess_stars2px_function_entry as tess_stars2px
+        result = tess_stars2px(tic, radec.ra.deg, radec.dec.deg)
+        sectors = result[3]
+        out_dic={s:True if s in sectors else False for s in np.arange(maxsect)}
     #print(out_dic)
     return out_dic
 
@@ -796,12 +820,31 @@ def getCorotLC(corid,use_ppt=True,**kwargs):
     else:
         return None
 
-def TESS_lc(tic, sectors='all',use_ppt=True, coords=None, use_qlp=None, use_eleanor=None, data_loc=None,**kwargs):
+def update_lc_locs(epoch,most_recent_sect):
+    #Updating the table of lightcurve locations using the scripts on the MAST/TESS "Bulk Downloads" page.
+    all_sects=np.arange(np.max(epoch.index.values),most_recent_sect).astype(int)+1
+    for sect in all_sects:
+        fitsloc="https://archive.stsci.edu/missions/tess/download_scripts/sector/tesscurl_sector_"+str(sect).zfill(2)+"_lc.sh"
+        h = httplib2.Http()
+        resp, content = h.request(fitsloc)
+        if int(resp['status']) < 400:
+            filename=content.split(b'\n')[1].decode().split(' ')[-2].split('-')
+            epoch=epoch.append(pd.Series({'date':int(filename[0][4:]),'runid':int(filename[3])},name=sect))
+        else:
+            print("Sector "+str(sect)+" not (yet) found on MAST | RESPONCE:"+resp['status'])
+    epoch.to_csv(MonoData_tablepath+"/tess_lc_locations.csv")
+    return epoch
+
+def TESS_lc(tic, sectors='all',use_ppt=True, coords=None, use_qlp=None, use_eleanor=None, data_loc=None, search_fast=False, **kwargs):
     #Downloading TESS lc
     if data_loc is None:
         data_loc=MonoData_savepath+"/TIC"+str(int(tic)).zfill(11)
-
+    #Using the JD today and the JD start of the first sector (TJD=1325.29278) to estimate most recent sector
+    from astropy.time import Time
+    most_recent_sect = np.floor((Time(datetime.now().strftime("%Y-%m-%d")).jd-2458325.29278)/27.295)-1
     epoch=pd.read_csv(MonoData_tablepath+"/tess_lc_locations.csv",index_col=0)
+    if most_recent_sect not in epoch.index:
+        epoch=update_lc_locs(epoch,most_recent_sect)
     sect_to_orbit={sect+1:[9+sect*2,10+sect*2] for sect in range(np.max(epoch.index))}
     lcs=[];lchdrs=[]
     if sectors == 'all':
@@ -828,15 +871,24 @@ def TESS_lc(tic, sectors='all',use_ppt=True, coords=None, use_qlp=None, use_elea
     spoclcs={}
     for key in epochs:
         #2=minute cadence data from tess website
-        fitsloc="https://archive.stsci.edu/missions/tess/tid/s"+str(key).zfill(4)+"/"+str(tic).zfill(16)[:4]+"/"+str(tic).zfill(16)[4:8]+"/"+str(tic).zfill(16)[-8:-4]+"/"+str(tic).zfill(16)[-4:]+"/tess"+str(epoch.loc[key,'date'])+"-s"+str(key).zfill(4)+"-"+str(tic).zfill(16)+"-"+str(epoch.loc[key,'runid']).zfill(4)+"-s_lc.fits"
-        h = httplib2.Http()
-        strtid=str(int(tic)).zfill(16)
-        resp = h.request(fitsloc, 'HEAD')
-        if int(resp[0]['status']) < 400:
-            with fits.open(fitsloc,show_progress=False) as hdus:
-                spoclcs[key]=openFits(hdus,fitsloc,mission='tess',use_ppt=use_ppt,**kwargs)
-                lchdrs+=[hdus[0].header]
-        else:
+        ntype=0
+        types=['fast-lc','lc'] if search_fast else ['lc']
+        while key not in spoclcs and ntype<len(types):
+            fitsloc="https://archive.stsci.edu/missions/tess/tid/s"+str(key).zfill(4)+"/"+str(tic).zfill(16)[:4]+"/"+str(tic).zfill(16)[4:8] + \
+                    "/"+str(tic).zfill(16)[-8:-4]+"/"+str(tic).zfill(16)[-4:]+"/tess"+str(epoch.loc[key,'date'])+"-s"+str(key).zfill(4)+"-" + \
+                    str(tic).zfill(16)+"-"+str(epoch.loc[key,'runid']).zfill(4)+"-s_"+types[ntype]+".fits"
+            h = httplib2.Http()
+            strtid=str(int(tic)).zfill(16)
+            resp = h.request(fitsloc, 'HEAD')
+            if int(resp[0]['status']) < 400:
+                with fits.open(fitsloc,show_progress=False) as hdus:
+                    spoclcs[key]=openFits(hdus,fitsloc,mission='tess',use_ppt=use_ppt,**kwargs)
+                    lchdrs+=[hdus[0].header]
+            else:
+                print("LC type",types[ntype],"is not accessible")
+            ntype+=1
+    
+        if key not in spoclcs:
             #Getting spoc 30min data:
             fitsloc='https://mast.stsci.edu/api/v0.1/Download/file?uri=mast:HLSP/tess-spoc/s'+str(int(key)).zfill(4) + \
                     "/target/"+strtid[:4]+"/"+strtid[4:8]+"/"+strtid[8:12]+"/"+strtid[12:] + \
@@ -1071,7 +1123,7 @@ def cutLc(lctimes,max_len=10000,return_bool=True,transit_mask=None):
         else:
             return [lctimes]
 
-def weighted_avg_and_std(values, errs, axis=None):
+def weighted_avg_and_std(values, errs, masknans=True, axis=None):
     """
     Return the weighted average and standard deviation.
 
@@ -1083,8 +1135,10 @@ def weighted_avg_and_std(values, errs, axis=None):
         variance = np.average((values-average)**2, weights=1/errs**2,axis=axis)
         binsize_adj = np.sqrt(len(values)) if axis is None else np.sqrt(values.shape[axis])
         return [average, np.sqrt(variance)/binsize_adj]
-    else:
+    elif len(values)==1:
         return [values[0], errs[0]]
+    else:
+        return [np.nan, np.nan]
 
 def lcBin(lc,binsize=1/48,split_gap_size=0.8,use_flat=True,use_masked=True, use_raw=False,extramask=None,modify_lc=True):
     #Binning lightcurve to e.g. 30-min cadence for planet search
@@ -1606,3 +1660,229 @@ def ToLatexTable(trace, ID, mission='TESS', varnames='all',order='columns',
         file_to_write.write(outstring)
     #print("appending to file,",savename,"not yet supported")
     return outstring
+
+def partition_list(a, k):
+    """AI is creating summary for partition_list
+
+    Args:
+        a (list): Ordered list of lengths that we wish to evenly split into k pieces
+        k (int): Number of parts along which to split a
+
+    Returns:
+        list: Ordered index of which of `k` bins the value in `a` belongs
+    """
+    if k <= 1: return np.tile(0,len(a))
+    if k == len(a): return np.arange(k)
+    assert k<len(a) #Cannot have more plot rows that data sectors...
+    partition_between = [(i+1)*len(a) // k for i in range(k-1)]
+    average_height = float(sum(a))/k
+    best_score = None
+    best_partitions = None
+    count = 0
+
+    while True:
+        starts = [0] + partition_between
+        ends = partition_between + [len(a)]
+        partitions = [a[starts[i]:ends[i]] for i in range(k)]
+        heights = list(map(sum, partitions))
+        abs_height_diffs = list(map(lambda x: abs(average_height - x), heights))
+        worst_partition_index = abs_height_diffs.index(max(abs_height_diffs))
+        worst_height_diff = average_height - heights[worst_partition_index]
+
+        if best_score is None or abs(worst_height_diff) < best_score:
+            best_score = abs(worst_height_diff)
+            best_partitions = partitions
+            no_improvements_count = 0
+        else:
+            no_improvements_count += 1
+
+        if worst_height_diff == 0 or no_improvements_count > 5 or count > 100:
+            return np.hstack([np.tile(i,ends[i]-starts[i]) for i in range(len(starts))])
+            #best_partitions
+        count += 1
+
+        move = -1 if worst_height_diff < 0 else 1
+        bound_to_move = 0 if worst_partition_index == 0\
+                        else k-2 if worst_partition_index == k-1\
+                        else worst_partition_index-1 if (worst_height_diff < 0) ^ (heights[worst_partition_index-1] > heights[worst_partition_index+1])\
+                        else worst_partition_index
+        direction = -1 if bound_to_move < worst_partition_index else 1
+        partition_between[bound_to_move] += move * direction
+
+def kepler_spline(time, flux, flux_mask = None, transit_mask = None, bk_space=1.25, maxiter=5, outlier_cut=3, polydegree=3, reflect=False):
+    """Computes a best-fit spline curve for a light curve segment.
+    The spline is fit using an iterative process to remove outliers that may cause
+    the spline to be "pulled" by discrepent points. In each iteration the spline
+    is fit, and if there are any points where the absolute deviation from the
+    median residual is at least 3*sigma (where sigma is a robust estimate of the
+    standard deviation of the residuals), those points are removed and the spline
+    is re-fit.
+    Args:
+        time: Numpy array; the time values of the light curve.
+        flux: Numpy array; the flux (brightness) values of the light curve.
+        flux_mask (np.ndarray of booleans, optional): Numpy array where False values refer to anomalies. Defaults to None
+        transit_mask (np.ndarray of booleans, optional): Numpy array where False values refer to in-transit points
+        bk_space: Spline break point spacing in time units.
+        maxiter: Maximum number of attempts to fit the spline after removing badly
+                fit points.
+        outlier_cut: The maximum number of standard deviations from the median
+                spline residual before a point is considered an outlier.
+        polydegree: Polynomial degre. Defaults to 3
+        reflect: Whether to perform spline fit using reflection of final time...
+    Returns:
+        spline: The values of the fitted spline corresponding to the input time
+                values.
+        mask: Boolean mask indicating the points used to fit the final spline.
+    Raises:
+        InsufficientPointsError: If there were insufficient points (after removing
+                outliers) for spline fitting.
+        SplineError: If the spline could not be fit, for example if the breakpoint
+                spacing is too small.
+    """
+    region_starts=np.sort(time)[1+np.hstack((-1,np.where(np.diff(np.sort(time))>bk_space)[0]))]
+    region_ends  =np.sort(time)[np.hstack((np.where(np.diff(np.sort(time))>bk_space)[0],len(time)-1))]
+    spline = []
+    mask = []
+    for n in range(len(region_starts)):
+        ix=(time>=region_starts[n])*(time<=region_ends[n])
+        assert len(time[ix])>4
+
+        # Rescale time into [0, 1].
+        t_min = np.min(time[ix])
+        t_max = np.max(time[ix])
+        n_interior_knots = int(np.round((t_max-t_min)/bk_space))
+        qs = np.linspace(0, 1, n_interior_knots+2)[1:-1]
+
+        # Values of the best fitting spline evaluated at the time points.
+        ispline = None
+
+        # Mask indicating the points used to fit the spline.
+        imask = np.ones_like(time[ix], dtype=np.bool)
+        imask = imask*flux_mask[ix] if flux_mask is not None else imask
+        imask = imask*transit_mask[ix] if transit_mask is not None else imask
+
+        if reflect and (region_ends[n]-region_starts[n])>1.8*bk_space:
+            incad=np.nanmedian(np.diff(time[ix]))
+            xx=[np.arange(region_starts[n]-bk_space*0.9,region_starts[n]-incad,incad),
+                np.arange(region_ends[n]+incad,region_ends[n]+bk_space*0.9,incad)]
+            # Adding the lc, plus a reflected region either side of each part.
+            # Also adding a boolean array to show where the reflected parts are
+            # Also including zeros to make sure flux spline does not wander far from lightcurve
+            itime=np.hstack((time[ix][0]-1.35*bk_space, time[ix][0]-1.3*bk_space, xx[0], time[ix], xx[1], time[ix][-1]+1.3*bk_space,time[ix][-1]+1.35*bk_space))
+            imask=np.hstack((True, True, imask[:len(xx[0])][::-1], imask, imask[-1*len(xx[1]):][::-1], True, True))
+            iflux=np.hstack((0.0,0.0,flux[ix][:len(xx[0])][::-1], flux[ix], flux[ix][-1*len(xx[1]):][::-1], 0.0, 0.0 ))
+            ibool=np.hstack((np.zeros(len(xx[0])+2),np.ones(np.sum(ix)),np.zeros(len(xx[1])+2))).astype(bool)
+
+        else:
+            itime=time[ix]
+            iflux=flux[ix]
+            ibool=np.tile(True,len(itime))
+
+        for ni in range(maxiter):
+            if ispline is not None:
+                # Choose points where the absolute deviation from the median residual is
+                # less than outlier_cut*sigma, where sigma is a robust estimate of the
+                # standard deviation of the residuals from the previous spline.
+                residuals = iflux - ispline
+                
+                new_imask = robust_mean(residuals[imask], cut=outlier_cut)[2]
+                # in ",ni,"th run")
+                if np.all(new_imask):
+                    break    # Spline converged.
+                #Otherwise we're adding the updated mask to the mask
+                imask[imask] = new_imask
+
+            if np.sum(imask) > 4:
+                # Fewer than 4 points after removing outliers. We could plausibly return
+                # the spline from the previous iteration because it was fit with at least
+                # 4 points. However, since the outliers were such a significant fraction
+                # of the curve, the spline from the previous iteration is probably junk,
+                # and we consider this a fatal error.
+                try:
+                    with warnings.catch_warnings():
+                        # Suppress warning messages printed by pydlutils.bspline. Instead we
+                        # catch any exception and raise a more informative error.
+                        warnings.simplefilter("ignore")
+
+                        # Fit the spline on non-outlier points.
+                        #curve = BSpline.iterfit(time[mask], flux[mask], bkspace=bk_space)[0]
+                        knots = np.quantile(itime[imask], qs)
+                        #print(np.all(np.isfinite(flux[mask])),np.average(flux[mask]))
+                        tck = splrep(itime[imask], iflux[imask], t=knots, k=polydegree)
+                    ispline = splev(itime, tck)
+
+                    # Evaluate spline at the time points.
+                    #spline = curve.value(time)[0]
+
+                    #spline = np.copy(flux)
+                except (IndexError, TypeError, ValueError) as e:
+                    raise ValueError(
+                            "Fitting spline failed with error: '%s'. This might be caused by the "
+                            "breakpoint spacing being too small, and/or there being insufficient "
+                            "points to fit the spline in one of the intervals." % e)
+            else:
+                ispline=np.tile(np.nanmedian(iflux[imask]),len(iflux))
+                break
+        spline+=[ispline[ibool]]
+        mask+=[imask[ibool]]
+
+
+    return np.hstack(spline), np.hstack(mask)
+
+def robust_mean(y, cut):
+    """Computes a robust mean estimate in the presence of outliers.
+    Args:
+        y: 1D numpy array. Assumed to be normally distributed with outliers.
+        cut: Points more than this number of standard deviations from the median are
+                ignored.
+    Returns:
+        mean: A robust estimate of the mean of y.
+        mean_stddev: The standard deviation of the mean.
+        mask: Boolean array with the same length as y. Values corresponding to
+                outliers in y are False. All other values are True.
+    """
+    # First, make a robust estimate of the standard deviation of y, assuming y is
+    # normally distributed. The conversion factor of 1.4826 takes the median
+    # absolute deviation to the standard deviation of a normal distribution.
+    # See, e.g. https://www.mathworks.com/help/stats/mad.html.
+    absdev = np.abs(y - np.median(y))
+    sigma = 1.4826 * np.median(absdev)
+
+    # If the previous estimate of the standard deviation using the median absolute
+    # deviation is zero, fall back to a robust estimate using the mean absolute
+    # deviation. This estimator has a different conversion factor of 1.253.
+    # See, e.g. https://www.mathworks.com/help/stats/mad.html.
+    if sigma < 1.0e-24:
+        sigma = 1.253 * np.mean(absdev)
+
+    # Identify outliers using our estimate of the standard deviation of y.
+    mask = absdev <= cut * sigma
+
+    # Now, recompute the standard deviation, using the sample standard deviation
+    # of non-outlier points.
+    sigma = np.std(y[mask])
+
+    # Compensate the estimate of sigma due to trimming away outliers. The
+    # following formula is an approximation, see
+    # http://w.astro.berkeley.edu/~johnjohn/idlprocs/robust_mean.pro.
+    sc = np.max([cut, 1.0])
+    if sc <= 4.5:
+        sigma /= (-0.15405 + 0.90723 * sc - 0.23584 * sc**2 + 0.020142 * sc**3)
+
+    # Identify outliers using our second estimate of the standard deviation of y.
+    mask = absdev <= cut * sigma
+
+    # Now, recompute the standard deviation, using the sample standard deviation
+    # with non-outlier points.
+    sigma = np.std(y[mask])
+
+    # Compensate the estimate of sigma due to trimming away outliers.
+    sc = np.max([cut, 1.0])
+    if sc <= 4.5:
+        sigma /= (-0.15405 + 0.90723 * sc - 0.23584 * sc**2 + 0.020142 * sc**3)
+
+    # Final estimate is the sample mean with outliers removed.
+    mean = np.mean(y[mask])
+    mean_stddev = sigma / np.sqrt(len(y) - 1.0)
+
+    return mean, mean_stddev, mask

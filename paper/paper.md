@@ -57,11 +57,42 @@ Indeed the longest-duration transit yet found belonged to a monotransit detected
 
 # Input Information
 
-- **Detrended Lightcurve.**
+## Detrended Lightcurve
+We built a custom `MonoTools.lightcurve` package to manipulate photometric lightcurves for this package. This includes the ability to download all available Kepler, K2, CoRoT and TESS lightcurves for any target.
 
-- **Supplementary Photometric data.**
+### Kepler
+For stars in or near the Kepler field, we use `astroquery` to query the Kepler input catalogue (KIC) to assess if the star was observed.
+The Kepler lightcurves (either 1 or 30-min cadence, depending on availablity) were accessed on MAST and the `PDCSAP` flux (pre-datasearch conditioning simple aperture photometry) was used as the default flux. We masked points where the `quality` bits [1,2,3,4,6,7,8,9,13,15,16,17] were flagged.
 
-- **Stellar parameters.**
+### K2
+Like for Kepler, we check for any star near the ecliptic if the star has an EPIC (Ecliptic plane input catalogue, @Huber2014) ID using `astroquery` 
+Unlike Kepler, K2 had a diversity of pipelines used to produce photometry. 
+`MonoTools.lightcurve` has the capability to access data from Everest [@luger2016], K2SPP [@Vanderburg2015], and PDC [].
+Unless specified `MonoTools.lightcurve` will search in this order, which follows typical lightcurve precision, until data is found for a given EPIC.
+
+### CoRoT
+The CoRoT object search API available at the NASA Exoplanet Archive is used to both search for and then download CoRoT data.
+Although three band photometry is available, we are typically most interested in the more precise monochrome lightcurve, so this is by default the flux parameter.
+As CoRoT observed continuously from its low-earth orbit, the South Atlantic Anomaly produced clear flux bumps in the data due to excess cosmic rays, which needs to be removed from the data. 
+To do this, each flux point is compared with its 24 neighbours and any point identified to be significantly (at $3.2\sigma$) higher than its neighbours median flux in 80% of possible bins is added to a mask. 
+This is iterated (typically twice) to make sure an accurate standard deviation without the highest anomalies with lower but still-significant SNR to be removed.
+
+### TESS
+Given an RA/Dec, we search the TIC (TESS Input Catalogue @Stassun2018) to find the TESS ID for a given target.
+As for K2, there is not one unique pipeline for TESS data, especially for those targets not observed in 2-minute TPFs but only in the FFIs.
+In this case, `MonoTools.lightcurve` will search MAST for a PDC (20s or 120s) lightcurve [@Jenkins], a SPOC-TESS (10 or 30min) lightcurve, a QLP (Quick-Look Pipeline, [@Huang]), and finally an Eleanor lightcurve [@Feinstein2019]).
+
+### Lightcurve functions
+- `change_jd_base` - Change time base between modified julian dates (e.g. 2454833 to 2457000)
+- `change_flx_system` - Change from e.g. photons to ppt or ppm.
+- `bin` - Bin the flux timeseries
+- `flatten` - Flatten either with splines or with out-of-box polynomials
+- `make_cadmask` - Make a mask which
+- `make_fluxmask` - Make a flux mask by search for an covering anomalies
+- `save` - Save lightcurve as numpy csv and/or pickled python file.
+- `plot` - Plot lightcurve timeseries in multi-row figure.
+
+## Stellar parameters
 
 
 # Search
@@ -229,8 +260,8 @@ Period is always marginalised, but so can $t_D$ or $b$.
 However, this implementation of marginalisation can still be slow, and suffers from drawbacks.
 For $t_D$ and $b$ one must always be globally fitted and the other marginalised.
 But, their connection to the orbital period means that across this marginalisation there is always going to be many aliases which do not well represent the data.
-For example, if a 15d planet with $b=0.2$ fits the transit well, a 150d planet is sure to produce far too long a transit duration, and therefore a very low likelihood.
-And, despite the fact a 150d plant might be able to well explain the data at b=0.8, this part of the parameter space is not explored and our 150d alias is given an artificially low marginal probability.
+For example, if a 15d planet with $b=0.2$ fits the transit well, a 150d planet with the same transit chord is sure to produce far too long a transit duration, and therefore a very low likelihood.
+And, despite the fact a 150d plant might be able to well explain the data at higher impact parameters, the strong prior on period means this part of the parameter space is not explored and our 150d alias may be given an artificially low marginal probability.
 
 ### Marginalising with derived in-transit velocity
 
@@ -241,17 +272,17 @@ For each of the period aliases and the sampled stellar parameters, we can calcul
 The derived transit velocity as a ratio of circular velocity ($v/v_{\rm circ}$) for each period alias/gap then becomes the important quantity to marginalise.
 Of course this is incompatible with the assumption of a circular orbit - we require an eccentricity distribution for this method to work.
 
-As we are assuming the likelihood for each alias is identical (or at least negligible), all that is important is deriving a log prior for each.
-The key part of this log prior comes from the assumed eccentricity distribution.
+As we are directly modelling the transit shape the likelihood for each alias is identical (or at least negligibly different), all that is important is deriving a prior for each.
+The key part of this prior comes from the assumed eccentricity distribution.
 Observations of exoplanets show that low eccentricities are typically preferred over high ones.
 Two distributions are typically used to quantify this - the beta distribtion of @kipping2013parametrizing for typically single-planet RV systems, and the Rayleigh distribution of @van2015eccentricity for multi-planet transiting systems.
 
-Another observational constraint on eccentricity comes from the distribution of perihelion distances - exoplanet orbits do not typically pass within $2R_s$.
-In terms of semi-major axis, we require that $e < 1 - 2R_s/a$.
+Another observational constraint on eccentricity comes from the distribution of perihelion distances - exoplanet orbits do not typically pass within $2R_s$, as within this radius tidal circularisation occurs.
+In terms of semi-major axis, we include a sharp sigmoid prior at the threshold of $e = 1 - 2R_s/a$ which corresponds to this perihelion limit.
 We can also include another upper limit on eccentricity here - stable exoplanetary systems require that a planet's orbit does not cross the orbit of interior candidates.
 So in the case of transiting multi-planet systems we can use $e < 1 - R_s/a_{\rm inner}$.
 
-Each given $v/v_{\rm circ}$ we must calculate the possible eccentricity and argument of periastron.
+For each given $v/v_{\rm circ}$ we must calculate the possible eccentricity and argument of periastron.
 From @barnes2007effects (Eq 12) we know that a planet's azimuthal velocity can be defined as:
 
 $\frac{v_f}{v_{circ}} = \frac{1+e\cos{f}}{\sqrt{1-e^2}}$ where $f_{\rm tr}=(\omega-\pi/2)$.
@@ -273,7 +304,7 @@ As the geometric probability of transit is a function of the distance in-transit
 $$ \frac{d_{\rm Tr}}{a} = \frac{1 + e \sin{\omega}}{1 - e^2}$$
 
 Therefore the probability of each grid position is then determined by the probability derived from selected prior distribution (i.e. `'kipping'`,`'vaneylen'` or `'uniform'`) multiplied by the geometric correction.
-In the case that the derived eccentricity is above $e_{\rm max}$, the probability is set to zero.
+In the case that the derived eccentricity is above $e_{\rm max}$, a log prior of -500 is added.
 
 As all velocities here are normalised to circular velocities and the joint argument of periastron -- eccentricity distributions remain constant with period, these calculations should remain constant for any period across all model samples.
 However, the maximum permitted eccentricity ($e_{\rm max}$) can vary for each sample due to e.g. the sampled stellar radius and parameters for the orbits of interior planets.
@@ -304,7 +335,17 @@ Transit duration and impact parameter can both
 
 ### Treatment of limb darkening parameters
 
+Limb-darkening parameters define the relative variation in surface brightness of a star from centre to limb, and therefore govern the shape of the transit between ingress and egress.
+For high-SNR transits where other parameers including orbital period are well-constrained, it is typically preferred to fit for limb-darkening parameters directly from the transit.
+However, for analyses where we wish to use the transit shape to constrain other parameters, it instead makes sense to constrain the limb-darkening using priors derived from theoretical predictions.
+For this reason, in the default case, `MonoTools.fit` constrains the limb darkening parameters using the derived stellar parameters (although it is also possible to fit unbiased).
 
+Tables of theoretical limb darkening parameters typically produce grids of each parameter with respect to stellar effective temperature, $\log{\rm g}$, metallicity and micro-turbulence.
+We select the nearest unique metallicity value (default of \[Fe/H\]=0.0) and micro-turbulence (default 1km/s), and perform a 2D interpolation of the Teff-logg values for each of the two quadratic limb darkening parameters.
+We then generate a sample of stellar Teff & logg values from the stellar paramters using a minimum uncertainty of 100K and 0.1dex to allow to potential systematic errors in stellar parameters. 
+The interpolation functions then produce samples for each of the two quadratic parameters, from which we construct a normally-distributed prior.
+
+In both cases, the Kipping reparameterisation of limb darkening [@kipping2013] is used to allow for efficient & physically-motivated sampling.
 
 ### Treatment of period gaps & aliases
 
@@ -312,7 +353,26 @@ Transit duration and impact parameter can both
 ### Eccentricity distribution marginalisation
 
 
+### Other photometric fitting parameters
 
+Gaussian processes
+
+Jitter
+
+Dilution may be important, especially when unresolved stellar companions are detected through high-resolution imaging.
+To allow for this, we include the ability to include either constrained or unconstrained dilution from a stellar companion.
+In the case of unconstrained dilution, we allow the magnitude difference of the companion to vary from -10 to 10, while in the constrained option the user can define mean and standard deviations for each observed band.
+This is converted from $\Delta {\rm mag}$ to a correction factor for the undiluted flux to the total flux, $F_{\rm targ}/F_{\rm total} = 2.511^{-\Delta {\rm mag}}$.
+
+
+## Radial Velocity modelling
+
+### 
+
+
+### Derived semi-amplitude
+
+### 
 
 # Validation
 
