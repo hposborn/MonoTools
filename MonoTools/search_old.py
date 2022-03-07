@@ -17,6 +17,7 @@ from datetime import datetime
 
 from scipy import optimize
 import exoplanet as xo
+import pymc3_ext as pmx
 import scipy.interpolate as interp
 import scipy.optimize as optim
 import matplotlib.pyplot as plt
@@ -237,13 +238,13 @@ def QuickMonoFit(lc,it0,dur,Rs=None,Ms=None,Teff=None,useL2=False,fit_poly=True,
         pm.Normal("obs", mu=light_curve, sd=yerr, observed=y)
         #print(model.check_test_point())
         if fit_poly:
-            map_soln = xo.optimize(start=model.test_point,vars=[trend],verbose=False)
-            map_soln = xo.optimize(start=map_soln,vars=[trend,log_ror,log_per,tcen],verbose=False)
+            map_soln = pmx.optimize(start=model.test_point,vars=[trend],verbose=False)
+            map_soln = pmx.optimize(start=map_soln,vars=[trend,log_ror,log_per,tcen],verbose=False)
 
             # Fit for the maximum a posteriori parameters
         else:
-            map_soln = xo.optimize(start=model.test_point,vars=[mean],verbose=False)
-            map_soln = xo.optimize(start=map_soln,vars=[mean,log_ror,log_per,tcen],verbose=True)
+            map_soln = pmx.optimize(start=model.test_point,vars=[mean],verbose=False)
+            map_soln = pmx.optimize(start=map_soln,vars=[mean,log_ror,log_per,tcen],verbose=True)
         
         '''
         map_soln = xo.optimize(start=map_soln,vars=[b, log_ror, log_per, tcen],verbose=False)
@@ -257,7 +258,7 @@ def QuickMonoFit(lc,it0,dur,Rs=None,Ms=None,Teff=None,useL2=False,fit_poly=True,
         map_soln = xo.optimize(start=map_soln,verbose=False)
         '''
         
-        map_soln, func = xo.optimize(start=map_soln,verbose=False,return_info=True)
+        map_soln, func = pmx.optimize(start=map_soln,verbose=False,return_info=True)
         '''
         interpy=xo.LimbDarkLightCurve(map_soln['u_star']).get_light_curve(
                     r=float(map_soln['r_pl']),
@@ -2356,13 +2357,13 @@ def xoEB(lc,planets):
         map_soln = model.test_point
 
         # Then the LC parameters
-        map_soln = xo.optimize(map_soln, [mean_lc, R1, k, s, b])
-        map_soln = xo.optimize(map_soln, [mean_lc, R1, k, s, b, u1, u2])
-        map_soln = xo.optimize(map_soln, [mean_lc, sigma_lc, S_tot_lc, ell_lc, q])
-        map_soln = xo.optimize(map_soln, [t0, period])
+        map_soln = pmx.optimize(map_soln, [mean_lc, R1, k, s, b])
+        map_soln = pmx.optimize(map_soln, [mean_lc, R1, k, s, b, u1, u2])
+        map_soln = pmx.optimize(map_soln, [mean_lc, sigma_lc, S_tot_lc, ell_lc, q])
+        map_soln = pmx.optimize(map_soln, [t0, period])
 
         # Then all the parameters together
-        map_soln = xo.optimize(map_soln)
+        map_soln = pmx.optimize(map_soln)
 
         model.gp_lc = gp_lc
         model.get_model_lc = get_model_lc

@@ -121,8 +121,8 @@ class monoModel():
                        'useL2':False,           # useL2 - bool - Fit for "second light" (i.e. a binary or planet+blend)
                        'FeH':0.0,               # FeH - float - Stellar FeH
                        'LoadFromFile':False,    # LoadFromFile - bool - Load previous model?
-                       'cutDistance':3.75,      # cutDistance - float - cut out points further than cutDistance*Tdur. 0.0 means no cutting
-                       'maskdist': 0.666,        #Distance, in transit durations, from set transits, to "mask" as in-transit data when e.g. flattening.
+                       'cut_distance':3.75,     # cut_distance - float - cut out points further than cut_distance*Tdur. 0.0 means no cutting
+                       'mask_distance': 0.666,       #Distance, in transit durations, from set transits, to "mask" as in-transit data when e.g. flattening.
                        'force_match_input':None,# force_match_input - Float/None add potential with this the sigma between the input and the output logror and logdur to force MCMC to match the input duration & maximise logror [e.g. 0.1 = match to 1-sigma=10%]
                        'debug':False,           # debug - bool - print debug statements?
                        'fit_params':['logror','b','tdur', 't0'], # fit_params - list of strings - fit these parameters. Options: ['logror', 'b' or 'tdur', 'ecc', 'omega']
@@ -135,7 +135,7 @@ class monoModel():
                        'pred_all':False,        # Do we predict all time array, or only a cut-down version?
                        'use_multinest':False,   # use_multinest - bool - currently not supported
                        'use_pymc3':True,        # use_pymc3 - bool
-                       'bin_oot':True}          # bin_oot - bool - Bin points outside the cutDistance to 30mins
+                       'bin_oot':True}          # bin_oot - bool - Bin points outside the cut_distance to 30mins
         for param in self.defaults:
             if not hasattr(self,param) or self.overwrite:
                 if param in kwargs:
@@ -158,12 +158,14 @@ class monoModel():
             self.LoadFromFile = success
         
         if lc is None or type(lc) is not lightcurve.multilc:
-            lc = lightcurve.multilc(id,mission)
+            lc = lightcurve.multilc(ID,mission)
         self.lc=lc
         setattr(lc,'near_trans', np.tile(False, len(lc.time)) if not hasattr(lc,'near_trans') else lc.near_trans)
         setattr(lc,'in_trans', np.tile(False, len(lc.time)) if not hasattr(lc,'in_trans') else lc.in_trans)
 
-
+        if not np.all(np.array([hasattr(self,starpar) for starpar in ['rhostar','Rstar','logg','Mstar']])):
+            self.init_starpars()
+        
         assert ID is not None and mission is not None and lc is not None
 
         if not self.LoadFromFile:
@@ -369,8 +371,8 @@ class monoModel():
                                 ((3*pl_dic['period']*86400) / (np.pi**2*6.67e-11*rho_S*1410))**(-2/3),
                                 0.01,2.0)**0.5
         phase=(self.lc.time-pl_dic['tcen']-0.5*pl_dic['period'])%pl_dic['period']-0.5*pl_dic['period']
-        self.lc.near_trans += abs(phase)<self.cutDistance*pl_dic['tdur']
-        self.lc.in_trans   += abs(phase)<self.maskdist*pl_dic['tdur']
+        self.lc.near_trans += abs(phase)<self.cut_distance*pl_dic['tdur']
+        self.lc.in_trans   += abs(phase)<self.mask_distance*pl_dic['tdur']
 
         self.planets[name]=pl_dic
         self.multis+=[name]
@@ -390,8 +392,8 @@ class monoModel():
         #Adds planet with single eclipses
 
         #Adding the planet to the lightcurve mask arrays first (as compute_period_gaps performs flattening).
-        self.lc.near_trans += abs(self.lc.time-pl_dic['tcen'])<self.cutDistance*pl_dic['tdur']
-        self.lc.in_trans   += abs(self.lc.time-pl_dic['tcen'])<self.maskdist*pl_dic['tdur']
+        self.lc.near_trans += abs(self.lc.time-pl_dic['tcen'])<self.cut_distance*pl_dic['tdur']
+        self.lc.in_trans   += abs(self.lc.time-pl_dic['tcen'])<self.mask_distance*pl_dic['tdur']
 
         #Calculating whether there are period gaps:
         assert name not in self.planets
@@ -504,7 +506,6 @@ class monoModel():
         dist_from_t0=dist_from_t0[(((depth/self.lc.flx_unit)/rmsseries[:,1])>SNR_thresh)*(~np.isnan(rmsseries[:,1]))]
         dist_from_t0=np.sort(dist_from_t0)
         gaps=np.where(np.diff(dist_from_t0)>(0.9*tdur))[0]
-        print(gaps)
         if len(gaps)>0:
             #Looping from minimum distance from transit to gap, to maximum distance from transit to end-of-lc
             checkpers=np.arange(dist_from_t0[gaps[0]]-tdur,np.max(dist_from_t0)+tdur,tdur*0.166)
@@ -684,17 +685,14 @@ class monoModel():
 
         for per in pl_dic['period_aliases']:
             phase=(self.lc.time-pl_dic['tcen']-0.5*per)%per-0.5*per
-            self.lc.near_trans+=abs(phase)<self.cutDistance*pl_dic['tdur']
-        self.lc.in_trans+=abs(self.lc.time-pl_dic['tcen'])<self.maskdist*pl_dic['tdur']
-        self.lc.in_trans+=abs(self.lc.time-pl_dic['tcen_2'])<self.maskdist*pl_dic['tdur']
+            self.lc.near_trans+=abs(phase)<self.cut_distance*pl_dic['tdur']
+        self.lc.in_trans+=abs(self.lc.time-pl_dic['tcen'])<self.mask_distance*pl_dic['tdur']
+        self.lc.in_trans+=abs(self.lc.time-pl_dic['tcen_2'])<self.mask_distance*pl_dic['tdur']
 
         self.planets[name]=pl_dic
         self.duos+=[name]
 
-    def init_starpars(self,Rstar=np.array([1.0,0.08,0.08]),
-                      Teff=np.array([5227,100,100]),
-                      logg=np.array([4.3,1.0,1.0]),
-                      FeH=0.0,rhostar=None,Mstar=None):
+    def init_starpars(self,Rstar=None,Teff=None,logg=None,FeH=0.0,rhostar=None,Mstar=None):
         """Adds stellar parameters to model
 
         Args:
@@ -705,6 +703,27 @@ class monoModel():
             rhostar (list, optional): Stellar density in rho_sol (1.411gcm^-3) in format [value, neg_err, pos_err]. Defaults to None.
             Mstar (float or list, optional): Stellar mass in Msol either as a float or in format [value, neg_err, pos_err]. Defaults to None.
         """
+        if Rstar is None and hasattr(self.lc,'all_ids') and 'tess' in self.lc.all_ids and 'data' in self.lc.all_ids['tess'] and 'rad' in self.lc.all_ids['tess']['data']:
+            #Radius info from lightcurve data (TIC)
+            if 'eneg_Rad' in self.lc.all_ids['tess']['data'] and self.lc.all_ids['tess']['data']['eneg_Rad'] is not None and self.lc.all_ids['tess']['data']['eneg_Rad']>0:
+                Rstar=self.lc.all_ids['tess']['data'][['rad','eneg_Rad','epos_Rad']].values
+            else:
+                Rstar=self.lc.all_ids['tess']['data'][['rad','e_rad','e_rad']].values
+            if 'eneg_Teff' in self.lc.all_ids['tess']['data'] and self.lc.all_ids['tess']['data']['eneg_Teff'] is not None and self.lc.all_ids['tess']['data']['eneg_Teff']>0:
+                Teff=self.lc.all_ids['tess']['data'][['Teff','eneg_Teff','epos_Teff']].values
+            else:
+                Teff=self.lc.all_ids['tess']['data'][['Teff','e_Teff','e_Teff']].values
+            if 'eneg_logg' in self.lc.all_ids['tess']['data'] and self.lc.all_ids['tess']['data']['eneg_logg'] is not None and self.lc.all_ids['tess']['data']['eneg_logg']>0:
+                logg=self.lc.all_ids['tess']['data'][['logg','eneg_logg','epos_logg']].values
+            else:
+                logg=self.lc.all_ids['tess']['data'][['logg','e_logg','e_logg']].values
+        if Rstar is None:
+            Rstar=np.array([1.0,0.08,0.08])
+        if Teff is None:
+            Teff=np.array([5227,100,100])
+        if logg is None:
+            logg=np.array([4.3,1.0,1.0])
+
         self.Rstar=np.array(Rstar).astype(float)
         self.Teff=np.array(Teff).astype(float)
         self.logg=np.array(logg).astype(float)
@@ -792,7 +811,6 @@ class monoModel():
                 #Finding next unused number with this date:
                 nsim=1+np.max([int(nmdp.split('_')[2]) for nmdp in datepickles])
         self.savenames=[os.path.join(self.savefileloc,self.id_dic[self.mission]+str(self.ID).zfill(11)+"_"+date+"_"+str(int(nsim))), os.path.join(self.savefileloc,self.id_dic[self.mission]+str(self.ID).zfill(11))]
-
 
     def add_rvs(self, rv_dic, n_poly_trend=2, overwrite=False, **kwargs):
         """Add a dictionary of rvs with arrays of:
@@ -883,12 +901,12 @@ class monoModel():
                 t0= self.init_soln['t0_'+pl] if hasattr(self,'init_soln') else self.planets[pl]['tcen']
                 phase=abs(self.lc.time-t0)
             dur = self.init_soln['tdur_'+pl] if hasattr(self,'init_soln') else self.planets[pl]['tdur']
-            self.lc.near_trans += abs(phase)<self.cutDistance*dur
-            self.lc.in_trans   += abs(phase)<self.maskdist*dur
+            self.lc.near_trans += abs(phase)<self.cut_distance*dur
+            self.lc.in_trans   += abs(phase)<self.mask_distance*dur
 
-        self.lc.flatten(transit_mask=~self.lc.in_trans)
+        self.lc.flatten(transit_mask=~self.lc.in_trans,**kwargs)
 
-        if self.cutDistance>0 or not self.use_GP:
+        if self.cut_distance>0 or not self.use_GP:
             if self.bin_oot:
                 #Creating a pseudo-binned dataset where out-of-transit LC is binned to 30mins but near-transit is not.
                 oot_binsize=1/12 if self.mission.lower()=='kepler' else 1/48
@@ -903,7 +921,7 @@ class monoModel():
             elif not self.bin_oot:
                 self.model_time=self.lc.time[self.lc.mask*self.lc.near_trans][:]
                 self.model_flux=self.lc.flux[self.lc.mask*self.lc.near_trans][:] if self.use_GP else self.lc.flux_flat[self.lc.mask*self.lc.near_trans][:]
-                self.model_flux_err=self.lc.flux[self.lc.mask*self.lc.near_trans][:]
+                self.model_flux_err=self.lc.flux_err[self.lc.mask*self.lc.near_trans][:]
                 self.model_cadence=self.lc.cadence[self.lc.mask*self.lc.near_trans][:]
                 self.model_in_trans=self.lc.in_trans[self.lc.mask*self.lc.near_trans][:]
                 self.model_near_trans=np.tile(True,len(self.model_time))
@@ -920,7 +938,7 @@ class monoModel():
         else:
             self.model_time=self.lc.time[self.lc.mask][:]
             self.model_flux=self.lc.flux[self.lc.mask][:] if self.use_GP else self.lc.flux_flat[self.lc.mask][:]
-            self.model_flux_err=self.lc.flux[self.lc.mask][:]
+            self.model_flux_err=self.lc.flux_err[self.lc.mask][:]
             self.model_cadence=self.lc.cadence[self.lc.mask][:]
             self.model_in_trans=self.lc.in_trans[self.lc.mask][:]
         
@@ -945,8 +963,8 @@ class monoModel():
             useL2 (bool, optional): Fit for "second light" (i.e. a binary or planet+blend). Defaults to False
             FeH (float, optional): Stellar FeH. Defaults to 0.0
             LoadFromFile (bool, optional): Load previous model? Defaults to False
-            cutDistance (float, optional): cut out points further than cutDistance*Tdur. 0.0 means no cutting. Defaults to 3.75
-            maskdist (float, optional): Distance, in transit durations, from set transits, to "mask" as in-transit data when e.g. flattening. 
+            cut_distance (float, optional): cut out points further than cut_distance*Tdur. 0.0 means no cutting. Defaults to 3.75
+            mask_distance (float, optional): Distance, in transit durations, from set transits, to "mask" as in-transit data when e.g. flattening. 
                                         Defaults to 0.666
             force_match_input (float OR None, optional): Float/None add potential with this the sigma between the input and the output logror and logdur 
                                                to force MCMC to match the input duration & maximise logror [e.g. 0.1 = match to 1-sigma=10%]. Defaults to None
@@ -961,7 +979,7 @@ class monoModel():
             derive_K (bool, optional): If we have RVs, do we derive K for each alias or fit for a single K param. Defaults to True
             use_multinest (bool, optional): Use Multinest sampling [NOT SUPPORTED YET]. Defaults to False
             use_pymc3 (bool, optional): Use PyMC3 sampling? Defaults to True
-            bin_oot (bool, optional): bool - Bin points outside the cutDistance to 30mins. Defaults to True
+            bin_oot (bool, optional): bool - Bin points outside the cut_distance to 30mins. Defaults to True
         """
 
         #Adding settings to class - not updating if we already initialised the model with a non-default value:
@@ -988,7 +1006,7 @@ class monoModel():
         ######################################
         # To speed up computation, here we loop through each planet and add the region around each transit to the data to keep
 
-        self.init_lc()
+        self.init_lc(**kwargs)
         ######################################
         #   Creating flux & telescope index func:
         ######################################
@@ -1037,13 +1055,13 @@ class monoModel():
             phot_mean=pm.Normal("phot_mean",mu=np.median(self.lc.flux[mask]),
                                   sd=np.std(self.lc.flux[mask]))
 
-            self.log_flux_std=np.array([np.log(np.nanstd(self.lc.mask*self.lc.cadence_index[:,n])) for n in range(len(self.cads_short))]).ravel().astype(floattype)
+            self.log_flux_std=np.array([np.log(np.nanmedian(abs(np.diff(self.lc.flux[self.lc.mask*self.lc.cadence_index[:,n]])))) for n in range(len(self.cads_short))]).ravel().astype(floattype)
             if self.debug: print(self.log_flux_std)
             if self.debug: print(self.cads_long)
             if self.debug: print(self.cads_long,np.unique(self.lc.cadence),self.log_flux_std,np.sum(mask))
             
-            logs2 = pm.Normal("logs2", mu = self.log_flux_std+1,
-                              sd = np.tile(1.0,len(self.log_flux_std)), shape=len(self.log_flux_std))
+            logs2 = pm.Normal("logs2", mu = self.log_flux_std,
+                              sd = np.tile(2.0,len(self.log_flux_std)), shape=len(self.log_flux_std))
 
             # Transit jitter & GP parameters
             #logs2 = pm.Normal("logs2", mu=np.log(np.var(y[m])), sd=10)
@@ -1057,7 +1075,7 @@ class monoModel():
                 try:
                     w0_alpha_beta = pmx.estimate_inverse_gamma_parameters(lower=minw0,upper=maxw0)
                     w0_mode = (w0_alpha_beta['beta']/(1+w0_alpha_beta['alpha']))
-                    print(maxw0,(2*np.pi)/(av_dur*0.33),minw0,w0_alpha_beta,w0_mode)
+                    if self.debug: print(maxw0,(2*np.pi)/(av_dur*0.33),minw0,w0_alpha_beta,w0_mode)
                     phot_w0 = pm.InverseGamma("phot_w0",testval=(2*np.pi)/10, **w0_alpha_beta)
                     success=True
                 except:
@@ -1075,7 +1093,7 @@ class monoModel():
             success=False
             while not success and maxpower<5*power_est:
                 try:
-                    print(maxpower,power_est,minpower)
+                    if self.debug: print(maxpower,power_est,minpower)
                     phot_power = pm.InverseGamma("phot_power",testval=minpower*5,
                                             **pmx.estimate_inverse_gamma_parameters(lower=minpower, upper=maxpower))
                     success=True
@@ -1261,12 +1279,13 @@ class monoModel():
                 #############################################
 
                 if 'logror' in self.marginal_params:
-                    logrors[pl]=pm.Uniform("logror_"+pl,lower=np.log(0.001), upper=np.log(0.25+int(self.useL2)),
-                                                testval=np.log(self.planets[pl]['ror']),
-                                                shape=self.n_margs[pl])
+                    logrors[pl]=pm.Bound(pm.Normal, lower=np.log(0.001), upper=np.log(0.25+int(self.useL2)))("logror_"+pl,
+                                         mu=np.tile(np.log(self.planets[pl]['ror']),self.n_margs[pl]),
+                                         sd=np.tile(1.0,self.n_margs[pl]),testval=np.tile(np.log(self.planets[pl]['ror']),self.n_margs[pl]),
+                                         shape=self.n_margs[pl])
                 else:
-                    logrors[pl]=pm.Uniform("logror_"+pl,lower=np.log(0.001), upper=np.log(0.25+int(self.useL2)),
-                                            testval=np.log(self.planets[pl]['ror']))
+                    logrors[pl]=pm.Bound(pm.Normal,lower=np.log(0.001), upper=np.log(0.25+int(self.useL2)))("logror_"+pl,
+                                         mu=np.log(self.planets[pl]['ror']),sd=0.75, testval=np.log(self.planets[pl]['ror']))
                 rors[pl]=pm.Deterministic("ror_"+pl,tt.exp(logrors[pl]))
                 rpls[pl]=pm.Deterministic("rpl_"+pl,109.2*rors[pl]*Rs)
                 #Estimating mass using simple polynomial:
@@ -1313,10 +1332,11 @@ class monoModel():
                     else:
                         bs[pl] = xo.distributions.ImpactParameter("b_"+pl, ror=rors[pl], testval=self.planets[pl]['b'])
                 if 'tdur' in self.fit_params and pl not in self.multis:
-                    tdurs[pl] = pm.Uniform("tdur_"+pl,
-                                           lower=0.33*self.planets[pl]['tdur'],
-                                           upper=3*self.planets[pl]['tdur'],
-                                           testval=self.planets[pl]['tdur'])
+                    tdurs[pl] = pm.Bound(pm.Normal,lower=0.33*self.planets[pl]['tdur'],
+                                                   upper=3*self.planets[pl]['tdur'])("tdur_"+pl,
+                                                   mu=self.planets[pl]['tdur'],
+                                                   sd=0.25*self.planets[pl]['tdur'],
+                                                   testval=self.planets[pl]['tdur'])
                 if 'b' not in self.fit_params and pl not in self.multis and not self.interpolate_v_prior:
                     #If we're not fitting for b we need to extrapolate b from a period and estimate a prior on b
                     if self.assume_circ:
@@ -1370,7 +1390,7 @@ class monoModel():
                     #sin(incl) = tt.sqrt(1-(bs[pl]/a_Rs[pl])**2)
 
                     #Data-driven prior:
-                    if not self.derive_K or (pl in self.multis and 'K' in self.planets[pl]):
+                    if not self.derive_K or pl in self.multis:
                         if 'K' in self.planets[pl]:
                             logKs[pl] = pm.Normal("logK_"+pl, mu=np.log(self.planets[pl]['K']), sd=0.5)
                         else:
@@ -1474,10 +1494,10 @@ class monoModel():
                 u_star_cheops = xo.distributions.QuadLimbDark("u_star_cheops", testval=np.array([0.3, 0.2]))
 
             if not hasattr(self,'log_flux_std'):
-                self.log_flux_std=np.array([np.log(np.nanstd(self.lc.flux[(~self.lc.in_trans)&(self.lc.cadence_index[:,nc])])) for nc in range(len(self.cads_short))]).ravel().astype(floattype)
+                self.log_flux_std=np.array([np.log(np.nanmedian(abs(np.diff(self.lc.flux[(~self.lc.in_trans)&(self.lc.cadence_index[:,nc])])))) for nc in range(len(self.cads_short))]).ravel().astype(floattype)
             if self.debug: print(self.log_flux_std,np.sum(~self.model_in_trans),"/",len(~self.model_in_trans))
 
-            logs2 = pm.Normal("logs2", mu = self.log_flux_std+1,
+            logs2 = pm.Normal("logs2", mu = self.log_flux_std-1,
                               sd = np.tile(2.0,len(self.log_flux_std)), shape=len(self.log_flux_std))
             ######################################
             #     Initialising RV background
@@ -1651,7 +1671,7 @@ class monoModel():
                                                                  orbit=i_orbit, r=r,
                                                                  t=pred_time.astype(floattype),texp=texp
                                                                  )/(self.lc.flx_unit*mult['ch'])]
-                    print(miss)
+                    if self.debug: print(miss)
                 #tt.printing.Print("trans_pred")(trans_pred)
                 # transit arrays (ntime x n_pls x 2) * telescope index (ntime x n_pls x 2), summed over dimension 2
                 if n_pl>1 and make_deterministic:
@@ -1717,7 +1737,7 @@ class monoModel():
             if len(self.duos+self.monos)>0:
                 #Initialising priors:
                 per_priors={};b_priors={};geom_ecc_priors={};ecc_lim_priors={}
-                edge_priors={};v_priors={};gap_width_priors={};
+                edge_priors={};v_priors={};gap_width_priors={}
             if self.force_match_input is not None:
                 match_input_potentials={}
 
@@ -1748,12 +1768,12 @@ class monoModel():
                 if hasattr(self,'rvs'):
                     if pl in self.duos+self.monos and self.interpolate_v_prior:
                         #In this case, we need to create N orbits but only one lightcurve (from the min eccentricity)
-                        tt.printing.Print("min_eccs[pl]")(min_eccs[pl])
-                        tt.printing.Print("omegas[pl]")(omegas[pl])
-                        tt.printing.Print("bs[pl]")(bs[pl])
-                        tt.printing.Print("t0s[pl]")(t0s[pl])
-                        
-                        tt.printing.Print("pers[pl]")(pers[pl])
+                        if self.debug:
+                            tt.printing.Print("min_eccs[pl]")(min_eccs[pl])
+                            tt.printing.Print("omegas[pl]")(omegas[pl])
+                            tt.printing.Print("bs[pl]")(bs[pl])
+                            tt.printing.Print("t0s[pl]")(t0s[pl])
+                            tt.printing.Print("pers[pl]")(pers[pl])
 
                         rvorbits[pl] = create_orbit(pl, Rs, rho_S, pers[pl], t0s[pl], bs[pl], n_marg=self.n_margs[pl],
                                                   eccs=min_eccs[pl], omegas=omegas[pl])
@@ -1794,11 +1814,10 @@ class monoModel():
                 #       Generating RVs for each submodels:
                 ################################################
                 if hasattr(self,'rvs'):
-                    
                     #new_rverr = ((1+tt.exp(rv_logs2))*self.rvs['rv_err'].astype(floattype))
                     sum_log_rverr = tt.sum(-len(self.rvs['rv'])/2 * tt.log(2*np.pi*((1+tt.exp(rv_logs2))*self.rvs['rv_err'].astype(floattype))**2))
                     #model_rvs[pl] = pm.Deterministic('model_rv_'+pl, tt.tile(Ks[pl].dimshuffle('x',0),(len(self.rvs['time']),1)))
-                    if self.derive_K:
+                    if pl in self.duos+self.monos and not hasattr(model,'nonmarg_rvs') and self.derive_K:
                         #Deriving the best-fit K from the data:
                         sinf, cosf = rvorbits[pl]._get_true_anomaly(self.rvs['time'])
                         #tt.printing.Print("cosf")(cosf)
@@ -1807,38 +1826,36 @@ class monoModel():
                                                   rvorbits[pl].ecc * rvorbits[pl].cos_omega)
                         #tt.printing.Print("normalised_rv_models")(normalised_rv_models[pl])
                         #The combination of all RV component that do not require marginalisation:
-                        tt.printing.Print("sinfs")(sinf)
-                        tt.printing.Print("cosfs")(cosf)
-                        tt.printing.Print("eccs")(rvorbits[pl].ecc)
-                        tt.printing.Print("shape_rv_trend")(rv_trend.shape)
-                        tt.printing.Print("shape_normalised_rvs")(normalised_rv_models[pl].shape)
+                        # tt.printing.Print("sinfs")(sinf)
+                        # tt.printing.Print("cosfs")(cosf)
+                        # tt.printing.Print("eccs")(rvorbits[pl].ecc)
+                        # tt.printing.Print("shape_rv_trend")(rv_trend.shape)
+                        # tt.printing.Print("shape_normalised_rvs")(normalised_rv_models[pl].shape)
                         
-                        if pl in self.duos+self.monos and not hasattr(model,'nonmarg_rvs'):
-                            tt.printing.Print("sum_normalised_rvs")(tt.sum(normalised_rv_models[pl]**2,axis=0))
-                            if (len(self.multis)+len(self.rvplanets))>1:
-                                for ipl in self.multis+list(self.rvplanets.keys()):
-                                    tt.printing.Print("multi_rvplanets_"+ipl)(model_rvs[ipl])
-                                    tt.printing.Print("shape_multi_rvplanets_"+ipl)(model_rvs[ipl].shape)
-                                tt.printing.Print("stacked_rvplanets_"+ipl)(tt.stack([model_rvs[ipl] for ipl in self.multis+list(self.rvplanets.keys())]))
-                                tt.printing.Print("shape_stacked_rvplanets_"+ipl)(tt.stack([model_rvs[ipl] for ipl in self.multis+list(self.rvplanets.keys())]).shape)
-                                nonmarg_rvs = pm.Deterministic("nonmarg_rvs", (rv_trend + tt.sum(tt.stack([model_rvs[ipl] for ipl in self.multis+list(self.rvplanets.keys())]),axis=0)))
-                            elif (len(self.multis)+len(self.rvplanets))==1:
-                                onlypl=self.multis+list(self.rvplanets.keys())
-                                nonmarg_rvs = pm.Deterministic("nonmarg_rvs",(rv_trend+model_rvs[onlypl[0]]))
-                            else:
-                                nonmarg_rvs = pm.Deterministic("nonmarg_rvs",rv_trend)
-                        if pl in self.duos+self.monos:
-                            #Mono or duo. Removing multi orbit if we have one:
-                            Ks[pl] = pm.Deterministic("K_"+pl, tt.clip(tt.batched_tensordot(tt.tile(self.rvs['rv'] - nonmarg_rvs,(self.n_margs[pl],1)), normalised_rv_models[pl].T, axes=1) / tt.sum(normalised_rv_models[pl]**2,axis=0),0.05,1e5))
-                        elif pl in self.multis and pl not in Ks and self.derive_K:
-                            #Multi:
-                            print(self.rvs['rv'].shape)
-                            tt.printing.Print("sum_normalised_rvs")(tt.sum(normalised_rv_models[pl]**2))
-                            Ks[pl] = pm.Deterministic("K_"+pl, tt.clip(tt.dot(self.rvs['rv'] - rv_trend, normalised_rv_models[pl]) / tt.sum(normalised_rv_models[pl]**2),0.05,1e5))
+                        if self.debug: tt.printing.Print("sum_normalised_rvs")(tt.sum(normalised_rv_models[pl]**2,axis=0))
+                        if (len(self.multis)+len(self.rvplanets))>1:
+                            # for ipl in self.multis+list(self.rvplanets.keys()):
+                            #     tt.printing.Print("multi_rvplanets_"+ipl)(model_rvs[ipl])
+                            #     tt.printing.Print("shape_multi_rvplanets_"+ipl)(model_rvs[ipl].shape)
+                            # tt.printing.Print("stacked_rvplanets_"+ipl)(tt.stack([model_rvs[ipl] for ipl in self.multis+list(self.rvplanets.keys())]))
+                            # tt.printing.Print("shape_stacked_rvplanets_"+ipl)(tt.stack([model_rvs[ipl] for ipl in self.multis+list(self.rvplanets.keys())]).shape)
+                            nonmarg_rvs = pm.Deterministic("nonmarg_rvs", (rv_trend + tt.sum(tt.stack([model_rvs[ipl] for ipl in self.multis+list(self.rvplanets.keys())]),axis=0)))
+                        elif (len(self.multis)+len(self.rvplanets))==1:
+                            onlypl=self.multis+list(self.rvplanets.keys())
+                            nonmarg_rvs = pm.Deterministic("nonmarg_rvs",(rv_trend+model_rvs[onlypl[0]]))
+                        else:
+                            nonmarg_rvs = pm.Deterministic("nonmarg_rvs",rv_trend)
+                        #Mono or duo. Removing multi orbit if we have one:
+                        if self.debug:
+                            tt.printing.Print("nonmarg_rvs")(nonmarg_rvs)
+                            tt.printing.Print("self.rvs['rv'] - nonmarg_rvs")(self.rvs['rv'] - nonmarg_rvs)
+                            tt.printing.Print("tt.tile(self.rvs['rv'] - nonmarg_rvs,(self.n_margs[pl],1))")(tt.tile(self.rvs['rv'] - nonmarg_rvs,(self.n_margs[pl],1)))
+                            tt.printing.Print("normalised_rv_models[pl].T")(normalised_rv_models[pl].T)
+                        Ks[pl] = pm.Deterministic("K_"+pl, tt.clip(tt.batched_tensordot(tt.tile(self.rvs['rv'] - nonmarg_rvs,(self.n_margs[pl],1)), normalised_rv_models[pl].T, axes=1) / tt.sum(normalised_rv_models[pl]**2,axis=0),0.05,1e5))
                         
                         model_rvs[pl] = pm.Deterministic('model_rv_'+pl, rvorbits[pl].get_radial_velocity(self.rvs['time'], K=Ks[pl]))
-                        tt.printing.Print("Ks")(Ks[pl].shape)
-                        tt.printing.Print("model_rvs[pl]")(model_rvs[pl].shape)
+                        # tt.printing.Print("Ks")(Ks[pl].shape)
+                        # tt.printing.Print("model_rvs[pl]")(model_rvs[pl].shape)
                         if pl in self.duos+self.monos and self.interpolate_v_prior:
                             Mps[pl]=pm.Deterministic("Mp_"+pl, Ks[pl] * ((2*np.pi*6.67e-11)/(86400*pers[pl]))**(-1/3)/\
                                                  tt.sqrt(1-(bs[pl]/a_Rs[pl])**2) * (1-min_eccs[pl]**2)**0.5*(1.9884e30*Ms)**(2/3)/5.972e24)
@@ -1851,11 +1868,12 @@ class monoModel():
                         rhos[pl]=pm.Deterministic("rho_"+pl,Mps[pl]/rpls[pl]**3)
 
                     else:
-                        if pl in self.duos+self.monos:
-                            model_rvs[pl] = pm.Deterministic('model_rv_'+pl, rvorbits[pl].get_radial_velocity(self.rvs['time'],
+                        tt.printing.Print("logK")(logKs[pl])
+                        #if pl in self.duos+self.monos:
+                        model_rvs[pl] = pm.Deterministic('model_rv_'+pl, rvorbits[pl].get_radial_velocity(self.rvs['time'],
                                                                                                       K=tt.exp(logKs[pl])))
-                        else:
-                            model_rvs[pl] = pm.Deterministic('model_rv_'+pl, rvorbits[pl].get_radial_velocity(self.rvs['time'],tt.tile(Ks[pl].dimshuffle('x',0),(len(self.rvs['time']),1))))
+                        #else:
+                        #    model_rvs[pl] = pm.Deterministic('model_rv_'+pl, rvorbits[pl].get_radial_velocity(self.rvs['time'],tt.tile(Ks[pl].dimshuffle('x',0),(len(self.rvs['time']),1))))
 
 
                 if pl in self.duos+self.monos:
@@ -1962,7 +1980,7 @@ class monoModel():
                         logmass_sd = (rpls[pl]<=8)*(0.07904372*rpls[pl]+0.24318296) + (rpls[pl]>8)*(0-0.02313261*rpls[pl]+1.06765343)
                         rvlogliks[pl]=pm.Deterministic("rv_loglik_"+pl, tt.tile(sum_log_rverr,self.n_margs[pl]) - \
                                                                         (tt.log(rvjitters[pl])-self.rvs['logjitter_mean'])**2/self.rvs['logjitter_sd']**2 - \
-                                                                        (tt.log(Mps[pl])-logmassests)**2/((rvjitters[pl]/Ks[pl])**2 + logmass_sd**2) + \
+                                                                        (tt.log(Mps[pl])-logmassests[pl])**2/((rvjitters[pl]/Ks[pl])**2 + logmass_sd**2) + \
                                                                         tt.sum((self.rvs['rv'][:,None] - (nonmarg_rvs.dimshuffle(0,'x') + model_rvs[pl]))**2/(rvjitters[pl][None,:]**2 + self.rvs['rv_err'][:,None].astype(floattype)**2),axis=0))
                     elif hasattr(self,'rvs'):
                         rvlogliks[pl] = pm.Deterministic("rv_loglik_"+pl, sum_log_rverr - tt.sum((self.rvs['rv'] - (model_rvs[pl] + rv_trend))**2/((1+tt.exp(rv_logs2))*self.rvs['rv_err'].astype(floattype))**2))
@@ -1981,9 +1999,9 @@ class monoModel():
 
             if not self.use_GP:
                 #Calculating some extra info to speed up the loglik calculation
-                new_yerr = self.model_flux_err.astype(floattype)**2 + \
-                           tt.sum(self.model_cadence_index*tt.exp(logs2).dimshuffle('x',0),axis=1)
-                new_yerr_sq = new_yerr**2
+                new_yerr_sq = self.model_flux_err.astype(floattype)**2 + \
+                              tt.sum(self.model_cadence_index*tt.exp(logs2).dimshuffle('x',0),axis=1)
+                new_yerr = new_yerr_sq**0.5
                 sum_log_new_yerr = tt.sum(-len(self.model_flux)/2 * tt.log(2*np.pi*(new_yerr_sq)))
 
             stacked_marg_lc={};resids={};logprobs={};logprob_sums={};logprob_margs={}
@@ -2103,7 +2121,6 @@ class monoModel():
                 #pm.Normal("all_obs",mu=(marg_all_lc_model + gp_pred + mean),sd=new_yerr,
                 #          observed=self.lc.flux[self.lc.near_trans].astype(floattype))
             else:
-
                 marglcloglik=pm.Normal("marglcloglik",mu=(marg_all_lc_model + phot_mean), sd=new_yerr,
                                     observed=self.model_flux.astype(floattype))
                 #tt.printing.Print("marglcloglik")(marglcloglik)
@@ -2124,29 +2141,28 @@ class monoModel():
             #   Creating initial model optimisation menu:
             ################################################
             #Setting up optimization depending on what planet models we have:
-            initvars0=[]#r,b
-            initvars1=[]#P
-            initvars2=[logrho_S]#r,b,t0
-            initvars3=[logs2]
-            initvars4=[]#r,b,P
+            initvars1=[logs2]
+            initvars2=[logs2]#P,t0
+            initvars3=[logrho_S,logs2]
+            initvars4=[logs2]#r,b,P
             for pl in self.planets:
+                initvars1+=[logrors[pl]];initvars2+=[logrors[pl]];initvars4+=[logrors[pl]]
                 initvars2+=[t0s[pl]]
-                initvars0+=[logrors[pl]];initvars1+=[logrors[pl]];initvars2+=[logrors[pl]];initvars4+=[logrors[pl]]
                 if 'b' in self.fit_params or pl in self.multis:
-                    initvars0+=[bs[pl]];initvars2+=[bs[pl]];initvars4+=[bs[pl]]
+                    initvars4+=[bs[pl]]
                 if 'tdur' in self.fit_params and pl not in self.multis:
-                    initvars0+=[tdurs[pl]];initvars2+=[tdurs[pl]];initvars4+=[tdurs[pl]]
+                    initvars1+=[tdurs[pl]];initvars4+=[tdurs[pl]]
                 if pl in self.multis:
-                    initvars1+=[pers[pl]];initvars4+=[pers[pl]]
+                    initvars1+=[bs[pl]]
+                    initvars2+=[pers[pl]];initvars4+=[pers[pl]]
                 if pl in self.monos:
-                    initvars1+=[mono_uniform_index_period[pl]];initvars4+=[mono_uniform_index_period[pl]]
+                    initvars2+=[mono_uniform_index_period[pl]];initvars4+=[mono_uniform_index_period[pl]]
                 if pl in self.duos:
-                    initvars1+=[t0_2s[pl]]
+                    initvars2+=[t0_2s[pl]]
                 if not self.assume_circ and (not self.interpolate_v_prior or pl in self.multis):
-                    initvars2+=[eccs[pl], omegas[pl]]
+                    initvars3+=[eccs[pl], omegas[pl]]
                 if hasattr(self,'rvs') and not self.derive_K:
-                    initvars0+=[logKs[pl]]
-                    initvars2+=[logKs[pl]]
+                    initvars1+=[logKs[pl]]
                     initvars3+=[logKs[pl]]
                     #initvars0+=[logMp_wrt_normals[pl]]
                     #initvars2+=[logMp_wrt_normals[pl]]
@@ -2182,29 +2198,30 @@ class monoModel():
             ################################################
 
             if self.debug: print("before",model.check_test_point())
-            map_soln = pmx.optimize(start=start, vars=initvars0,verbose=True)
-            map_soln = pmx.optimize(start=map_soln, vars=initvars1,verbose=True)
-            map_soln = pmx.optimize(start=map_soln, vars=initvars2,verbose=True)
-            map_soln = pmx.optimize(start=map_soln, vars=initvars3,verbose=True)
-            map_soln = pmx.optimize(start=map_soln, vars=initvars4,verbose=True)
+            map_soln = pmx.optimize(start=start, vars=initvars1, verbose=self.debug)
+            map_soln = pmx.optimize(start=map_soln, vars=initvars2, verbose=self.debug)
+            map_soln = pmx.optimize(start=map_soln, vars=initvars3, verbose=self.debug)
+            map_soln = pmx.optimize(start=map_soln, vars=initvars4, verbose=self.debug)
             #Doing everything except the marginalised periods:
-            map_soln = pmx.optimize(start=map_soln, vars=initvars5)
-            map_soln = pmx.optimize(start=map_soln)
+            map_soln = pmx.optimize(start=map_soln, vars=initvars5, verbose=self.debug)
+            map_soln = pmx.optimize(start=map_soln, verbose=self.debug)
+            map_soln = pmx.optimize(start=map_soln, vars=initvars1, verbose=self.debug)
+            #map_soln = pmx.optimize(start=start, vars=[logs2], verbose=self.debug)
 
             if self.debug: print("after",model.check_test_point())
 
             self.model = model
             self.init_soln = map_soln
 
-    def RunMcmc(self, n_draws=500, n_burn_in=None, overwrite=False, continuesampling=False, chains=4, **kwargs):
+    def SampleModel(self, n_draws=500, n_burn_in=None, overwrite=False, continue_sampling=False, n_chains=4, **kwargs):
         """Run PyMC3 sampler
 
         Args:
             n_draws (int, optional): Number of independent samples to draw from each chain. Defaults to 500.
             n_burn_in (int, optional): Number of steps to 'burn in' the sampler. Defaults to None in which case it becomes 2/3 the number of draws
             overwrite (bool, optional): Overwrite past stored data in this model? Defaults to False.
-            continuesampling (bool, optional): Continue sampling from a previous sampler? Defaults to False.
-            chains (int, optional): Number of chains to run. Defaults to 4.
+            continue_sampling (bool, optional): Continue sampling from a previous sampler? Defaults to False.
+            n_chains (int, optional): Number of chains to run. Defaults to 4.
         """
         #if not hasattr(self,'trace') and self.use_GP:
         #    #Adding a step to re-do the lightcurve flattening using the new transt durations in the non-GP case
@@ -2215,7 +2232,7 @@ class monoModel():
             if hasattr(self,'trace') and self.debug:
                 print("LOADED MCMC")
 
-        if not (hasattr(self,'trace') or hasattr(self,'trace_df')) or overwrite or continuesampling:
+        if not (hasattr(self,'trace') or hasattr(self,'trace_df')) or overwrite or continue_sampling:
             if not hasattr(self,'init_soln'):
                 self.init_model()
             #Running sampler:
@@ -2228,11 +2245,11 @@ class monoModel():
                 n_burn_in=np.clip(int(n_draws*0.66),125,15000) if n_burn_in is None else n_burn_in
                 if self.debug: print(type(self.init_soln))
                 if self.debug: print(self.init_soln.keys())
-                if hasattr(self,'trace') and continuesampling:
+                if hasattr(self,'trace') and continue_sampling:
                     print("Using already-generated MCMC trace as start point for new trace")
-                    self.trace = pmx.sample(tune=n_burn_in, draws=n_draws, chains=chains, trace=self.trace, compute_convergence_checks=False)
+                    self.trace = pmx.sample(tune=n_burn_in, draws=n_draws, chains=n_chains, trace=self.trace, compute_convergence_checks=False)
                 else:
-                    self.trace = pmx.sample(tune=n_burn_in, draws=n_draws, start=self.init_soln, chains=chains, compute_convergence_checks=False)
+                    self.trace = pmx.sample(tune=n_burn_in, draws=n_draws, start=self.init_soln, chains=n_chains, compute_convergence_checks=False)
             #Saving both the class and a pandas dataframe of output data.
             self.SaveModelToFile()
             _=self.MakeTable(save=True)
@@ -2302,11 +2319,17 @@ class monoModel():
 
             if interp:
                 assert self.bin_oot
-                smooth_func=interpolate.interp1d(np.hstack((self.lc.time[0],self.model_time,self.lc.time[-1])),
+                smooth_func=interpolate.interp1d(np.hstack((np.min(self.lc.time)-0.5,self.model_time,np.max(self.lc.time)+0.5)),
                                                  np.hstack((0,self.init_soln['gp_pred'],0)),kind='slinear')
+                print("successfully interpolated GP means")
                 self.gp_to_plot['gp_pred']=smooth_func(self.lc.time)+self.init_soln['phot_mean']
-                #We're bullshitting the GP SD here by using the lightcurve standard deviation and then boosting it where we dont have good data in the GP...
-                self.gp_to_plot['gp_sd'] = np.tile(np.nanmedian(abs(np.diff(self.lc.bin_flux))),len(self.lc.time))*(np.clip(86400/1800*np.min(np.abs(self.lc.time[:,None]-self.model_time[None,:]),axis=1),1.0,25)**0.33)
+                # We're bullshitting the GP SD here by using the lightcurve standard deviation and then boosting it where we dont have good data in the GP...
+                # As we're doing a 2D minimum distance matrix, we need to split it up if the lightcurve is very long
+                nchunks=int(np.ceil(2+np.log10(len(self.lc.time))))
+                timechunks=np.percentile(np.hstack((np.min(self.lc.time)-0.25,self.lc.time,np.max(self.lc.time)-0.25)),
+                                         np.linspace(0,100,nchunks+1)) #Splitting using a percentile, this way every time point is in the self.lc.time array
+                min_dist_to_lc=np.hstack([np.min(np.abs(self.lc.time[(self.lc.time>timechunks[tc])&(self.lc.time<=timechunks[tc+1]),None]-self.model_time[None,(self.model_time>timechunks[tc])&(self.model_time<=timechunks[tc+1])]),axis=1) for tc in range(nchunks)])
+                self.gp_to_plot['gp_sd'] = np.tile(np.nanmedian(abs(np.diff(self.lc.bin_flux))),len(self.lc.time))*(np.clip(86400/1800*min_dist_to_lc,1.0,25)**0.33)
             elif newgp:
                 for key in self.lc_regions['limits']:
                     #Only creating out-of-transit GP for the binned (e.g. 30min) data
@@ -2360,7 +2383,6 @@ class monoModel():
                     smooth_func=interpolate.interp1d(stacktime, np.hstack((0,self.trace['gp_pred'][i],0)), kind='slinear')
                     preds+=[smooth_func(self.lc.time)+self.trace['phot_mean'][i]]
                 prcnts=np.nanpercentile(np.column_stack(preds),[15.8655254, 50., 84.1344746],axis=1)
-                print(np.shape(prcnts))
                 self.gp_to_plot['gp_pred']=prcnts[1]
                 self.gp_to_plot['gp_sd']=0.5*(prcnts[2]-prcnts[0])
 
@@ -2472,7 +2494,6 @@ class monoModel():
             for key2 in self.trans_to_plot['model'][key1]:
                 self.trans_to_plot['all'][key1][key2]=np.zeros(len(self.lc.time))
                 self.trans_to_plot['all'][key1][key2][self.lc.near_trans*self.lc.mask]=self.trans_to_plot['model'][key1][key2][self.model_near_trans]
-        print(len(self.planets))
         if len(self.planets)==1 and list(self.planets.keys())[0] not in self.trans_to_plot['model']:
             self.trans_to_plot['model'][list(self.planets.keys())[0]] = self.trans_to_plot['model']['allpl']
             self.trans_to_plot['all'][list(self.planets.keys())[0]] = self.trans_to_plot['all']['allpl']
@@ -2591,7 +2612,6 @@ class monoModel():
                         tiprcnts=np.percentile(alltrvs[:,i,:], percentiles, axis=1)
                         self.rvs_to_plot['t'][pl][i]={nms[n]:tiprcnts[n] for n in range(5)}
             #print(self.rvs_to_plot)
-            print(all_pls_in_rvs)
             if len(all_pls_in_rvs)>1:
                 iprcnts = np.percentile(self.trace["rv_trend"],percentiles, axis=0)
                 self.rvs_to_plot['x']["trend+offset"] = {nms[n]:iprcnts[n] for n in range(5)}
@@ -2602,13 +2622,12 @@ class monoModel():
 
                 iprcnts = np.percentile(np.vstack(trends_i), percentiles, axis=0)
                 self.rvs_to_plot['t']["trend"] = {nms[n]:iprcnts[n] for n in range(5)}
-                print(self.rvs_to_plot['t']["trend"])
                 iprcnts = np.percentile(np.sum([np.vstack(marg_rv_ts_i[pl]) for pl in all_pls_in_rvs],axis=1),percentiles, axis=0)
                 self.rvs_to_plot['t']["all"] = {nms[n]:iprcnts[n] for n in range(5)}
-                print(len(trends_i), len(trends_i[0]), np.vstack(trends_i).shape)
-                print(np.vstack(marg_rv_ts_i[pl]).shape,
-                      np.dstack([np.vstack(marg_rv_ts_i[pl]) for pl in all_pls_in_rvs]).shape,
-                     np.sum([np.vstack(marg_rv_ts_i[pl]) for pl in all_pls_in_rvs],axis=1).shape)
+                #print(len(trends_i), len(trends_i[0]), np.vstack(trends_i).shape)
+                #print(np.vstack(marg_rv_ts_i[pl]).shape,
+                #      np.dstack([np.vstack(marg_rv_ts_i[pl]) for pl in all_pls_in_rvs]).shape,
+                #     np.sum([np.vstack(marg_rv_ts_i[pl]) for pl in all_pls_in_rvs],axis=1).shape)
                 iprcnts = np.percentile(np.sum([np.vstack(marg_rv_ts_i[pl]) for pl in all_pls_in_rvs],axis=0)+np.vstack(trends_i),
                                         percentiles, axis=0)
                 self.rvs_to_plot['t']["all+trend"] = {nms[n]:iprcnts[n] for n in range(5)}
@@ -2620,7 +2639,7 @@ class monoModel():
 
                 iprcnts = np.percentile(np.vstack(trends_i), percentiles, axis=0)
                 self.rvs_to_plot['t']["trend"] = {nms[n]:iprcnts[n] for n in range(5)}
-                print(self.rvs_to_plot['t']["trend"])
+                #print(self.rvs_to_plot['t']["trend"])
                 self.rvs_to_plot['t']["all"] = self.rvs_to_plot['t'][pl]
                 self.rvs_to_plot['t']["all+trend"] = self.rvs_to_plot['t'][pl]["marg+trend"]
             iprcnts = np.percentile(self.trace["rv_offsets"], percentiles, axis=0)
@@ -2649,7 +2668,7 @@ class monoModel():
             self.rvs_to_plot['x']["trend+offset"] = {'med':self.init_soln["rv_trend"]}
             self.rvs_to_plot['x']["offsets"] = {'med':self.init_soln["rv_offsets"]}
 
-    def init_plot(self, interactive=False, gap_thresh=10,plottype='lc',pointcol='k',palette=None, ncols=None):
+    def init_plot(self, interactive=False, gap_thresh=10, plottype='lc',pointcol='k',palette=None, ncols=None, plot_flat=False):
         """Initialising plotting
 
         Args:
@@ -2676,18 +2695,24 @@ class monoModel():
             self.GetSavename(how='save')
         #Making sure lc is binned to 30mins
         if plottype=='lc':
-            self.lc.bin(binsize=1/48.0)
+            if plot_flat:
+                self.lc.bin(timeseries=['flux_flat'],binsize=1/48.0)
+                fx_lab='flux_flat'
+                fx_bin_lab='bin_flux_flat'
+            else:
+                fx_lab='flux'
+                fx_bin_lab='bin_flux'
             time_regions=tools.find_time_regions(self.lc.time)
             self.lc_regions={}
             for nj in range(len(time_regions)):
                 self.lc_regions[nj]={'start':time_regions[nj][0],'end':time_regions[nj][1]}
                 self.lc_regions[nj]['total_dur']=self.lc_regions[nj]['end']-self.lc_regions[nj]['start']
                 self.lc_regions[nj]['ix']=(self.lc.time>=self.lc_regions[nj]['start'])*(self.lc.time<=self.lc_regions[nj]['end'])*self.lc.mask
-                self.lc_regions[nj]['bin_ix']=(self.lc.bin_time>=self.lc_regions[nj]['start'])*(self.lc.bin_time<=self.lc_regions[nj]['end'])*np.isfinite(self.lc.bin_flux)
+                self.lc_regions[nj]['bin_ix']=(self.lc.bin_time>=self.lc_regions[nj]['start'])*(self.lc.bin_time<=self.lc_regions[nj]['end'])*np.isfinite(getattr(self.lc,fx_bin_lab))
                 self.lc_regions[nj]['model_ix']=(self.model_time>=self.lc_regions[nj]['start'])&(self.model_time<=self.lc_regions[nj]['end'])
                 self.lc_regions[nj]['cadence']=np.nanmedian(np.diff(self.lc.time[self.lc_regions[nj]['ix']]))
-                self.lc_regions[nj]['mad']=1.06*np.nanmedian(abs(np.diff(self.lc.flux[self.lc_regions[nj]['ix']])))
-                self.lc_regions[nj]['minmax']=np.nanpercentile(self.lc.bin_flux[self.lc_regions[nj]['bin_ix']],[0.25,99.75])
+                self.lc_regions[nj]['mad']=1.06*np.nanmedian(abs(np.diff(getattr(self.lc,fx_lab)[self.lc_regions[nj]['ix']])))
+                self.lc_regions[nj]['minmax']=np.nanpercentile(getattr(self.lc,fx_bin_lab)[self.lc_regions[nj]['bin_ix']],[0.25,99.75])
             transmin=np.min(self.init_soln['marg_all_lc_model']) if not hasattr(self,'trace') else np.min(np.nanmedian(self.trace['marg_all_lc_model'],axis=0))
             minmax_global = (np.min([np.min([self.lc_regions[nj]['minmax'][0],transmin])-self.lc_regions[nj]['mad'] for nj in self.lc_regions]),
                              np.max([self.lc_regions[nj]['minmax'][1]+self.lc_regions[nj]['mad'] for cad in self.lc_regions]))
@@ -2822,7 +2847,7 @@ class monoModel():
 
             f_alls.plot(self.rvs_to_plot['t']['time'], self.rvs_to_plot['t']["trend"]["med"],c='C6')
             if "-2sig" in self.rvs_to_plot['t']["trend"]:
-                print(self.rvs_to_plot['t']['time'].shape,self.rvs_to_plot['t']["trend"]["-2sig"].shape,self.rvs_to_plot['t']["trend"]["+2sig"].shape)
+                #print(self.rvs_to_plot['t']['time'].shape,self.rvs_to_plot['t']["trend"]["-2sig"].shape,self.rvs_to_plot['t']["trend"]["+2sig"].shape)
                 f_alls.fill_between(self.rvs_to_plot['t']['time'], self.rvs_to_plot['t']["trend"]["-2sig"],
                                     self.rvs_to_plot['t']["trend"]["+2sig"],color='C6',alpha=0.1)
                 f_alls.fill_between(self.rvs_to_plot['t']['time'], self.rvs_to_plot['t']["trend"]["-1sig"],
@@ -2936,7 +2961,6 @@ class monoModel():
 
             if pl==(self.duos+self.monos)[nmargtoplot]:
                 for n,alias in enumerate(ibest):
-                    print(pl,n,alias)
                     if hasattr(self,'trace'):
                         K=np.clip(np.nanmedian(self.trace['K_'+pl][:,alias]),averr,100000)
                     else:
@@ -2988,7 +3012,6 @@ class monoModel():
                             f_phase[pl][n].xaxis.major_label_text_font_size = '0pt'  # preferred method for removing tick labels
 
                     else:
-                        print(alphas,alias,ibest)
                         f_alls.plot(self.rvs_to_plot['t']['time'],
                                     self.rvs_to_plot['t']['trend']['med']+self.rvs_to_plot['t'][pl][alias]['med'],':',
                                     c='C'+str(ncol-1-int(n)),label=pl+'_'+str(np.round(per[alias],1)),linewidth=3.0,
@@ -3177,7 +3200,7 @@ class monoModel():
 
 
     def Plot(self, interactive=False, n_samp=None, overwrite=False, interp=True, newgp=False, return_fig=False, max_gp_len=20000, 
-             save=True, plot_loc=None, palette=None, plot_flat=False, pointcol="k", plottype='png',plot_rows=None, ylim=None):
+             save=True, plot_loc=None, palette=None, plot_flat=False, pointcol="k", plottype='png',plot_rows=None, ylim=None, **kwargs):
         """Varied photometric plotting function for MonoTransit model
 
         Args:
@@ -3202,7 +3225,7 @@ class monoModel():
         ################################################################
         #       Varied plotting function for MonoTransit model
         ################################################################
-        self.init_plot(plottype='lc',pointcol=pointcol)
+        self.init_plot(plottype='lc',pointcol=pointcol,plot_flat=plot_flat,**kwargs)
         #Rasterizing matplotlib files if we have a lot of datapoints:
         raster=True if len(self.lc.time>8000) else False
 
@@ -3235,13 +3258,13 @@ class monoModel():
         for irow in range(plot_rows):
             assert np.sum(subplots_ix==irow)>0
             plots_in_this_row = np.array(list(self.lc_regions.keys()))[subplots_ix==irow]
-            durs = [self.lc_regions[cad2]['total_dur'] for cad2 in plots_in_this_row]
+            durs = [np.clip(self.lc_regions[cad2]['total_dur'],4,1000) for cad2 in plots_in_this_row]
             plot_cols = np.hstack((0,np.cumsum(saferound(24*np.array(durs)/np.sum(durs), places=0))))
             for icol,key in enumerate(plots_in_this_row):
                 self.lc_regions[key]['n_plot_row']=irow
                 self.lc_regions[key]['n_plot_col']=(int(plot_cols[icol]),int(plot_cols[icol+1]))
-                print("row",self.lc_regions[key]['n_plot_row'],"col",self.lc_regions[key]['n_plot_col'])
-            print(plot_rows,irow,plots_in_this_row)
+                #print("row",self.lc_regions[key]['n_plot_row'],"col",self.lc_regions[key]['n_plot_col'])
+            #print(plot_rows,irow,plots_in_this_row)
 
         if not interactive:
             #Creating cumulative list of integers which add up to 24 but round to nearest length ratio:
@@ -3253,8 +3276,8 @@ class monoModel():
             
             for npl in np.arange(len(self.planets))[::-1]:
                 pl=list(self.planets.keys())[npl]
-                print(key,"resids",(npl*4+3)*plot_rows,(npl*4+4)*plot_rows)
-                print(key,"norm",plot_rows*(npl*4),plot_rows*(npl*4+3))
+                #print(key,"resids",(npl*4+3)*plot_rows,(npl*4+4)*plot_rows)
+                #print(key,"norm",plot_rows*(npl*4),plot_rows*(npl*4+3))
                 if npl==len(self.planets)-1:
                     xaxiskey=pl
                     f_trans_resids[pl]=fig.add_subplot(gs[(npl*4+3)*plot_rows:(npl*4+4)*plot_rows,24:])
@@ -3543,6 +3566,8 @@ class monoModel():
             else:
                 #Matplotlib plot:
                 flux_key='flux_flat' if plot_flat else 'flux'
+                if not hasattr(self.lc,"bin_"+flux_key):
+                    self.lc.bin(timeseries=np.unique(['flux',flux_key]))
                 if self.lc_regions[key]['cadence']<1/72:
                     #Plotting flat flux only
                     f_alls[key].plot(self.lc.time[self.lc_regions[key]['ix']], getattr(self.lc,flux_key)[self.lc_regions[key]['ix']],
@@ -3693,7 +3718,7 @@ class monoModel():
 
             for nkey,key in enumerate(self.lc_regions):
                 if pl in self.multis or pl in self.rvplanets or pl in self.duos:
-                    print(key,pl,per,t0)
+                    #print(key,pl,per,t0)
                     n_p_sta_end=np.array([np.floor((self.lc_regions[key]['start']-t0)/per),np.ceil((self.lc_regions[key]['end']-t0)/per)])
                     #Adding ticks for the position of each planet below the data:
                     trans_range=np.arange(n_p_sta_end[0],n_p_sta_end[1],1.0)
@@ -3824,7 +3849,7 @@ class monoModel():
                 f_trans[pl].text(0.0,0.0+resid_sd*1.9,pl,horizontalalignment='center',verticalalignment='top',fontsize=9)
 
                 plt.setp(f_trans[pl].get_xticklabels(), visible=False)
-                if n>0:
+                if n<len(self.planets)-1:
                     plt.setp(f_trans_resids[pl].get_xticklabels(), visible=False)
 
             if pl == xaxiskey:
@@ -3923,8 +3948,8 @@ class monoModel():
                     plt.legend()
                     if xlog:
                         plt.xscale('log')
-                        plt.xticks([20,40,60,80,100,150,200,250,300,350,400,450,500,600,700],
-                                   np.array([20,40,60,80,100,150,200,250,300,350,400,450,500,600,700]).astype(str))
+                        plt.xticks([20,40,60,80,100,150,200,250,300,350,400,450,500,600,800,1000,1500,2000,2500,3000,3500],
+                                   np.array([20,40,60,80,100,150,200,250,300,350,400,450,500,600,800,1000,1500,2000,2500,3000,3500]).astype(str))
                         #plt.xticklabels([20,40,60,80,100,150,200,250])
                     plt.ylabel("$\log_{10}{p}$")
                     plt.xlabel("Period [d]")
@@ -3944,8 +3969,8 @@ class monoModel():
                                        1.0)
 
                         ncol=int(np.floor(np.clip(np.nanmedian(self.trace['logprob_marg_'+pl][:,ngap])-total_av_prob,-6,0)))
-                        print(self.planets[pl]['per_gaps']['gap_starts'][ngap],
-                              ncol,np.nanmedian(self.trace['logprob_marg_'+pl][:,ngap])-total_av_prob)
+                        #print(self.planets[pl]['per_gaps']['gap_starts'][ngap],
+                        #      ncol,np.nanmedian(self.trace['logprob_marg_'+pl][:,ngap])-total_av_prob)
                         #print(ngap,np.exp(self.trace['logprob_marg_'+pl][:,ngap]-total_prob))
                         if ncol not in cols:
                             cols+=[ncol]
@@ -4053,11 +4078,11 @@ class monoModel():
 
             n_mult=np.product([self.planets[mpl]['ngaps'] for mpl in self.monos]) * \
                    np.product([len(self.planets[dpl]['period_aliases']) for dpl in self.duos])
-            print(n_mult,"x samples")
+            #print(n_mult,"x samples")
             samples['log_prob']=np.tile(0.0,len(samples))
             samples_len=len(samples)
             samples=pd.concat([samples]*int(n_mult),axis=0)
-            print(samples.shape,samples_len)
+            #print(samples.shape,samples_len)
 
             n_pos=0
 
@@ -4109,7 +4134,7 @@ class monoModel():
                 for col in self.marginal_params:
                     cols_to_remove+=['mono_'+col+'s','duo_'+col+'s']
             medvars=[var for var in self.trace.varnames if not np.any([icol in var for icol in cols_to_remove])]
-            print(cols_to_remove, medvars)
+            #print(cols_to_remove, medvars)
             df = pm.summary(self.trace,var_names=medvars,stat_funcs={"5%": lambda x: np.percentile(x, 5),
                                                                      "-$1\sigma$": lambda x: np.percentile(x, 15.87),
                                                                      "median": lambda x: np.percentile(x, 50),
@@ -4204,7 +4229,7 @@ class monoModel():
                 self.trace=loaded
         if not hasattr(self, 'savenames') or self.savenames is None:
             self.GetSavename(how='load')
-        print(self.savenames, self.savenames is None)
+        #print(self.savenames, self.savenames is None)
         #[0]+'_mcmc.pickle',os.path.exists(self.savenames[0]+'_mcmc.pickle'))
         if os.path.exists(self.savenames[0]+'_mcmc.pickle'):
             print(self.savenames[0]+'_mcmc.pickle',"exists - loading")
@@ -4224,13 +4249,15 @@ class monoModel():
             else:
                 self.trace=loaded
 
-    def PredictFutureTransits(self, time_start, time_end, include_multis=True):
+    def PredictFutureTransits(self, time_start=None, time_end=None, time_dur=100, include_multis=True, save=True):
         """Return a dataframe of potential transits of all Duo candidates between time_start & time_end dates.
 
         Args:
-            time_start (Astropy.Time object or float): Astropy.Time date or julian date (in same base as lc) for the start of the observing period
-            time_end (Astropy.Time object or float): Astropy.Time date or julian date (in same base as lc) for the end of the observing period
+            time_start (Astropy.Time object or float, optional): Astropy.Time date or julian date (in same base as lc) for the start of the observing period. If not defined, uses today
+            time_end (Astropy.Time object or float, optional): Astropy.Time date or julian date (in same base as lc) for the end of the observing period. If not defined, uses today+time_dur
+            time_dur (float, optional): Duration (in days) to compute future transits. Default is 100d
             include_multis (bool, optional): Also generate transits for multi-transiting planets? Defaults to True.
+            save (bool, optional): Whether to save transit dataframe to file? Defaults to True
 
         Returns:
             pandas DataFrame: Dataframe of transits observable between time_start and time_end.
@@ -4241,9 +4268,16 @@ class monoModel():
         """
         
         from astropy.time import Time
+        from datetime import datetime
         import fractions
 
         assert hasattr(self,'trace') #We need to have run Mcmc to have samples first.
+
+        #If not defined, we'll take the date today:
+        if time_start is None:
+            time_start = Time(datetime.now())
+        if time_end is None:
+            time_end = Time(datetime.now())+time_dur*u.day
 
         if type(time_start)==Time:
             print("time range",time_start.isot,"->",time_end.isot)
@@ -4273,7 +4307,7 @@ class monoModel():
                 trans_p0=[np.floor(np.nanmedian(time_start - self.trace['t0_'+pl])/np.nanmedian(self.trace['per_'+pl],axis=0))]
                 trans_p1=[np.ceil(np.nanmedian(time_end -  self.trace['t0_'+pl])/np.nanmedian(self.trace['per_'+pl],axis=0))]
                 n_trans=[trans_p1[0]-trans_p0[0]]
-            print(pl,trans_p0,trans_p1,n_trans)
+            #print(pl,trans_p0,trans_p1,n_trans)
             #print(np.nanmedian(self.trace['t0_2_'+pl])+np.nanmedian(self.trace['per_'+pl],axis=0)*trans_p0)
             #print(np.nanmedian(self.trace['t0_2_'+pl])+np.nanmedian(self.trace['per_'+pl],axis=0)*trans_p1)
 
@@ -4334,16 +4368,21 @@ class monoModel():
                 unq_trans.loc[i,'num_aliases']=len(oths)
                 unq_trans.loc[i,'total_prob']=np.sum(oths['prob'].values)
         unq_trans = unq_trans.loc[(unq_trans['transit_end_+2sig']>time_start)*(unq_trans['transit_start_-2sig']<time_end)].sort_values('transit_mid_med')
-        return unq_trans.set_index(np.arange(len(unq_trans)))
+        unq_trans = unq_trans.set_index(np.arange(len(unq_trans)))
 
-    def MakeCheopsOR(self, DR2ID, pl=None, min_eff=45, oot_min_orbits=1.0, timing_sigma=3, t_start=None, t_end=None, Texp=None,
-                     max_orbits=14, min_pretrans_orbits=0.5, min_intrans_orbits=None, orbits_flex=1.4, observe_threshold=0.018, max_ORs=None,
-                     prio_1_threshold=0.25, prio_3_threshold=0.0, min_orbits=4.0, outfilesuffix='_output_ORs.csv'):
+        if save:
+            unq_trans.to_csv(self.savenames[0]+"_list_all_trans.csv")
+        return unq_trans
+
+    def MakeCheopsOR(self, DR2ID=None, pl=None, min_eff=45, oot_min_orbits=1.0, timing_sigma=3, t_start=None, t_end=None, Texp=None,
+                     max_orbits=14, min_pretrans_orbits=0.5, min_intrans_orbits=None, orbits_flex=1.4, observe_sigma=2, 
+                     observe_threshold=None, max_ORs=None,prio_1_threshold=0.25, prio_3_threshold=0.0, 
+                     min_orbits=4.0, outfilesuffix='_output_ORs.csv'):
         """Given a list of observable transits (which are outputted from `trace_to_cheops_transits`), 
             create a csv which can be run by pycheops make_xml_files to produce input observing requests (both to FC and observing tool).
 
         Args:
-            DR2ID (int):  Gaia DR2 ID
+            DR2ID (int, optional):  Gaia DR2 ID. If not present, will take DR2ID from lc object (under self.lc.all_ids['tess']['data'])
             pl (str, optional): name of planet in self.planets dict to process. Defaults to None, i.e. assumes all planets)
             min_eff (int, optional): minimum efficiency in percent. Defaults to 45
             oot_min_orbits (int, optional): minimum number of out-of-transit orbits to include both before & after (this may be higher if timing uncertainty is worse). Defaults to 2.
@@ -4355,7 +4394,9 @@ class monoModel():
             min_pretrans_orbits (float, optional): Number of orbits to insist happen before (and after) transit, rather than either before/after (as with oot_min_orbits). Defaults to 0.5
             min_intrans_orbits (float, optional): In the case that the visit duration does not cover the full transit, this tells us how much of the transit we have to observe
             orbits_flex (float, optional): Flexibility in orbits. Defaults to None
-            observe_threshold (float, optional): threshold above which to create ORs Default=0.018. Defaults to 0.018.
+            observe_sigma (float, optional): threshold in sigma to make sure to observe. Defaults to 2.
+            observe_threshold (float, optional): threshold above which to create ORs. If None, uses `observe_sigma` to decide which to observe. Defaults to None
+            max_ORs (int, optional): Maximum number of ORs to create. Default is 14
             prio_1_threshold (float, optional): Rough percentage of ORs we want to make P1 on Cheops. Defaults to 0.25.
             prio_3_threshold (float, optional): Rough percentage of ORs we want to make P3 on Cheops. Defaults to 0.0 - i.e. no P3 observations
             min_orbits (float, optional): Minimum number of total orbits to observe. Defaults to 4.0.
@@ -4372,6 +4413,11 @@ class monoModel():
         from astropy.coordinates import SkyCoord, Distance
         from astropy import units as u
         from astropy.time import Time
+        from scipy import stats
+
+        if DR2ID is None:
+            assert 'tess' in self.lc.all_ids and 'data' in self.lc.all_ids['tess'] and 'GAIA' in self.lc.all_ids['tess']['data'] and not pd.isnull(self.lc.all_ids['tess']['data']['GAIA']), "Must provide Gaia DR2 ID"
+            DR2ID=int(self.lc.all_ids['tess']['data']['GAIA'])
 
         tab=ascii.read("https://www.pas.rochester.edu/~emamajek/EEM_dwarf_UBVIJHK_colors_Teff.txt",header_start=23,data_start=24,data_end=118).to_pandas().loc[:,['SpT','Teff']]
         SpTy = tab['SpT'].values[np.argmin(abs(self.Teff[0]-tab['Teff']))][:2]
@@ -4393,7 +4439,6 @@ class monoModel():
         #if Texp is None:
         #    print("* WARNING - MUST SET EXPOSURE TIME (Texp) FOR REAL OBSERVATIONS. USING 1SEC HERE *")
         #    Texp=1
-        from scipy import stats
 
         if t_start is None:
             import datetime
@@ -4438,15 +4483,29 @@ class monoModel():
             else:
                 allprobs=np.array([1.0])
                 allpers=np.array([0])
-            if max_ORs is not None and max_ORs<len(allprobs):
-                observe_threshold=np.sort(allprobs)[::-1][max_ORs]
+            assert observe_sigma is not None or observe_threshold is not None or max_ORs is not None, "Must use either observe_sigma, observe_threshold or max_ORs to set the number of aliases to observe"
+            # 1) Observing some fraction of aliases which covers more probability that the observe_sigma fraction. i.e. 2-sigma = cover 95%
+            sorted_probs = np.sort(allprobs)[::-1]
+            
+            if observe_sigma is not None and observe_threshold is None:
+                frac = stats.norm.cdf(observe_sigma)
+                #print(frac,np.cumsum(sorted_probs),np.searchsorted(np.cumsum(sorted_probs),frac)-1)
+                observe_threshold=sorted_probs[np.searchsorted(np.cumsum(sorted_probs),frac)-1]+1e-9
+            # 2) Observing up to some maximum number of ORs (e.g. 14)
+            if max_ORs is not None:
+                if observe_threshold is None:
+                    observe_threshold=0
+                if  max_ORs<len(allprobs) and np.sum(sorted_probs>observe_threshold)>max_ORs:
+                    observe_threshold=np.sort(allprobs)[::-1][max_ORs]-1e9
+            
             prio_1_prob_threshold = np.ceil(np.sum(allprobs>observe_threshold)*prio_1_threshold)
             prio_3_prob_threshold = np.ceil(np.sum(allprobs>observe_threshold)*(1-prio_3_threshold))
+            #print(allprobs,observe_threshold,allpers[allprobs>observe_threshold])
             for nper in allpers:
                 if allprobs[nper]>observe_threshold:
                     ser={}
                     iper=np.nanmedian(self.trace['per_'+ipl][:,nper]) if len(self.trace['per_'+ipl].shape)>1 else np.nanmedian(self.trace['per_'+ipl])
-                    ser['ObsReqName']=self.id_dic[self.mission]+str(self.ID)+'_'+ipl+'_period'+str(np.round(iper,2)).replace('.',';')
+                    ser['ObsReqName']=self.id_dic[self.mission]+str(self.ID)+'_'+ipl+'_period'+str(np.round(iper,2)).replace('.',';')+'_prob'+str(allprobs[nper])[:4]
                     ser['Target']=self.id_dic[self.mission]+str(self.ID)
                     ser['_RAJ2000']=old_radec.ra.to_string(unit=u.hourangle, sep=':')
                     ser['_DEJ2000']=old_radec.dec.to_string(sep=':')
@@ -4670,7 +4729,7 @@ class monoModel():
             str: Multi-line latex table string.
         """
         #Plotting corner of the parameters to see correlations
-        print("MakingLatexTable")
+        print("Making Latex Table")
         if not hasattr(self,'savenames'):
             self.GetSavename(how='save')
         if self.tracemask is None:

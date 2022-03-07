@@ -390,9 +390,19 @@ def CutHighRegions(flux, mask, std_thresh=3.2,n_pts=25,n_loops=2):
         meds=np.nanmedian(stacked_fluxes*stacked_masks,axis=0)
         stds=np.nanstd(stacked_fluxes*stacked_masks,axis=0)
         #Adding to the mask any points identified in 80% of these passes:
+        print(np.vstack([np.hstack((np.tile(False,1+n2),stacked_fluxes[n2]*stacked_masks[n2]>(meds+std_threshs[n]*stds),
+                         np.tile(False,n_pts-n2+1))) for n2 in np.arange(n_pts)]))
+        print(np.nansum(np.vstack([np.hstack((np.tile(False,1+n2),stacked_fluxes[n2]*stacked_masks[n2]>(meds+std_threshs[n]*stds),
+                         np.tile(False,n_pts-n2+1))) for n2 in np.arange(n_pts)]),axis=0))
+        print(np.nansum(np.vstack([np.hstack((np.tile(False,1+n2),stacked_fluxes[n2]*stacked_masks[n2]>(meds+std_threshs[n]*stds),
+                         np.tile(False,n_pts-n2+1))) for n2 in np.arange(n_pts)]),axis=0).shape)
+        print(np.nansum(np.vstack([np.hstack((np.tile(False,1+n2),stacked_fluxes[n2]*stacked_masks[n2]>(meds+std_threshs[n]*stds),
+                         np.tile(False,n_pts-n2+1))) for n2 in np.arange(n_pts)]),axis=0)[1:-1].shape)
+        print(mask.shape)
+
         mask*=np.nansum(np.vstack([np.hstack((np.tile(False,1+n2),
                                               stacked_fluxes[n2]*stacked_masks[n2]>(meds+std_threshs[n]*stds),
-                                              np.tile(False,n_pts-n2+1))) for n2 in range(n_pts)])
+                                              np.tile(False,n_pts-n2+1))) for n2 in np.arange(n_pts)])
                            ,axis=0)[1:-1]<20
     return mask
 
@@ -1123,6 +1133,9 @@ def cutLc(lctimes,max_len=10000,return_bool=True,transit_mask=None):
         else:
             return [lctimes]
 
+def med_and_std(values):
+    return [np.nanmedian(values),np.nanstd(values)]
+
 def weighted_avg_and_std(values, errs, masknans=True, axis=None):
     """
     Return the weighted average and standard deviation.
@@ -1534,7 +1547,7 @@ def getLDs(Ts,logg=4.43812,FeH=0.0,mission="TESS"):
         a_interp=ct2d(np.column_stack((TessLDs.Teff.values.astype(float),TessLDs.logg.values.astype(float))),TessLDs.a.values.astype(float))
         b_interp=ct2d(np.column_stack((TessLDs.Teff.values.astype(float),TessLDs.logg.values.astype(float))),TessLDs.b.values.astype(float))
 
-        if (type(Ts)==float) or (type(Ts)==int):
+        if type(Ts) in [float,int,np.float64,np.int64]:
             Ts=np.array([Ts])
         if type(logg) is float:
             outarr=np.column_stack((np.array([a_interp(T,logg) for T in np.clip(Ts,2300,12000)]),
@@ -1748,10 +1761,12 @@ def kepler_spline(time, flux, flux_mask = None, transit_mask = None, bk_space=1.
         assert len(time[ix])>4
 
         # Rescale time into [0, 1].
-        t_min = np.min(time[ix])
-        t_max = np.max(time[ix])
-        n_interior_knots = int(np.round((t_max-t_min)/bk_space))
-        qs = np.linspace(0, 1, n_interior_knots+2)[1:-1]
+        #t_min = np.min(time[ix])
+        #t_max = np.max(time[ix])
+        #n_interior_knots = int(np.round((t_max-t_min)/bk_space))
+        #qs = np.linspace(0, 1, n_interior_knots+2)[1:-1]
+        qs = np.arange(np.min(time[ix]), np.max(time[ix]), bk_space)[1:-1]
+        qs = (qs-np.min(time[ix]))/(np.max(time[ix])-np.min(time[ix]))
 
         # Values of the best fitting spline evaluated at the time points.
         ispline = None
@@ -1886,3 +1901,93 @@ def robust_mean(y, cut):
     mean_stddev = sigma / np.sqrt(len(y) - 1.0)
 
     return mean, mean_stddev, mask
+
+def err_string_parse(s):
+    for estr in ['e_','eneg_','epos_']:
+        if len(s)>len(estr) and s[:len(estr)]==estr:
+            return True, s[len(estr):]
+    
+    for estr in [' err','_err1','_err2',' Error']:
+        if len(s)>len(estr) and s[-1*len(estr):]==estr:
+            return True, s[:-1*len(estr)]
+    return False, None
+
+def MakeBokehTable(df, dftype='toi', cols2use=None, cols2avoid=None, errtype=' err', width=300, height=350):
+    """Form Bokeh table from an input pandas dataframe
+
+    Args:
+        df ([type]): [description]
+        dftype (str, optional): [description]. Defaults to 'toi'.
+        cols2use ([type], optional): [description]. Defaults to None.
+        cols2avoid ([type], optional): [description]. Defaults to None.
+        width (int, optional): [description]. Defaults to 300.
+        height (int, optional): [description]. Defaults to 350.
+
+    Returns:
+        [type]: [description]
+    """
+    from bokeh.models import ColumnDataSource
+    from bokeh.models.widgets import DataTable, DateFormatter, TableColumn
+
+    if type(df)==pd.Series:
+        df=pd.DataFrame(df).T
+
+    if dftype=='toi' and cols2use is None:
+        cols2use=['TIC ID','TESS Disposition', 'TFOPWG Disposition', 'TESS Mag','RA', 'Dec',
+              'Epoch (BJD)','Period (days)','Duration (hours)', 'Depth (mmag)','Planet Radius (R_Earth)','SNR_per_transit',
+              'Stellar Eff Temp (K)', 'Stellar Radius (R_Sun)','Comments','Cheops_Observability','Cheops_Max_Efficiency',
+              'Cheops_Obs_dates','Year2_obs_times', 'Year3_obs_times','Year4_obs_times', 'TESS_data', 'TESS_dvr']
+    elif dftype=='tic' and cols2use is None:
+        cols2use='ID, ra, dec, Tmag, plx, eclong, eclat, Bmag, Vmag, Jmag,  Kmag, GAIAmag, Teff, logg, MH, rad, mass, rho, d'.split(', ')
+    if dftype=='toi' and cols2avoid is None:
+        cols2avoid=['SG1A','SG1B','SG2','SG3','SG4','SG5','ACWG ESM','ACWG TSM',
+                               'Time Series Observations','Spectroscopy Observations','Imaging Observations',
+                               'TESS Disposition','Master','Planet Insolation (Earth Flux)','Depth (mmag)',
+                               'Planet Equil Temp (K)','Previous CTOI','PM RA (mas/yr)','PM Dec (mas/yr)']
+    elif dftype=='tic' and cols2avoid is None:
+        cols2avoid='pmRA, pmDEC, objType, typeSrc, version, HIP, TYC, UCAC, TWOMASS, SDSS, ALLWISE, GAIA, APASS, KIC, POSflag, PMflag, lumclass, lum, ebv, numcont, contratio, disposition, duplicate_id, priority, EBVflagTeffFlag, gaiabp, gaiarp, gaiaqflag, starchareFlag, VmagFlag, BmagFlag, splists, RA_orig, Dec_orig, raddflag, wdflag, dstArcSec'.split(', ')
+    #Making Datatable inset:
+    err_cols=[]
+    nonerr_cols=[]
+    #errless_cols=[]
+
+    cols2use=[c for c in cols2use if not err_string_parse(c)[0]]
+    df=df.rename(columns={col:col[:-1] for col in df.columns if col[-1]==' '}) #Removing trailing spaces
+
+    #Creating error arrays
+    for col in df.columns:
+        if col in cols2use and col not in cols2avoid and 'e_'+col in df.columns:
+            nonerr_cols+=[col]
+            err_cols+=['e_'+col]
+            #If we have multiple errors, we'll do a median to make sure we only end up with one:
+            df['e_'+col]=np.nanmedian(np.vstack([df[ecol].values.astype(float) for ecol in ['e_'+col,'epos_'+col,'eneg_'+col,col+' err',col+'_err1',col+'_err2',col+' Error'] if ecol in df.columns]),axis=0)
+
+        elif col in cols2use and col not in cols2avoid and type(df[col].values[0]) in [int,float,np.float64,np.int64,str] and 'e_'+col not in df.columns:
+            nonerr_cols+=[col]
+            err_cols+=['e_'+col]
+            df['e_'+col]=np.tile(np.nan,df.shape[0])
+
+    nonerr_cols=np.nan_to_num(np.array(nonerr_cols),0.0)
+    err_cols=np.nan_to_num(np.array(err_cols),0.0)
+    #errless_cols=np.nan_to_num(np.array(errless_cols),0.0)
+    newdf=pd.DataFrame()
+    newdf['col']=nonerr_cols
+    columns=[TableColumn(field='col', title='Column')]
+    for pl in range(df.shape[0]):
+        if 'TOI' in df.columns:
+            name = str(df.iloc[pl]['TOI'])+' '
+        elif 'CTOI' in df.columns:
+            name = str(df.iloc[pl]['CTOI'])+' '
+        elif 'id' in df.columns:
+            name = str(df.iloc[pl]['id'])+' '
+        else:
+            name = ''
+        print([df.iloc[pl][val] for val in err_cols])
+        newdf[name+'Value']=[0.0 if df.iloc[pl][val] in [None,np.nan,-np.inf,np.inf,''] else df.iloc[pl][val] for val in nonerr_cols]
+        newdf[name+'Errs']=[0.0 if df.iloc[pl][val] in [None,np.nan,-np.inf,np.inf,''] else df.iloc[pl][val] for val in err_cols]
+        #newdf=newdf.fillna(0.0)
+        columns+=[TableColumn(field=name+'Value', title=name+'Value')]
+        columns+=[TableColumn(field=name+'Errs', title=name+'Errs')]
+    #print(newdf)
+    data_table = DataTable(source=ColumnDataSource(newdf), columns=columns, width=width, height=height)    
+    return data_table
