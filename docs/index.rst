@@ -12,7 +12,7 @@ It deals with the detection, vetting, model fitting and plotting of these long-p
 The package was written and is maintained by `Hugh Osborn <https://hughosborn.co.uk/about>`_ and hosted on `GitHub <https://github.com/hposborn/monotools>`_. 
 Please forward any questions to `hugh.osborn[​at​]unibe.ch`.
 
-Follow the `=lightcurve <using_lightcurve.ipynb>`_, `search <using_search.ipynb>`_ (TBD) and `fit <using_fit.ipynb>`_ tutorial notebooks below to get a sense of how MonoTools works.
+Follow the `lightcurve <using_lightcurve.ipynb>`_, `search <using_search.ipynb>`_ (TBD) and `fit <using_fit.ipynb>`_ tutorial notebooks below to get a sense of how MonoTools works.
 
 .. toctree::
    :maxdepth: 1

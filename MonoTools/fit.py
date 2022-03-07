@@ -58,7 +58,7 @@ if not os.path.isdir(theano_dir):
 
 theano_pars={'device':'cpu',
              'floatX':'float64',
-             'base_compiledir':theano_dir,"gcc.cxxflags":"-fbracket-depth=1024"}
+             'base_compiledir':theano_dir}#":"-fbracket-depth=1024"}
 '''if MonoData_savepath=="/Users/hosborn/python/MonoToolsData" or MonoData_savepath=="/Volumes/LUVOIR/MonoToolsData":
     theano_pars['cxx']='/usr/local/Cellar/gcc/9.3.0_1/bin/g++-9'
 
