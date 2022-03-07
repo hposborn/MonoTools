@@ -7,7 +7,7 @@ For the moment, please cite Osborn et al (2022), and include the following ackno
 ## Acknowledgement
 ```
 This research made use of \textsf{MonoTools} \citep{osborn2022uncovering} and its
-dependencies \citep{exoplanet:agol20, exoplanet:astropy13, exoplanet:astropy18,
+dependencies \citep{exoplanet:exoplanet, exoplanet:agol20, exoplanet:astropy13, exoplanet:astropy18,
 exoplanet:exoplanet, exoplanet:kipping13, exoplanet:luger18, exoplanet:pymc3,
 exoplanet:theano}.
 ```

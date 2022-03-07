@@ -18,7 +18,9 @@ MonoTools.fit is an update to my [previous Namaste code](http://github.com/hposb
 
 This uses a PyMC3/Theano back-end, a differentiable Keplerian orbital model, and the Gaussian process modeling of [Celerite](http://github.com/dfm/celerite) to fit exoplanetary transits.
 
-Here we wrap the ["exoplanet"](http://github.com/dfm/exoplanet) core model to specify it for single transits, and plot/analyse the results.
+Here we wrap the ["exoplanet"](http://github.com/dfm/exoplanet) core model to specify it for single and "duo"-transits, and plot/analyse the results.
+
+The first use of `MonoTools` in a published paper is out now in [Osborn+ (2022)](http://arxiv.org) where MonoTools helped recover the orbits of the two outer planets in the TOI-2076 system.
 
 #### Installing
 To install, I recommend using a virtual environment, as some of the packages required are not at their most recent versions.

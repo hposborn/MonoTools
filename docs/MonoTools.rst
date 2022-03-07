@@ -20,14 +20,6 @@ MonoTools.lightcurve module
    :undoc-members:
    :show-inheritance:
 
-MonoTools.oldcode module
-------------------------
-
-.. automodule:: MonoTools.oldcode
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
 MonoTools.search module
 -----------------------
 
@@ -36,21 +28,6 @@ MonoTools.search module
    :undoc-members:
    :show-inheritance:
 
-MonoTools.search\_old module
-----------------------------
-
-.. automodule:: MonoTools.search_old
-   :members:
-   :undoc-members:
-   :show-inheritance:
-
-MonoTools.starpars module
--------------------------
-
-.. automodule:: MonoTools.starpars
-   :members:
-   :undoc-members:
-   :show-inheritance:
 
 MonoTools.tools module
 ----------------------
