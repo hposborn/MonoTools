@@ -63,7 +63,10 @@ setuptools.setup(
                       'eleanor',
                       'seaborn',
                       'iteround',
-                      'nbsphinx'
+                      'sphinx==4.3.1',
+                      'nbsphinx',
+                      'myst_parser',
+                      'sphinx_rtd_theme'
                       ],
     classifiers=[
         'Development Status :: 1 - Planning',
