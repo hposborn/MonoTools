@@ -25,7 +25,7 @@ extrafiles =['data/tables/GKSPCPapTable1_Final.txt.gz',
 
 setuptools.setup(
     name='MonoTools',
-    version='0.1.3',
+    version='0.2.0',
     description='A package for detecting, vetting and modelling transiting exoplanets on uncertain periods',
     url='https://github.com/hposborn/MonoTools',
     author='Hugh P. Osborn',
@@ -48,8 +48,8 @@ setuptools.setup(
                       'lightkurve==1.11.0',
                       'arviz==0.11',
                       'Theano==1.0.4',
-                      'pymc3==3.8',
-                      'exoplanet==0.3.2',
+                      'pymc3==3.11.4',
+                      'exoplanet==0.5.1',
                       'celerite',
                       'requests',
                       'urllib3',
@@ -63,6 +63,7 @@ setuptools.setup(
                       'eleanor',
                       'seaborn',
                       'iteround',
+                      'nbsphinx'
                       ],
     classifiers=[
         'Development Status :: 1 - Planning',
