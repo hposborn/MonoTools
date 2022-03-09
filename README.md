@@ -22,6 +22,8 @@ Here we wrap the ["exoplanet"](http://github.com/dfm/exoplanet) core model to sp
 
 The first use of `MonoTools` in a published paper is out now in [Osborn+ (2022)](http://arxiv.org) where MonoTools helped recover the orbits of the two outer planets in the TOI-2076 system.
 
+### Full installation and usage advice on ["ReadTheDocs"](https://monotools.readthedocs.io/en/main)
+
 #### Installing
 To install, I recommend using a virtual environment, as some of the packages required are not at their most recent versions.
 MonoTools should be pip installable, therefore run `pip install MonoTools`.
@@ -34,22 +36,13 @@ Mac OSX users may need to make sure GCC is correctly installed (.e.g with `brew 
 
 #### Using MonoTools
 
-For examples how to run the tools (e.g. lightcurve, stellar parameters, etc) and the search (monotransit search and vetting) functions, see [Search_Example.ipynb](https://github.com/hposborn/MonoTools/blob/master/MonoTools/examples/Search_Example.ipynb).
+For a tutorial on how to deal with the in-built lightcurve class, see [using_lightcurve.ipynb](https://github.com/hposborn/MonoTools/blob/main/docs/using_lightcurve.html).
 
-For examples on how to run the fitting code, see [Fit_Example.ipynb](https://github.com/hposborn/MonoTools/blob/master/MonoTools/examples/Fit_Example.ipynb).
+For examples how to run the tools (e.g. lightcurve, stellar parameters, etc) and the search (monotransit search and vetting) functions, see [using_fit.ipynb](https://github.com/hposborn/MonoTools/blob/main/docs/using_search.html) [TBD].
+https://github.com/hposborn/MonoTools/blob/master/MonoTools/examples/Search_Example.ipynb).
 
-For info on how to include RVs in the fitting, see [Fit_with_RVs_Example.ipynb](https://github.com/hposborn/MonoTools/blob/master/examples/Fit_with_RVs_Example.ipynb).
+For examples on how to run the fitting code (including with RVs), see [using_fit.ipynb](https://github.com/hposborn/MonoTools/blob/main/docs/using_fit.ipynb).
 
-<!--See [Search_Example.ipynb](https://github.com/hposborn/MonoTools/blob/master/Example.ipynb) for an example of how to use it.-->
-<!--If that doesn't render, try [this nbviewer link](https://nbviewer.jupyter.org/github/hposborn/MonoTools/blob/master/Example.ipynb)-->
-
-<!--To run the entire process from the command line, you can use `python -m MonoTools.main 000ID00 MISSION`-->
-
-![alt text](https://github.com/hposborn/MonoTools/blob/master/data/TIC00270341214/00270341214_Monotransit_Search.png)
-
-<!--MonoTools natively includes eccentricity and fits for period (rather than scaled transit velocity as before).-->
-<!--The period prior can be applied according to your prefered index - P^-8/3 (as suggested by [Kipping et al](https://iopscience.iop.org/article/10.3847/2515-5172/aaf50c) ), or the less-steep P^-5/3 (as used by [Osborn et al 2016](https://academic.oup.com/mnras/article/457/3/2273/2588921) and [Sandford et al 2019](https://arxiv.org/abs/1908.08548))-->
-
+<--
 #### Extra steps to install:
-
-If stellar parameters are not given and not accessible from the input catalogues provided, Dan Huber's ["Isoclassify"](https://github.com/danxhuber/isoclassify) is required to estimate density given info scraped in the `stellar` module from Gaia, input catalogues, wide-field surveys, spectra, etc. A modified version is included. However, the "mesa.h5" file must be downloaded using `wget https://www.dropbox.com/s/vrr8hc7qav1fzyb/mesa.h5?dl=0` in `stellar/isochrones`. mwdust modules may also require specific installation.
+If stellar parameters are not given and not accessible from the input catalogues provided, Dan Huber's ["Isoclassify"](https://github.com/danxhuber/isoclassify) is required to estimate density given info scraped in the `stellar` module from Gaia, input catalogues, wide-field surveys, spectra, etc. A modified version is included. However, the "mesa.h5" file must be downloaded using `wget https://www.dropbox.com/s/vrr8hc7qav1fzyb/mesa.h5?dl=0` in `stellar/isochrones`. mwdust modules may also require specific installation.-->
