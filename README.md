@@ -12,7 +12,7 @@ MonoSearch includes scripts specifically for searching and assessing a lightcurv
  - Fitting planets in a Bayesian way to account for uncertain periods (i.e. mono or duo-transits), lightcurve gaps, stellar variability, etc.
  - Compiling all the steps and various plots into a report for each planet candidate
 
-Full documentation is are taking shape at [readthedocs](https://monotools.readthedocs.io/en/latest/).
+Full documentation is are taking shape at [readthedocs](https://monotools.readthedocs.io/en/main/).
 
 MonoTools.fit is an update to my [previous Namaste code](http://github.com/hposborn/Namaste) using the ["exoplanet" models of Dan Foreman-Mackey et al](http://github.com/dfm/exoplanet).
 
