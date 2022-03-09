@@ -25,3 +25,9 @@ Compile TESS MES series-Copy1.ipynb
 data/tables/k2_table.txt
 .theano_dir*/
 docs/_build/
+paper/logo.png
+paper/apa.csl
+paper/latex.template
+dist/MonoTools-*.tar.gz
+dist/MonoTools*whl
+MonoTools.egg-info
