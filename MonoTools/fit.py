@@ -31,7 +31,10 @@ import glob
 
 import warnings
 warnings.filterwarnings("ignore")
-
+import logging 
+logging.getLogger("filelock").setLevel(logging.ERROR)
+logging.getLogger("theano").setLevel(logging.ERROR)
+logging.getLogger("matplotlib").setLevel(logging.ERROR)
 
 MonoData_tablepath = os.path.join(os.path.dirname( __file__ ),'data','tables')
 if os.environ.get('MONOTOOLSPATH') is None:
@@ -437,7 +440,7 @@ class monoModel():
         """
 
         if not hasattr(self.lc,'flux_flat') or len(self.lc.flux_flat)!=len(self.lc.flux_err):
-            self.lc = self.lc.flatten(transit_mask=~self.lc.in_trans)
+            self.lc.flatten(transit_mask=~self.lc.in_trans)
 
         rms_series=np.zeros((len(self.lc.time)))
         binsize=(1/n_steps_per_dur)*tdur
@@ -1332,10 +1335,11 @@ class monoModel():
                     else:
                         bs[pl] = xo.distributions.ImpactParameter("b_"+pl, ror=rors[pl], testval=self.planets[pl]['b'])
                 if 'tdur' in self.fit_params and pl not in self.multis:
+                    tdursd=0.25*self.planets[pl]['tdur'] if 'tdur_err' not in self.planets[pl] else self.planets[pl]['tdur_err']
                     tdurs[pl] = pm.Bound(pm.Normal,lower=0.33*self.planets[pl]['tdur'],
                                                    upper=3*self.planets[pl]['tdur'])("tdur_"+pl,
                                                    mu=self.planets[pl]['tdur'],
-                                                   sd=0.25*self.planets[pl]['tdur'],
+                                                   sd=tdursd,
                                                    testval=self.planets[pl]['tdur'])
                 if 'b' not in self.fit_params and pl not in self.multis and not self.interpolate_v_prior:
                     #If we're not fitting for b we need to extrapolate b from a period and estimate a prior on b
@@ -3910,6 +3914,7 @@ class monoModel():
         pal=sns.color_palette('viridis_r',7)
         coldic={-6:"p<1e-5",-5:"p>1e-5",-4:"p>1e-4",-3:"p>0.1%",-2:"p>1%",-1:"p>10%",0:"p>100%"}
         plot_pers=self.duos+self.monos
+        ymin = 1e-12 if ymin is None else ymin
 
         if len(plot_pers)>0:
             plt.figure(figsize=(8.5,4.2))
@@ -3921,7 +3926,6 @@ class monoModel():
                     pers = np.nanmedian(self.trace['per_'+pl],axis=0)
                     pmax = np.nanmax(pers)*1.03 if pmax is None else pmax
                     pmin = np.nanmin(pers)*0.9 if pmin is None else pmin
-                    ymin = np.min(probs[pers<pmax])-0.5 if ymin is None else ymin
                     ymax = np.max(probs[pers<pmax])+0.5 if ymax is None else ymax
                     #psum=logsumexp(np.nanmedian(self.trace['logprob_marg_'+pl],axis=0))/np.log(10)
                     #Plotting lines
@@ -3955,50 +3959,57 @@ class monoModel():
                     plt.xlabel("Period [d]")
                     plt.xlim(pmin,pmax+1)
                 elif pl in self.monos:
-
                     #if 'logprob_marg_sum_'+pl in self.trace.varnames:
                     #    total_prob=logsumexp((self.trace['logprob_marg_'+pl]+self.trace['logprob_marg_sum_'+pl]).ravel())
                     #else:
                     total_prob=logsumexp(self.trace['logprob_marg_'+pl].ravel())
                     total_av_prob=logsumexp(np.nanmedian(self.trace['logprob_marg_'+pl],axis=0))
                     pmax = np.nanmax(self.trace['per_'+pl].ravel()) if pmax is None else pmax
+                    pmin = 0.5*np.min(self.planets[pl]['per_gaps']['gap_starts']) if pmin is None else pmin
                     cols=[]
                     for ngap in np.arange(self.planets[pl]['ngaps']):
-                        bins=np.arange(np.floor(self.planets[pl]['per_gaps']['gap_starts'][ngap]),
-                                       np.clip(np.ceil(self.planets[pl]['per_gaps']['gap_ends'][ngap])+1.0,0.0,pmax),
-                                       1.0)
+                        if self.planets[pl]['per_gaps']['gap_starts'][ngap]<pmax and self.planets[pl]['per_gaps']['gap_ends'][ngap]>pmin:
+                            bins=np.arange(np.floor(self.planets[pl]['per_gaps']['gap_starts'][ngap]),
+                                        np.clip(np.ceil(self.planets[pl]['per_gaps']['gap_ends'][ngap])+1.0,0.0,pmax),
+                                        1.0)
 
-                        ncol=int(np.floor(np.clip(np.nanmedian(self.trace['logprob_marg_'+pl][:,ngap])-total_av_prob,-6,0)))
-                        #print(self.planets[pl]['per_gaps']['gap_starts'][ngap],
-                        #      ncol,np.nanmedian(self.trace['logprob_marg_'+pl][:,ngap])-total_av_prob)
-                        #print(ngap,np.exp(self.trace['logprob_marg_'+pl][:,ngap]-total_prob))
-                        if ncol not in cols:
-                            cols+=[ncol]
-                            plt.hist(self.trace['per_'+pl][:,ngap], bins=bins, edgecolor=sns.color_palette()[0],
-                                 weights=np.exp(self.trace['logprob_marg_'+pl][:,ngap]-total_prob),
-                                 color=pal[6+ncol],histtype="stepfilled",label=coldic[ncol])
-                        else:
-                            plt.hist(self.trace['per_'+pl][:,ngap], bins=bins, edgecolor=sns.color_palette()[0],
-                                 weights=np.exp(self.trace['logprob_marg_'+pl][:,ngap]-total_prob),
-                                 color=pal[6+ncol],histtype="stepfilled")
+                            ncol=int(np.floor(np.clip(np.nanmedian(self.trace['logprob_marg_'+pl][:,ngap])-total_av_prob,-6,0)))
+                            #print(self.planets[pl]['per_gaps']['gap_starts'][ngap],
+                            #      ncol,np.nanmedian(self.trace['logprob_marg_'+pl][:,ngap])-total_av_prob)
+                            #print(ngap,np.exp(self.trace['logprob_marg_'+pl][:,ngap]-total_prob))
+                            if ncol not in cols:
+                                cols+=[ncol]
+                                plt.hist(self.trace['per_'+pl][:,ngap], bins=bins, edgecolor=sns.color_palette()[0],
+                                    weights=np.exp(self.trace['logprob_marg_'+pl][:,ngap]-total_prob),
+                                    color=pal[6+ncol],histtype="stepfilled",label=coldic[ncol])
+                            else:
+                                plt.hist(self.trace['per_'+pl][:,ngap], bins=bins, edgecolor=sns.color_palette()[0],
+                                    weights=np.exp(self.trace['logprob_marg_'+pl][:,ngap]-total_prob),
+                                    color=pal[6+ncol],histtype="stepfilled")
 
                     plt.title("Mono - "+str(pl))
+
+                    if xlog:
+                        plt.xscale('log')
+                        plt.xlim(pmin,pmax)
+                        ticks=np.array([20,40,60,80,100,150,200,250,300,350,400,450,500,600,800,1000,1500,2000,2500,3000,4000,5000,6000,8000,10000])
+                        plt.xticks(ticks[(ticks>pmin)&(ticks<pmax)],ticks[(ticks>pmin)&(ticks<pmax)].astype(str))
+                        #plt.xticklabels([20,40,60,80,100,150,200,250])
+                    else:
+                        pmin=pmin if pmin is not None else 0
+                        plt.xlim(pmin,pmax)
+                    
                     if ylog:
                         plt.yscale('log')
                         plt.ylabel("$\log_{10}{\\rm prob}$")
                         plt.ylim(ymin,1.0)
+                        print(ymin,1.0)
                     else:
+                        plt.ylim(0,1.0)
                         plt.ylabel("prob")
+                    print(ymin,ymax,ylog)
 
-                    if xlog:
-                        plt.xscale('log')
-                        plt.xlim(0.5*np.min(self.planets[pl]['per_gaps']['gap_starts']),pmax)
-                        plt.xticks([20,40,60,80,100,150,200,250,300,350,400,450,500,600,800,1000,1500,2000,2500,3000],
-                                   np.array([20,40,60,80,100,150,200,250,300,350,400,450,500,600,800,1000,1500,2000,2500,3000]).astype(str))
-                        #plt.xticklabels([20,40,60,80,100,150,200,250])
-                    plt.xlim(0,pmax)
                     #plt.xlim(60,80)
-                    plt.ylim(1e-12,1.0)
                     plt.xlabel("Period [d]")
                     plt.legend(title="Average prob")
 

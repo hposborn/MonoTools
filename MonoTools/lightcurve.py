@@ -486,7 +486,7 @@ class lc():
         #Rebinning without the near-transit mask
         self.bin(timeseries=['flux','flux_flat'],binsize=binsize)
 
-    def bin(self,timeseries=['flux'],binsize=1/48,split_gap_size=0.8,use_masked=True, do_weighting=False,
+    def bin(self,timeseries=['flux'],binsize=1/48,split_gap_size=0.8,use_masked=True, do_weighting=True,
             extramask=None, overwrite=False, binsuffix='', **kwargs):
         """Binning lightcurve to e.g. 30-min cadence for planet search
 
@@ -582,7 +582,7 @@ class lc():
                     if do_weighting:
                         binnedlc = np.vstack([[tools.weighted_avg_and_std(getattr(self,fkey)[time_bools==j][digis[j]==d],ierrs[digis[j]==d])] for d in np.arange(len(bintime[j-1]))])
                     else:
-                        binnedlc = np.vstack([[tools.med_and_std(getattr(self,fkey)[time_bools==j][digis[j]==d],ierrs[digis[j]==d])] for d in np.arange(len(bintime[j-1]))])
+                        binnedlc = np.vstack([[tools.med_and_std(getattr(self,fkey)[time_bools==j][digis[j]==d])] for d in np.arange(len(bintime[j-1]))])
                     getattr(self,'bin'+binsuffix+'_'+fkey)[bintime_bools==j]=binnedlc[:,0]
                     getattr(self,'bin'+binsuffix+'_'+fkey+'_err')[bintime_bools==j]=binnedlc[:,1]
         self.timeseries=list(np.unique(self.timeseries))
