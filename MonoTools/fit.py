@@ -35,6 +35,7 @@ import logging
 logging.getLogger("filelock").setLevel(logging.ERROR)
 logging.getLogger("theano").setLevel(logging.ERROR)
 logging.getLogger("matplotlib").setLevel(logging.ERROR)
+logging.getLogger("numba").setLevel(logging.ERROR)
 
 MonoData_tablepath = os.path.join(os.path.dirname( __file__ ),'data','tables')
 if os.environ.get('MONOTOOLSPATH') is None:
@@ -876,7 +877,11 @@ class monoModel():
                 self.rvs[key]=rv_dic[key]
         self.rv_tref = np.round(np.nanmedian(rv_dic['time']),-1)
         #Setting polynomial trend
-        self.rv_npoly=n_poly_trend
+        self.rv_npoly = n_poly_trend
+        
+        self.rvs['init_perscope_offset'] = np.nansum(self.rvs['rv'][:,None]*self.rvs['tele_index_arr'],axis=0)/np.sum(self.rvs['tele_index_arr']>0,axis=0)
+        self.rvs['init_perscope_weightederr'] = np.nansum(self.rvs['rv_err'][:,None]*self.rvs['tele_index_arr'],axis=0)/np.sum(self.rvs['tele_index_arr']>0,axis=0)/np.sqrt(np.sum(self.rvs['tele_index_arr']>0,axis=0))
+        self.rvs['init_std'] = np.nanstd(self.rvs['rv']-np.sum(self.rvs['init_perscope_offset'][None,:]*self.rvs['tele_index_arr'],axis=1))
 
         assert len(self.duos+self.monos)<2 #Cannot fit more than one planet with uncertain orbits with RVs (currently)
 
@@ -1510,18 +1515,19 @@ class monoModel():
             if hasattr(self,'rvs'):
                 #One offset for each telescope:
                 rv_offsets = pm.Normal("rv_offsets",
-                             mu=np.array([np.nanmedian(self.rvs['rv'][self.rvs['tele_index']==s]) for s in self.rvs['scopes']]),
-                              sd=np.array([np.nanstd(self.rvs['rv'][self.rvs['tele_index']==s]) for s in self.rvs['scopes']]),
+                             mu=self.rvs['init_perscope_offset'],
+                              sd=self.rvs['init_perscope_weightederr'],
                                        shape=len(self.rvs['scopes']))
                 tt.printing.Print("rv_offsets")(rv_offsets)
                 #Now doing the polynomials with a vander
                 if self.rv_npoly>2:
                     #We have encapsulated the offset into rv_offsets, so here we form a poly with rv_npoly-1 terms
                     rv_polys = pm.Normal("rv_polys",mu=0,
-                                         sd=np.nanstd(self.rvs['rv'])*(10.0**-np.arange(self.rv_npoly)[::-1])[:-1],
-                                         shape=self.rv_npoly-1)
+                                         sd=self.rvs['init_std']*(10.0**-np.arange(self.rv_npoly)[::-1])[:-1],
+                                         shape=self.rv_npoly-1,testval=np.zeros(self.rv_npoly-1))
                     rv_trend = pm.Deterministic("rv_trend", tt.sum(rv_offsets*self.rvs['tele_index_arr'],axis=1) + \
                                          tt.dot(np.vander(self.rvs['time']-self.rv_tref,self.rv_npoly)[:,:-1],rv_polys))
+                    tt.printing.Print("rv_trend")(rv_trend)
                 elif self.rv_npoly==2:
                     #We have encapsulated the offset into rv_offsets, so here we just want a single-param trend term
                     rv_polys = pm.Normal("rv_polys", mu=0, sd=0.1*np.nanstd(self.rvs['rv']), testval=0.0)
@@ -1856,7 +1862,9 @@ class monoModel():
                             tt.printing.Print("tt.tile(self.rvs['rv'] - nonmarg_rvs,(self.n_margs[pl],1))")(tt.tile(self.rvs['rv'] - nonmarg_rvs,(self.n_margs[pl],1)))
                             tt.printing.Print("normalised_rv_models[pl].T")(normalised_rv_models[pl].T)
                         Ks[pl] = pm.Deterministic("K_"+pl, tt.clip(tt.batched_tensordot(tt.tile(self.rvs['rv'] - nonmarg_rvs,(self.n_margs[pl],1)), normalised_rv_models[pl].T, axes=1) / tt.sum(normalised_rv_models[pl]**2,axis=0),0.05,1e5))
-                        
+                        tt.printing.Print("pers")(pers[pl])
+                        tt.printing.Print("Ks")(Ks[pl])
+
                         model_rvs[pl] = pm.Deterministic('model_rv_'+pl, rvorbits[pl].get_radial_velocity(self.rvs['time'], K=Ks[pl]))
                         # tt.printing.Print("Ks")(Ks[pl].shape)
                         # tt.printing.Print("model_rvs[pl]")(model_rvs[pl].shape)
@@ -1872,7 +1880,8 @@ class monoModel():
                         rhos[pl]=pm.Deterministic("rho_"+pl,Mps[pl]/rpls[pl]**3)
 
                     else:
-                        tt.printing.Print("logK")(logKs[pl])
+                        tt.printing.Print("pers")(pers[pl])
+                        tt.printing.Print("logKs")(logKs[pl])
                         #if pl in self.duos+self.monos:
                         model_rvs[pl] = pm.Deterministic('model_rv_'+pl, rvorbits[pl].get_radial_velocity(self.rvs['time'],
                                                                                                       K=tt.exp(logKs[pl])))
@@ -1980,12 +1989,12 @@ class monoModel():
                         #Due to overfitting (and underestimation of errorbars), we are going to calculate the "jitter" necessary to make the RV model match within 1-sigma. 
                         #This jitter, compared againsts expected log10(jitter) distribution of 0.0±0.5 then produces the major difference in log_lik between models
                         rv_logliks = (self.rvs['rv'][:,None] - (nonmarg_rvs.dimshuffle(0,'x') + model_rvs[pl]))**2/self.rvs['rv_err'].astype(floattype)[:,None]**2
-                        rvjitters[pl]=pm.Deterministic("rv_jitters_"+pl,tt.clip(tt.sqrt(tt.mean(rv_logliks,axis=0))-np.average(self.rvs['rv_err'].astype(floattype)),self.rvs['jitter_min'],1e4))
-                        logmass_sd = (rpls[pl]<=8)*(0.07904372*rpls[pl]+0.24318296) + (rpls[pl]>8)*(0-0.02313261*rpls[pl]+1.06765343)
+                        #rvjitters[pl]=pm.Deterministic("rv_jitters_"+pl,tt.clip(tt.sqrt(tt.mean(rv_logliks,axis=0))-np.average(self.rvs['rv_err'].astype(floattype)),self.rvs['jitter_min'],1e4))
+                        logmass_sd = pm.Deterministic("logmass_sd_"+pl, (rpls[pl]<=8)*(0.07904372*rpls[pl]+0.24318296) + (rpls[pl]>8)*(0-0.02313261*rpls[pl]+1.06765343))
                         rvlogliks[pl]=pm.Deterministic("rv_loglik_"+pl, tt.tile(sum_log_rverr,self.n_margs[pl]) - \
-                                                                        (tt.log(rvjitters[pl])-self.rvs['logjitter_mean'])**2/self.rvs['logjitter_sd']**2 - \
-                                                                        (tt.log(Mps[pl])-logmassests[pl])**2/((rvjitters[pl]/Ks[pl])**2 + logmass_sd**2) + \
-                                                                        tt.sum((self.rvs['rv'][:,None] - (nonmarg_rvs.dimshuffle(0,'x') + model_rvs[pl]))**2/(rvjitters[pl][None,:]**2 + self.rvs['rv_err'][:,None].astype(floattype)**2),axis=0))
+                                                                        (tt.log(Mps[pl])-logmassests[pl])**2/((self.rvs['jitter_min']/Ks[pl])**2 + logmass_sd**2) - \
+                                                                        tt.sum((self.rvs['rv'][:,None] - (nonmarg_rvs.dimshuffle(0,'x') + model_rvs[pl]))**2/(self.rvs['jitter_min']**2 + self.rvs['rv_err'][:,None].astype(floattype)**2),axis=0))
+                                                                        #-(tt.log(rvjitters[pl])-self.rvs['logjitter_mean'])**2/self.rvs['logjitter_sd']**2 - \
                     elif hasattr(self,'rvs'):
                         rvlogliks[pl] = pm.Deterministic("rv_loglik_"+pl, sum_log_rverr - tt.sum((self.rvs['rv'] - (model_rvs[pl] + rv_trend))**2/((1+tt.exp(rv_logs2))*self.rvs['rv_err'].astype(floattype))**2))
 
@@ -4497,22 +4506,25 @@ class monoModel():
             assert observe_sigma is not None or observe_threshold is not None or max_ORs is not None, "Must use either observe_sigma, observe_threshold or max_ORs to set the number of aliases to observe"
             # 1) Observing some fraction of aliases which covers more probability that the observe_sigma fraction. i.e. 2-sigma = cover 95%
             sorted_probs = np.sort(allprobs)[::-1]
-            
-            if observe_sigma is not None and observe_threshold is None:
-                frac = stats.norm.cdf(observe_sigma)
-                #print(frac,np.cumsum(sorted_probs),np.searchsorted(np.cumsum(sorted_probs),frac)-1)
-                observe_threshold=sorted_probs[np.searchsorted(np.cumsum(sorted_probs),frac)-1]+1e-9
-            # 2) Observing up to some maximum number of ORs (e.g. 14)
-            if max_ORs is not None:
-                if observe_threshold is None:
-                    observe_threshold=0
-                if  max_ORs<len(allprobs) and np.sum(sorted_probs>observe_threshold)>max_ORs:
-                    observe_threshold=np.sort(allprobs)[::-1][max_ORs]-1e9
+            if ipl in self.multis:
+                observe_threshold=0
+            else:
+                if observe_sigma is not None and observe_threshold is None:
+                    frac = stats.norm.cdf(observe_sigma)
+                    #print(frac,np.cumsum(sorted_probs),np.searchsorted(np.cumsum(sorted_probs),frac)-1)
+                    observe_threshold=sorted_probs[np.searchsorted(np.cumsum(sorted_probs),frac)-1]+1e-9
+                # 2) Observing up to some maximum number of ORs (e.g. 14)
+                if max_ORs is not None:
+                    if observe_threshold is None or ipl in self.multis:
+                        observe_threshold=0
+                    if max_ORs<len(allprobs) and np.sum(sorted_probs>observe_threshold)>max_ORs and ipl not in self.multis:
+                        observe_threshold=np.sort(allprobs)[::-1][max_ORs]-1e9
             
             prio_1_prob_threshold = np.ceil(np.sum(allprobs>observe_threshold)*prio_1_threshold)
             prio_3_prob_threshold = np.ceil(np.sum(allprobs>observe_threshold)*(1-prio_3_threshold))
             #print(allprobs,observe_threshold,allpers[allprobs>observe_threshold])
             for nper in allpers:
+                print(allpers,nper,allprobs[nper],observe_threshold)
                 if allprobs[nper]>observe_threshold:
                     ser={}
                     iper=np.nanmedian(self.trace['per_'+ipl][:,nper]) if len(self.trace['per_'+ipl].shape)>1 else np.nanmedian(self.trace['per_'+ipl])

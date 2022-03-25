@@ -519,6 +519,7 @@ class lc():
         else:
             #Must use cad_mask as this excludes duplicates
             mask=self.cad_mask.astype(bool)
+            print("mask_sum",np.sum(mask),"masked:",np.sum(~mask))
         
         bintime=[]
         time_bools=np.zeros(len(self.time))
@@ -588,7 +589,7 @@ class lc():
         self.timeseries=list(np.unique(self.timeseries))
    
     def plot(self, plot_rows=1, timeseries=['flux'], jump_thresh=10, ylim=None, xlim=None, 
-             yoffset=0, savepng=False, savepdf=False,savefileloc=None,plot_ephem=None):
+             yoffset=0, savepng=False, savepdf=False,savefileloc=None,plot_ephem=None, plot_masked=True):
         """Plot the lightcurve using Matplotlib.
 
         In the default case, either data that is extremely long (i.e Kepler), or data that has a large gap (i.e. TESS Y1/3) will be split into two rows.
@@ -600,6 +601,7 @@ class lc():
             timeseries (list, optional): List of which timeseries to plot (i.e. enables plotting of e.g. background flux or flattened flux. Defaults to ['flux']
             jump_thresh (int, optional): Threshold beyond which we call a gap/jump between observations a major difference. Defaults to 10.
             plot_ephem (dict of dicts, optional): dicts of ephemerides in form {'name':{'t0':float,'p':float}} which to plot alongside
+            plot_masked (bool, optional):  Whether to use the mask when plotting. Default is true
         """
         # Step 1 - count total time. Divide by plot_rows, or estimate ideal plot_rows given data duration
         # Step 2 - Loop through cadences and round/cut into 3. 
@@ -628,7 +630,7 @@ class lc():
             if not hasattr(self,'bin_'+itimeseries):
                 self.remove_binned_arrs()
                 self.bin(timeseries=[itimeseries])
-            ix=self.mask
+            ix=self.mask if plot_masked else np.tile(True,len(self.time))
             if (int(self.cadence[0].split('_')[1])*1440)>20 and total_time<500:
                 #Plotting only real points as "binned points" style:
                 ax.plot(self.time[ix],yoffset*it+getattr(self,itimeseries)[ix],'.',alpha=0.8,markersize=3.0,color='C'+str(it),label=itimeseries)
@@ -680,6 +682,7 @@ class multilc(lc):
             flx_system (str,optional): Default flux system to use. Defaults to 'ppt'
             jd_base (float,optional): Base of timing system in julian date. Defaults to 2457000
             savefileloc (str,optional): File location to load and/or save lightcurve. Defaults to a new target-specific folder in `tools.MonoData_savepath`
+            extralc (lightcurve.lc, optional): A seperate lightcurve to include in the stack
         """
         self.savefileloc = os.path.join(tools.MonoData_savepath,tools.id_dic[mission]+str(id).zfill(11),tools.id_dic[mission]+str(id).zfill(11)+'_lc.pkl.gz') if savefileloc is None else savefileloc
         if load and os.path.exists(self.savefileloc):
@@ -744,7 +747,9 @@ class multilc(lc):
             # Making sure new flux system matches this flux system:
             newlc.change_flx_system(uniform_flux_sys)
             # Making sure new timing matches this timing:
+            print(newlc.jd_base,np.nanmedian(newlc.time))
             newlc.change_jd_base(uniform_jd_base)
+            print(newlc.jd_base,np.nanmedian(newlc.time))
             # Removing binned arrays when stacking
             newlc.remove_binned_arrs()
             if not hasattr(newlc,'mask') or np.isnan(newlc.mask).sum()>0:
@@ -929,6 +934,7 @@ class multilc(lc):
 
         Args:
             all_pipelines (bool, optional): Whether to download (i.e. simultaneous) photometry from multiple pipelines? Defaults to False.
+            extralc (lightcurve.lc, optional): A seperate lightcurve to include in the stack
         """
         #Checking we have lightcurve locations to search:
         if not np.any(['search' in iddic and iddic['search'] is not None for iddic in self.all_ids]) or ('overwrite' in kwargs and kwargs['overwrite']):
@@ -1341,6 +1347,7 @@ class multilc(lc):
         lcev={}
         camps=np.unique(np.array(camps))
         hdr=None
+        print(camps)
         for c in camps:
             try:
                 st1=everest.Everest(int(id),season=c,show_progress=False)
@@ -1361,11 +1368,12 @@ class multilc(lc):
                 hdr={'cdpp':st1.cdpp,'ID':st1.ID,'Tmag':st1.mag,'mission':'K2','name':st1.name,'campaign':camp,'lcsource':'everest','jd_base':2454833,'flx_system':'elec'}
             except:
                 print(c,"not possible to load")
-                return None
         if hdr is not None:
             lcev.update(hdr)
             out=self.read_from_file(lcev,hdr,mission='k2',sect=camp,src='ev')
             return out
+        else:
+            return None
     
     def get_pdc_k2_lc(self,id,camp,**kwargs):
         """Get single PDC K2 lightcurve for selected campaign
@@ -1477,12 +1485,12 @@ class multilc(lc):
             #f is fits file, but to make this section easier, we'll add it into a list:
             f=[f]
         ilc=lc()
-        if type(f)==list and (type(f[0])==fits.hdu.hdulist.HDUList or type(f[0])==fits.fitsrec.FITS_rec):
+        if type(f)==list and len(f)>0 and (type(f[0])==fits.hdu.hdulist.HDUList or type(f[0])==fits.fitsrec.FITS_rec):
             #print(f[0][0].header['TELESCOP'])
             if f[0][0].header['TELESCOP']=='Kepler' or fname.find('kepler')!=-1 or fname.find('kplr')!=-1:
                 if fname.find('k2sff')!=-1:
-                    bgf=f[1+np.argmax([f[n].header['NPIXSAP'] for n in range(1,len(f)-3)])].data['FRAW'] - \
-                        f[1+np.argmin([f[n].header['NPIXSAP'] for n in range(1,len(f)-3)])].data['FRAW']
+                    bgf=np.hstack([fi[1+np.argmax([fi[n].header['NPIXSAP'] for n in range(1,len(fi)-3)])].data['FRAW'] - \
+                                   fi[1+np.argmin([fi[n].header['NPIXSAP'] for n in range(1,len(fi)-3)])].data['FRAW'] for fi in f])
                     ilc.load_lc(np.hstack([fi[1].data['T'] for fi in f]), 
                                  fluxes={'flux':np.hstack([fi[1].data['FCOR'] for fi in f]),
                                          'bg_flux':bgf},
@@ -1522,7 +1530,8 @@ class multilc(lc):
                                              'raw_flux':np.hstack([fi[1].data['SAP_FLUX'] for fi in f]),
                                              'bg_flux':np.hstack([fi[1].data['SAP_BKG'] for fi in f])},
                                      flux_errs={'flux_err':np.hstack([fi[1].data['PDCSAP_FLUX_ERR'] for fi in f]),
-                                                 'bg_flux_err':np.hstack([fi[1].data['SAP_BKG_ERR'] for fi in f])},
+                                                'raw_flux_err':np.hstack([fi[1].data['SAP_FLUX_ERR'] for fi in f]),
+                                                'bg_flux_err':np.hstack([fi[1].data['SAP_BKG_ERR'] for fi in f])},
                                     src='pdc',mission=miss, jd_base=2454833, flx_system='elec', sect=sect, cent1=c1, cent2=c2)
                         return ilc
                     elif fname.find('XD')!=-1 or fname.find('X_D')!=-1:
@@ -1558,6 +1567,7 @@ class multilc(lc):
                                                 'raw_flux':np.hstack([fi[1].data['SAP_FLUX'] for fi in f]),
                                                 'bg_flux':np.hstack([fi[1].data['SAP_BKG'] for fi in f])},
                                         flux_errs= {'flux_err':np.hstack([fi[1].data['PDCSAP_FLUX_ERR'] for fi in f]),
+                                                    'raw_flux_err':np.hstack([fi[1].data['SAP_FLUX_ERR'] for fi in f]),
                                                     'bg_flux_err':np.hstack([fi[1].data['SAP_BKG'] for fi in f])},
                                         src='pdc',mission='tess', jd_base=2457000, flx_system='elec', sect=sect, cent1=c1, cent2=c2,
                                         quality=np.hstack([fi[1].data['QUALITY'] for fi in f]))
@@ -1588,7 +1598,7 @@ class multilc(lc):
             ilc.load_lc(f.time, fluxes={'flux':f.flux},flux_errs={'flux_err':f.flux_err},
                          src='lk',mission='tess', jd_base=2457000, flx_system='norm1', sect=sect, cent_1 = f.centroid_col, cent_2=f.centroid_row,quality=f.quality)
             return ilc
-        elif type(f)==list and type(f[0])==h5py._hl.files.File:
+        elif type(f)==list and len(f)>0 and type(f[0])==h5py._hl.files.File:
             def mag2flux(mags):
                 flux = np.power(10,(mags-np.nanmedian(mags))/-2.5)
                 return flux
@@ -1676,7 +1686,7 @@ class multilc(lc):
         if hasattr(self,'flux'):
             self.make_mask()
     
-    def init_plot(self, plot_rows=None, timeseries=[], xlim=None, cadences=[], plot_row_min=3, plot_ephem=None, Rstar=None):
+    def init_plot(self, plot_rows=None, timeseries=[], xlim=None, cadences=[], plot_row_min=3, plot_ephem=None, Rstar=None, use_masked=True):
         '''Initialise plotting parameters
         '''
         # Step 1 - count total time. Divide by plot_rows, or estimate ideal plot_rows given data duration
@@ -1686,7 +1696,10 @@ class multilc(lc):
         from iteround import saferound
         
         self.init_plot_info={}
-        self.init_plot_info['xlim_mask']=self.mask.astype(bool) if xlim is None else self.mask&(self.time>xlim[0])&(self.time<xlim[1])
+        if use_masked:
+            self.init_plot_info['xlim_mask']=self.mask.astype(bool) if xlim is None else self.mask&(self.time>xlim[0])&(self.time<xlim[1])
+        else:
+            self.init_plot_info['xlim_mask']=self.cad_mask.astype(bool) if xlim is None else (self.time>xlim[0])&(self.time<xlim[1])
         self.init_plot_info['fine_cuts']={}
         self.init_plot_info['big_cuts']={}
         self.init_plot_info['total_time']=0
@@ -1773,7 +1786,7 @@ class multilc(lc):
                 self.flatten(ephems=plot_ephem)#transit_mask=~trans_ix)
 
     def plot(self, plot_rows=None, timeseries=['flux'], ylim=None, xlim=None, overwrite=False,norm_all_timeseries=True,
-             yoffset=0, savepng=True, savepdf=False, plot_ephem=None, plot_row_min=3,Rstar=None,cadences=[]):
+             yoffset=0, savepng=True, savepdf=False, plot_ephem=None, plot_row_min=3,Rstar=None,cadences=[],plot_masked=True):
         """Plot the lightcurve using Matplotlib.
 
         In the default case, either data that is extremely long (i.e Kepler), or data that has a large gap (i.e. TESS Y1/3) will be split into two rows.
@@ -1794,6 +1807,7 @@ class multilc(lc):
             plot_row_min (int, optional): Minimum number of plot rows (i.e. if there are 3 sectors and plot_row_min=3, then these will always be seperate rows). Defaults to 3
             Rstar (float, optional): Stellar radius in order to assist with flattening in the presence of transits. Default is None (which assumes solar)
             cadences (list, optional): Whether to include specific cadences when plotting
+            plot_masked (bool, optional): Whether to plot while masking anomalous regions. Default is True
         """
         #By default only not overwriting if the saved plot init data matched the saved lightcurve (i.e. in length)
         overwrite = hasattr(self,'init_plot_info') and len(self.init_plot_info['xlim_mask'])==len(self.time) if overwrite is False else overwrite
@@ -1801,7 +1815,7 @@ class multilc(lc):
         #Initialising the plotting info:
         if not hasattr(self,'init_plot_info') or overwrite:
             self.init_plot(plot_rows=plot_rows,timeseries=timeseries,xlim=xlim,cadences=cadences,
-                            plot_row_min=plot_row_min,plot_ephem=plot_ephem,Rstar=Rstar)
+                            plot_row_min=plot_row_min,plot_ephem=plot_ephem,Rstar=Rstar,use_masked=plot_masked)
         elif hasattr(self,'init_plot_info'):
             assert 'fine_cuts' in self.init_plot_info and 'ordered_cadences' in self.init_plot_info
 
@@ -1819,7 +1833,7 @@ class multilc(lc):
             subplots[cad]=fig.add_subplot(gs[self.init_plot_info['fine_cuts'][cad]['n_plot_row'],self.init_plot_info['fine_cuts'][cad]['n_plot_col'][0]:self.init_plot_info['fine_cuts'][cad]['n_plot_col'][1]])
         for it, itimeseries in enumerate(timeseries):
             if not hasattr(self,'bin_'+itimeseries):
-                self.bin(timeseries=[itimeseries])
+                self.bin(timeseries=[itimeseries],use_masked=plot_masked)
             if norm_all_timeseries and 'flux' not in itimeseries:
                 #Normalising
                 norm_sub = np.nanmedian(getattr(self,itimeseries)[self.mask])
@@ -1831,14 +1845,17 @@ class multilc(lc):
 
             for cad in self.init_plot_info['ordered_cadences']:
                 #subplots[cad]=fig.add_subplot(gs[self.init_plot_info['fine_cuts'][cad]['n_plot_row'],self.init_plot_info['fine_cuts'][cad]['n_plot_col'][0]:self.init_plot_info['fine_cuts'][cad]['n_plot_col'][1]])
-                ix=(self.cadence==cad)*self.mask
+                if plot_masked:
+                    ix=(self.cadence==cad)*self.mask
+                else:
+                    ix=(self.cadence==cad)
                 bin_ix=(self.bin_cadence==cad)*np.isfinite(getattr(self,"bin_"+itimeseries))
                 if (self.init_plot_info['fine_cuts'][cad]['cadence']*1440)>20 and self.init_plot_info['total_time']<500:
                     #Plotting only real points as "binned points" style:
                     subplots[cad].plot(self.time[ix],yoffset*it+(getattr(self,itimeseries)[ix]-norm_sub)*norm_mult,'.',alpha=0.8,markersize=3.0,color='C'+str(it),label=itimeseries)
                 elif (self.init_plot_info['fine_cuts'][cad]['cadence']*1440)>20 and self.init_plot_info['total_time']>500:
                     #So much data that we should bin it back down (to 2-hour bins)
-                    self.bin(timeseries=[itimeseries], binsize=1/12,binsuffix='2')
+                    self.bin(timeseries=[itimeseries], binsize=1/12,binsuffix='2',use_masked=plot_masked)
                     bin_ix2=(self.bin2_cadence==cad)*np.isfinite(getattr(self,"bin2_"+itimeseries))
                     subplots[cad].plot(self.time[ix],yoffset*it+(getattr(self,itimeseries)[ix]-norm_sub)*norm_mult,'.k',markersize=0.75,alpha=0.25)
                     subplots[cad].plot(self.bin2_time[bin_ix2],yoffset*it+(getattr(self,"bin2_"+itimeseries)[bin_ix2]-norm_sub)*norm_mult,
@@ -1881,8 +1898,8 @@ class multilc(lc):
         if savepdf:
             plt.savefig(self.savefileloc.replace('_lc.pkl.gz','_lc.pdf'))
 
-    def interactive_plot(self, plot_rows=None, timeseries=['flux'], ylim=None, xlim=None, overwrite=None, cadences=[], norm_all_timeseries=True, include_table='tic',
-                        yoffset=0, plot_ephem=None, plot_row_min=3, return_only_subfigures=False, plot_width=1000, plot_height=600, Rstar=None, saveloc=None, show=False):
+    def interactive_plot(self, plot_rows=None, timeseries=['flux'], ylim=None, xlim=None, overwrite=None, cadences=[], norm_all_timeseries=True, include_table='tic', binsize=1/48,
+                        yoffset=0, plot_ephem=None, plot_row_min=3, return_only_subfigures=False, plot_width=1000, plot_height=600, Rstar=None, saveloc=None, show=False, **kwargs):
         """Plot the lightcurve using Bokeh.
 
         In the default case, either data that is extremely long (i.e Kepler), or data that has a large gap (i.e. TESS Y1/3) will be split into two rows.
@@ -1931,7 +1948,7 @@ class multilc(lc):
         subplots={}
         
         if 'flux_flat' in timeseries and not hasattr(self,'flux_flat'):
-            self.flatten()
+            self.flatten(**kwargs)
 
         cmap=plt.cm.get_cmap('viridis', 5)
 
@@ -1948,7 +1965,7 @@ class multilc(lc):
             #fig.add_subplot(gs[self.init_plot_info['fine_cuts'][cad]['n_plot_row'],self.init_plot_info['fine_cuts'][cad]['n_plot_col'][0]:self.init_plot_info['fine_cuts'][cad]['n_plot_col'][1]])
         print("binning:",timeseries)
         self.remove_binned_arrs()
-        self.bin(timeseries=timeseries)
+        self.bin(timeseries=timeseries,binsize=binsize,**kwargs)
         for it, itimeseries in enumerate(timeseries):
             if norm_all_timeseries and 'flux' not in itimeseries:
                 #Normalising
@@ -1977,7 +1994,7 @@ class multilc(lc):
                     #Plotting real points as fine scatters and binned points above:
                     if (self.init_plot_info['fine_cuts'][cad]['cadence']*1440)>20 and self.init_plot_info['total_time']>500:
                         #So much data that we should bin it back down (to 2-hour bins)
-                        self.bin(timeseries=[itimeseries], binsize=1/12,binsuffix='2')
+                        self.bin(timeseries=[itimeseries], binsize=1/12,binsuffix='2',**kwargs)
                         bin_ix2=(self.bin2_cadence==cad)*np.isfinite(getattr(self,"bin2_"+itimeseries))
                         subplots[cad].circle(self.bin2_time[bin_ix2], yoffset*it+(getattr(self,"bin2_"+itimeseries)[bin_ix2]-norm_sub)*norm_mult,
                                             size=3.0,color=matplotlib.colors.rgb2hex(cmap(it)[:3]),
@@ -2028,16 +2045,16 @@ class multilc(lc):
                 for i in range(len(rows)):
                     rowlens+=[len(rows[i])]
                 if len(rowlens)>2:
-                    if include_table=='tic':
-                        tab = tools.MakeBokehTable(self.all_ids['tess']['data'],dftype='tic',width=160, height=int(plot_height/self.init_plot_info['plot_rows']))
+                    if type(include_table)==str and include_table=='tic':
+                        tab = tools.MakeBokehTable(self.all_ids['tess']['data'],dftype='tic',width=160, height=int(plot_height/self.init_plot_info['plot_rows']),**kwargs)
                     elif type(include_table) in [pd.Series,pd.DataFrame]:
-                        tab = tools.MakeBokehTable(self.all_ids['tess']['data'],dftype='toi',width=160, height=int(plot_height/self.init_plot_info['plot_rows']))
+                        tab = tools.MakeBokehTable(self.all_ids['tess']['data'],dftype='toi',width=160, height=int(plot_height/self.init_plot_info['plot_rows']),**kwargs)
                     rows[np.argmin(rowlens)]=[tab]+rows[np.argmin(rowlens)]
                 else:
-                    if include_table=='tic':
-                        tab = tools.MakeBokehTable(self.all_ids['tess']['data'],dftype='tic',width=plot_width, height=80)
+                    if type(include_table)==str and include_table=='tic':
+                        tab = tools.MakeBokehTable(self.all_ids['tess']['data'],dftype='tic',width=plot_width, height=80,**kwargs)
                     elif type(include_table) in [pd.Series,pd.DataFrame]:
-                        tab = tools.MakeBokehTable(self.all_ids['tess']['data'],dftype='toi',width=plot_width, height=80)
+                        tab = tools.MakeBokehTable(self.all_ids['tess']['data'],dftype='toi',width=plot_width, height=80,**kwargs)
                     rows=[[tab]]+rows
             p = layout(rows, sizing_mode='stretch_both')
             save(p)
