@@ -39,7 +39,7 @@ setuptools.setup(
     packages=setuptools.find_packages(),
     package_data={'MonoTools': extrafiles},
     install_requires=['matplotlib',
-                      'numpy==1.21',
+                      'numpy==1.22.0',
                       'pandas',
                       'scipy',
                       'astropy',
