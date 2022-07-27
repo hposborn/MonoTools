@@ -57,6 +57,7 @@ class lc():
             mission (str): Photometric mission/telescope of lightcurve (e.g. k2, tess, kepler, etc)
             jd_base (float): JD epoch for time=0
             flx_system (str): Type of flux - either "ppm", "ppt", "norm0", "norm1" or "elec" (see `change_flx_system`)
+            src (str):
             cadence (float OR int OR np.ndarray): Either - cadence in seconds OR 
                                                          - a 1D array of strings in format [telescope ID k1/k2/co/te/ch]_[cadence in secs]_[pipeline source]_[Sector/Q/camp]
                                                   If left None this is estimated from time array. Default is None
@@ -202,7 +203,7 @@ class lc():
                 for iflux in [ser for ser in self.timeseries if 'flux' in ser and '_err' not in ser]:
                     mu_old = np.nanmedian(getattr(self,iflux)[mask*(self.cadence==unq_cad)])
                     #In the case of "electron" fluxes, we have to make sure we store the old median values for each sector/unique cadences:
-                    if self.flx_system is 'elec':
+                    if self.flx_system == 'elec':
                         self.info[unq_cad][iflux+'_elec_flux'] = mu_old
                         self.flx_unit_dic['elec']=[1/mu_old,mu_old]
                     elif new_flx_system == 'elec':
@@ -404,7 +405,7 @@ class lc():
                     if hasattr(self,'in_trans') and np.sum(self.in_trans)>0 and type(transit_mask)!=np.ndarray:
                         transit_mask = ~self.in_trans
                     if type(transit_mask)==np.ndarray:
-                        if debug: print("transit mask:",type(initmask),len(initmask),
+                        if self.debug: print("transit mask:",type(initmask),len(initmask),
                             initmask[0],type(transit_mask),len(transit_mask),transit_mask[0])
                         initmask=(initmask.astype(bool)&transit_mask).astype(int)
                 else:
@@ -559,7 +560,7 @@ class lc():
             else:
                 digis[j]=np.digitize(self.time[time_bools==j],bintime[j-1])
                 bin_cads[bintime_bools==j] = np.array([self.cadence[time_bools==j][digis[j]==d][-1] if d in digis[j] else '' for d in np.arange(len(bintime[j-1]))])
-                print(np.sum(time_bools==j))
+                #print(np.sum(time_bools==j))
         setattr(self,'bin'+binsuffix+'_cadence',bin_cads)
         self.timeseries+=['bin'+binsuffix+'_cadence']
         #For each of the seprated lightcurve blocks:
@@ -654,7 +655,7 @@ class lc():
                 ax.set_xlim(self.time[0]-0.25,self.time[-1]+0.25)
             else:
                 ax.set_xlim(xlim)
-        ax.legend()
+        
         if (savepng or savepdf) and not hasattr(self,'savefileloc'):
             self.savefileloc = os.path.join(tools.MonoData_savepath,tools.id_dic[self.mission]+str(id).zfill(11),tools.id_dic[self.mission]+str(id).zfill(11)+'_lc.pkl.gz') if savefileloc is None else savefileloc
         if savepng:
@@ -670,7 +671,7 @@ class multilc(lc):
     mylc=lc(203311200,'k2')
     mylc.
     """
-    def __init__(self,id,mission,radec=None,load=True, do_search=True,flx_system='ppt',jd_base=2457000.,savefileloc=None,extralc=None):
+    def __init__(self,id,mission,radec=None,load=True, do_search=True,flx_system='ppt',jd_base=2457000.,savefileloc=None,extralc=None,**kwargs):
         """AI is creating summary for __init__
 
         Args:
@@ -708,7 +709,7 @@ class multilc(lc):
             self.all_ids={'tess':{},'k2':{},'kepler':{},'corot':{}}
             self.all_ids[mission]={'id':id}
         if do_search:
-            self.get_all_lightcurves(extralc=extralc)
+            self.get_all_lightcurves(extralc=extralc,**kwargs)
     
     def load_pickle(self):            
         with gzip.open(self.savefileloc, "rb") as f:
@@ -728,7 +729,7 @@ class multilc(lc):
         """
         if priorities is None:
             #Here we can list the priorities for Kepler/K2 and TESS:
-            priorities=["k1_120_pdc","k1_1800_pdc","k2_120_ev","k2_120_vand","k2_120_pdc","k2_1800_ev","k2_1800_vand","k2_1800_pdc","ts_20_pdc","ts_120_pdc","ts_1800_pdc","ts_1800_qlp","ts_1800_el"]
+            priorities=["k1_120_pdc","k1_1800_pdc","k2_120_ev","k2_120_vand","k2_120_pdc","k2_1800_ev","k2_1800_vand","k2_1800_pdc","ts_20_pdc","ts_120_pdc","ts_600_pdc","ts_1800_pdc","ts_600_tica","ts_600_qlp","ts_1800_qlp","ts_1800_tica","ts_600_el","ts_1800_el"]
 
         # Tidying up before stacking:
         if newlcs is not None and len(newlcs)>0:
@@ -747,9 +748,9 @@ class multilc(lc):
             # Making sure new flux system matches this flux system:
             newlc.change_flx_system(uniform_flux_sys)
             # Making sure new timing matches this timing:
-            print(newlc.jd_base,np.nanmedian(newlc.time))
+            #print(newlc.jd_base,np.nanmedian(newlc.time))
             newlc.change_jd_base(uniform_jd_base)
-            print(newlc.jd_base,np.nanmedian(newlc.time))
+            #print(newlc.jd_base,np.nanmedian(newlc.time))
             # Removing binned arrays when stacking
             newlc.remove_binned_arrs()
             if not hasattr(newlc,'mask') or np.isnan(newlc.mask).sum()>0:
@@ -846,7 +847,7 @@ class multilc(lc):
                 assert len(k2_cat[0])>0, "cannot find a K2 ID in the EPIC"
         elif self.mission=='tess':
             tess_cat=Catalogs.query_object("TIC"+str(int(self.id)), catalog="TIC", radius=1*u.arcsec).to_pandas()
-            print(tess_cat)
+            #print(tess_cat)
             if tess_cat.shape[0]>1:
                 tess_cat=tess_cat.loc[tess_cat['ID'].values.astype(int)==self.id]
             tess_cat=tess_cat.iloc[0] if type(tess_cat)==pd.DataFrame else tess_cat
@@ -1036,15 +1037,17 @@ class multilc(lc):
         from astropy.time import Time
         most_recent_sect = int(np.ceil((Time(datetime.now().strftime("%Y-%m-%d")).jd-2458325.29278)/27.295))
         epoch=pd.read_csv(tools.MonoData_tablepath+"/tess_lc_locations.csv",index_col=0)
-        if most_recent_sect not in epoch.index:
-            epoch=tools.update_lc_locs(epoch,most_recent_sect)
-        
+        if most_recent_sect>np.max(np.array(list(epoch.index))):
+            for newsec in np.arange(np.max(np.array(list(epoch.index))),most_recent_sect+1,1):
+                epoch=tools.update_lc_locs(epoch,newsec)
+            #print(epoch)
         
         if sectors == 'all':
             if hasattr(self,'radec'):
                 sect_obs=tools.observed(int(id),self.radec)
             else:
                 sect_obs=tools.observed(int(id))
+            #print({key:sect_obs[key] for key in epoch.index})
             epochs=[key for key in epoch.index if sect_obs[key]]
 
             if epochs==[]:
@@ -1057,6 +1060,7 @@ class multilc(lc):
             epochs=[s for s in sectors if s<=np.max(epoch.index)]
         else:
             epochs=[sectors]
+        #print(epochs)
         return epochs
 
     def get_corot_campaigns(self,id=None,search_radius=25.):
@@ -1347,7 +1351,7 @@ class multilc(lc):
         lcev={}
         camps=np.unique(np.array(camps))
         hdr=None
-        print(camps)
+        #print(camps)
         for c in camps:
             try:
                 st1=everest.Everest(int(id),season=c,show_progress=False)
@@ -1397,7 +1401,9 @@ class multilc(lc):
 
     
     def make_cadmask(self):
+        """
         #Masking any cadences we don't want:
+        """
         self.cad_mask=~np.in1d(self.cadence, self.mask_cadences)
         if 'cad_mask' not in self.timeseries:
             self.timeseries+=['cad_mask']
@@ -1704,7 +1710,7 @@ class multilc(lc):
         self.init_plot_info['big_cuts']={}
         self.init_plot_info['total_time']=0
         self.init_plot_info['cadence_mask']=np.tile(False,len(self.time))
-        cadences=self.cadence_list if cadences==[] else cadences
+        cadences = [c for c in self.cadence_list if c not in self.mask_cadences] if cadences==[] else cadences
         self.init_plot_info['init_ordered_cadences'] =  np.array(cadences)[np.argsort([np.nanmedian(self.time[self.cadence==cad]) for cad in cadences])]
         self.init_plot_info['ordered_cadences']=[]
 
@@ -1723,8 +1729,9 @@ class multilc(lc):
         self.init_plot_info['ordered_cadences']=np.array(self.init_plot_info['ordered_cadences'])
         self.init_plot_info['time_regions']=tools.find_time_regions(self.time[self.init_plot_info['cadence_mask']*self.init_plot_info['xlim_mask']])
         for nj in range(len(self.init_plot_info['time_regions'])):
+            all_cads=np.unique(self.cadence[(~np.isin(self.cadence,self.mask_cadences))*(self.time>self.init_plot_info['time_regions'][nj][0])*(self.time<self.init_plot_info['time_regions'][nj][1])])
             self.init_plot_info['big_cuts'][nj]={'start':self.init_plot_info['time_regions'][nj][0],'end':self.init_plot_info['time_regions'][nj][1],
-                          'all_cads':np.unique(self.cadence[(self.time>self.init_plot_info['time_regions'][nj][0])*(self.time<self.init_plot_info['time_regions'][nj][1])])}
+                                                 'all_cads':all_cads}
             self.init_plot_info['big_cuts'][nj]['total_dur']=np.sum([self.init_plot_info['fine_cuts'][cad]['start_end_dur'] for cad in self.init_plot_info['big_cuts'][nj]['all_cads']])
             #Let's just estimate the number of rows we want per big 
             self.init_plot_info['big_cuts'][nj]['n_ideal_split'] = np.log10(np.clip(3.333*(self.init_plot_info['total_time']-80),10,100000))*self.init_plot_info['big_cuts'][nj]['total_dur']/self.init_plot_info['total_time']
@@ -1786,7 +1793,8 @@ class multilc(lc):
                 self.flatten(ephems=plot_ephem)#transit_mask=~trans_ix)
 
     def plot(self, plot_rows=None, timeseries=['flux'], ylim=None, xlim=None, overwrite=False,norm_all_timeseries=True,
-             yoffset=0, savepng=True, savepdf=False, plot_ephem=None, plot_row_min=3,Rstar=None,cadences=[],plot_masked=True):
+             yoffset=0, savepng=True, savepdf=False, plot_ephem=None, plot_row_min=3,Rstar=None,cadences=[],plot_masked=True,
+             plot_legend=True):
         """Plot the lightcurve using Matplotlib.
 
         In the default case, either data that is extremely long (i.e Kepler), or data that has a large gap (i.e. TESS Y1/3) will be split into two rows.
@@ -1808,10 +1816,12 @@ class multilc(lc):
             Rstar (float, optional): Stellar radius in order to assist with flattening in the presence of transits. Default is None (which assumes solar)
             cadences (list, optional): Whether to include specific cadences when plotting
             plot_masked (bool, optional): Whether to plot while masking anomalous regions. Default is True
+            plot_legend (bool, optional): Whether to include legend on plot. Default is True
         """
         #By default only not overwriting if the saved plot init data matched the saved lightcurve (i.e. in length)
         overwrite = hasattr(self,'init_plot_info') and len(self.init_plot_info['xlim_mask'])==len(self.time) if overwrite is False else overwrite
 
+        cadences = [c for c in self.cadence_list if c not in self.mask_cadences] if cadences==[] else cadences
         #Initialising the plotting info:
         if not hasattr(self,'init_plot_info') or overwrite:
             self.init_plot(plot_rows=plot_rows,timeseries=timeseries,xlim=xlim,cadences=cadences,
@@ -1873,7 +1883,7 @@ class multilc(lc):
                             pos=self.init_plot_info['minmax_global'][0]+((1+ixn)/20)*(self.init_plot_info['minmax_global'][1]-self.init_plot_info['minmax_global'][0])
                         else:
                             pos=ylim[0]+((1+ixn)/20)*(ylim[1]-ylim[0])
-                        subplots[cad].plot(self.init_plot_info['ephems'][name]['trans'],np.tile(pos,len(self.init_plot_info['ephems'][name]['trans'])),'^',markersize=9,color='C'+str(5-ixn),label=name)
+                        subplots[cad].plot(self.init_plot_info['ephems'][name]['trans'],np.tile(pos,len(self.init_plot_info['ephems'][name]['trans'])),'^',markersize=9,color='C'+str(5-np.clip(ixn,0,5)),label=name)
                 if it==(len(timeseries)-1):
                     if self.init_plot_info['fine_cuts'][cad]['n_plot_col'][0]!=0.0:
                         subplots[cad].set_yticklabels([])
@@ -1889,9 +1899,10 @@ class multilc(lc):
                         subplots[cad].set_xlim(self.init_plot_info['fine_cuts'][cad]['start']-0.25,self.init_plot_info['fine_cuts'][cad]['end']+0.25)
                     else:
                         subplots[cad].set_xlim(xlim)
-                    if plot_ephem is not None and len(plot_ephem)>1:
+                    if plot_ephem is not None and len(plot_ephem)>1 and plot_legend:
                         subplots[cad].legend()
-        subplots[cad].legend()
+        if plot_legend:
+            subplots[cad].legend()
         plt.tight_layout()
         if savepng:
             plt.savefig(self.savefileloc.replace('_lc.pkl.gz','_lc.png'))
@@ -2003,18 +2014,19 @@ class multilc(lc):
                         subplots[cad].circle(self.bin_time[bin_ix], yoffset*it+(getattr(self,"bin_"+itimeseries)[bin_ix]-norm_sub)*norm_mult,
                                             size=3.0,color=matplotlib.colors.rgb2hex(cmap(it)[:3]),
                                             legend_label="bin_"+itimeseries, alpha=0.8)
-                if plot_ephem is not None:
-                    #Plotting ephemerides as triangles under transits (if necessary)
-                    assert type(plot_ephem) is dict
-                    for ixn,name in enumerate(plot_ephem):
-                        if ylim is None:
-                            pos=self.init_plot_info['minmax_global'][0]+((1+ixn)/20)*(self.init_plot_info['minmax_global'][1]-self.init_plot_info['minmax_global'][0])
-                        else:
-                            pos=ylim[0]+((1+ixn)/20)*(ylim[1]-ylim[0])
-                        subplots[cad].scatter(self.init_plot_info['ephems'][name]['trans'],np.tile(pos,len(self.init_plot_info['ephems'][name]['trans'])),marker="triangle", 
-                                              size=12.5, line_color=matplotlib.colors.rgb2hex(cmap(4-ixn)[:3]),
-                                              fill_color=matplotlib.colors.rgb2hex(cmap(4-ixn)[:3]), alpha=0.85)
                 if it==(len(timeseries)-1):
+                    if plot_ephem is not None:
+                        #Plotting ephemerides as triangles under transits (if necessary)
+                        assert type(plot_ephem) is dict
+                        for ixn,name in enumerate(plot_ephem):
+                            if ylim is None:
+                                pos=self.init_plot_info['minmax_global'][0]+((1+ixn)/20)*(self.init_plot_info['minmax_global'][1]-self.init_plot_info['minmax_global'][0])
+                            else:
+                                pos=ylim[0]+((1+ixn)/20)*(ylim[1]-ylim[0])
+                            subplots[cad].scatter(self.init_plot_info['ephems'][name]['trans'],np.tile(pos,len(self.init_plot_info['ephems'][name]['trans'])),marker="triangle", 
+                                                size=12.5, line_color=matplotlib.colors.rgb2hex(cmap(4-ixn)[:3]),
+                                                fill_color=matplotlib.colors.rgb2hex(cmap(4-ixn)[:3]), alpha=0.85)
+
                     if self.init_plot_info['fine_cuts'][cad]['n_plot_col'][0]!=0.0:
                         subplots[cad].yaxis.major_label_text_font_size = '0pt'
                     else:
@@ -2046,9 +2058,9 @@ class multilc(lc):
                     rowlens+=[len(rows[i])]
                 if len(rowlens)>2:
                     if type(include_table)==str and include_table=='tic':
-                        tab = tools.MakeBokehTable(self.all_ids['tess']['data'],dftype='tic',width=160, height=int(plot_height/self.init_plot_info['plot_rows']),**kwargs)
+                        tab = tools.MakeBokehTable(self.all_ids['tess']['data'],dftype='tic',width=160,**kwargs)
                     elif type(include_table) in [pd.Series,pd.DataFrame]:
-                        tab = tools.MakeBokehTable(self.all_ids['tess']['data'],dftype='toi',width=160, height=int(plot_height/self.init_plot_info['plot_rows']),**kwargs)
+                        tab = tools.MakeBokehTable(self.all_ids['tess']['data'],dftype='toi',width=160,**kwargs)
                     rows[np.argmin(rowlens)]=[tab]+rows[np.argmin(rowlens)]
                 else:
                     if type(include_table)==str and include_table=='tic':

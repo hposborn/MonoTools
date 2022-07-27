@@ -47,14 +47,14 @@ else:
 if not os.path.isdir(MonoData_savepath):
     os.mkdir(MonoData_savepath)
 
-os.environ["CXXFLAGS"]="-fbracket-depth=512" if not "CXXFLAGS" in os.environ else "-fbracket-depth=512,"+os.environ["CXXFLAGS"]
+#os.environ["CXXFLAGS"]="-fbracket-depth=512" if not "CXXFLAGS" in os.environ else "-fbracket-depth=512,"+os.environ["CXXFLAGS"]
 os.environ["CFLAGS"] = "-fbracket-depth=512" if not "CFLAGS" in os.environ else "-fbracket-depth=512,"+os.environ["CFLAGS"]
 
 #creating new hidden directory for theano compilations:
 theano_dir=MonoData_savepath+'/.theano_dir_'+str(np.random.randint(8))
 
 theano_pars={'device':'cpu','floatX':'float64',
-             'base_compiledir':theano_dir,"gcc.cxxflags":"-fbracket-depth=1024"}
+             'base_compiledir':theano_dir}#,"gcc.cxxflags":"-fbracket-depth=1024"}
 '''if MonoData_savepath=="/Users/hosborn/python/MonoToolsData" or MonoData_savepath=="/Volumes/LUVOIR/MonoToolsData":
     theano_pars['cxx']='/usr/local/Cellar/gcc/9.3.0_1/bin/g++-9'
 
@@ -112,17 +112,129 @@ class target():
         if not os.path.isdir(self.dataloc):
             os.mkdir(self.dataloc)
 
-    def init_starpars(self,Rs=None,Ms=None,Teff=None,logg=None,rhostar=None):
-        """Initialise stellar parameters of target star.
-        """
-        #Rs=1.0  or not use_stellar_dens or np.isnan(self.Rs)) else float(self.Rs)
-        #Ms=1.0 if (not hasattr(self,'Ms') or self.Ms is None or not use_stellar_dens or np.isnan(self.Ms)) else float(self.Ms)
-        #Teff=5800.0 if (not hasattr(self,'Ms') or self.Teff is None) else float(self.Teff)
-        #if (not hasattr(self,'Rs') or self.Rs is None:
-        self.Rs={'val':1.0,'err':0.1}
-        self.Ms={'val':1.0,'err':0.2}
-        self.Teff={'val':5800.0,'err':300}
+    def init_starpars(self,Rstar=None,Teff=None,logg=None,FeH=0.0,rhostar=None,Mstar=None):
+        """Adds stellar parameters to model
 
+        Args:
+            Rstar (list, optional): Stellar radius in Rsol in format [value, neg_err, pos_err]. Defaults to np.array([1.0,0.08,0.08]).
+            Teff (list, optional): Stellar effective Temperature in K in format [value, neg_err, pos_err]. Defaults to np.array([5227,100,100]).
+            logg (list, optional): Stellar logg in cgs in format [value, neg_err, pos_err]. Defaults to np.array([4.3,1.0,1.0]).
+            FeH (float, optional): Stellar log Metallicity. Defaults to 0.0.
+            rhostar (list, optional): Stellar density in rho_sol (1.411gcm^-3) in format [value, neg_err, pos_err]. Defaults to None.
+            Mstar (float or list, optional): Stellar mass in Msol either as a float or in format [value, neg_err, pos_err]. Defaults to None.
+        """
+        if Rstar is None and hasattr(self.lc,'all_ids') and 'tess' in self.lc.all_ids and 'data' in self.lc.all_ids['tess'] and 'rad' in self.lc.all_ids['tess']['data']:
+            #Radius info from lightcurve data (TIC)
+            if 'eneg_Rad' in self.lc.all_ids['tess']['data'] and self.lc.all_ids['tess']['data']['eneg_Rad'] is not None and self.lc.all_ids['tess']['data']['eneg_Rad']>0:
+                Rstar={'val':self.lc.all_ids['tess']['data']['rad'],
+                       'err_neg':self.lc.all_ids['tess']['data']['eneg_Rad'],
+                       'err_pos':self.lc.all_ids['tess']['data']['epos_Rad']}
+                Rstar['av_err']=0.5*(abs(Rstar['err_neg'])+Rstar['err_pos'])
+            else:
+                Rstar={'val':self.lc.all_ids['tess']['data']['rad'],
+                       'av_err':self.lc.all_ids['tess']['data']['e_rad'],
+                       'err_neg':self.lc.all_ids['tess']['data']['e_rad'],
+                       'err_pos':self.lc.all_ids['tess']['data']['e_rad']}
+            if 'eneg_Teff' in self.lc.all_ids['tess']['data'] and self.lc.all_ids['tess']['data']['eneg_Teff'] is not None and self.lc.all_ids['tess']['data']['eneg_Teff']>0:
+                Teff={'val':self.lc.all_ids['tess']['data']['Teff'],
+                        'err_neg':self.lc.all_ids['tess']['data']['eneg_Teff'],
+                        'err_pos':self.lc.all_ids['tess']['data']['epos_Teff']}
+                Teff['av_err']=0.5*(abs(Teff['err_neg'])+Teff['err_pos'])
+            else:
+                Teff={'val':self.lc.all_ids['tess']['data']['Teff'],
+                      'av_err':self.lc.all_ids['tess']['data']['e_Teff']}
+                Teff['err_neg']=Teff['av_err'];Teff['err_pos']=Teff['av_err']
+            if 'eneg_logg' in self.lc.all_ids['tess']['data'] and self.lc.all_ids['tess']['data']['eneg_logg'] is not None and self.lc.all_ids['tess']['data']['eneg_logg']>0:
+                logg={'val':self.lc.all_ids['tess']['data']['logg'],
+                      'err_neg':self.lc.all_ids['tess']['data']['eneg_logg'],
+                      'err_pos':self.lc.all_ids['tess']['data']['epos_logg']}
+                logg['av_err']=0.5*(abs(logg['err_neg'])+logg['err_pos'])
+            else:
+                logg={'val':self.lc.all_ids['tess']['data']['logg'],
+                      'av_err':self.lc.all_ids['tess']['data']['e_logg'],
+                      'err_neg':self.lc.all_ids['tess']['data']['e_logg'],
+                      'err_pos':self.lc.all_ids['tess']['data']['e_logg']}
+        if Rstar is None:
+            Rstar={'val':1.0,'av_err':0.25,'err_neg':0.25,'err_pos':0.25}
+        if Teff is None:
+            Teff={'val':5227,'av_err':100,'err_neg':100,'err_pos':100}
+        if logg is None:
+            logg={'val':4.3,'av_err':1.0,'err_neg':1.,'err_pos':1.}
+        self.FeH=FeH
+        self.Rstar=Rstar
+        self.Teff=Teff
+        self.logg=logg
+
+        if Mstar is not None and type(Mstar)==float:
+            self.Mstar = {'val':Mstar,'av_err':0.33*Mstar,'err_neg':0.33*Mstar,'err_pos':0.33*Mstar}
+        elif Mstar is not None and (type(Mstar)==list or type(Mstar)==np.ndarray):
+            self.Mstar = {'val':Mstar[0]}
+            if len(Mstar)==2:
+                self.Mstar['av_err']=Mstar[1]
+                self.Mstar['err_neg']=Mstar[1]
+                self.Mstar['err_pos']=Mstar[1]
+            else:
+                self.Mstar['err_neg']=Mstar[1]
+                self.Mstar['err_pos']=Mstar[2]
+                self.Mstar['av_err']=0.5*(abs(self.Mstar['err_neg'])+self.Mstar['err_pos'])
+        elif Mstar is None and hasattr(self.lc,'all_ids') and 'tess' in self.lc.all_ids and 'data' in self.lc.all_ids['tess'] and 'mass' in self.lc.all_ids['tess']['data']:
+            if 'eneg_mass' in self.lc.all_ids['tess']['data'] and self.lc.all_ids['tess']['data']['eneg_mass'] is not None and self.lc.all_ids['tess']['data']['eneg_mass']>0:
+                self.Mstar={'val':self.lc.all_ids['tess']['data']['mass'],
+                       'err_neg':self.lc.all_ids['tess']['data']['eneg_mass'],
+                       'err_pos':self.lc.all_ids['tess']['data']['epos_mass']}
+                self.Mstar['av_err']=0.5*(abs(self.Mstar['err_neg'])+self.Mstar['err_pos'])
+            else:
+                self.Mstar={'val':self.lc.all_ids['tess']['data']['mass'],
+                       'av_err':self.lc.all_ids['tess']['data']['e_mass'],
+                       'err_neg':self.lc.all_ids['tess']['data']['e_mass'],
+                       'err_pos':self.lc.all_ids['tess']['data']['e_mass']}
+
+        #Here we only have a mass, radius, logg- Calculating rho two ways (M/R^3 & logg/R), and doing weighted average
+        if rhostar is None:
+            rho_logg={'val':np.power(10,self.logg['val']-4.43)/self.Rstar['val']}
+            rho_logg['err_pos']=np.power(10,self.logg['val']+self.logg['err_pos']-4.43)/(self.Rstar['val']-abs(self.Rstar['err_neg']))-rho_logg['val']
+            rho_logg['err_neg']=rho_logg['val']-np.power(10,self.logg['val']-self.logg['err_pos']-4.43)/(self.Rstar['val']+self.Rstar['err_neg'])
+            rho_logg['relerr_pos']=rho_logg['err_pos']/rho_logg['val']
+            rho_logg['relerr_neg']=rho_logg['err_neg']/rho_logg['val']
+            rho_logg['relerr_sum']=rho_logg['relerr_neg']+rho_logg['relerr_pos']
+            
+            if Mstar is not None:
+                rho_MR={'val':self.Mstar['val']/self.Rstar['val']**3}
+                rho_MR['err_pos']=(self.Mstar['val']+self.Mstar['err_pos'])/(self.Rstar[0]-abs(self.Rstar['err_neg']))**3 - rho_MR['val']
+                rho_MR['err_neg']=rho_MR['val'] - (self.Mstar['val']-abs(self.Mstar['err_neg']))/(self.Rstar['val']+self.Rstar['err_pos'])**3
+                rho_MR['relerr_neg']=rho_MR['err_neg']/rho_MR['val']
+                rho_MR['relerr_pos']=rho_MR['err_pos']/rho_MR['val']
+                rho_MR['relerr_sum']=rho_MR['relerr_neg']+rho_MR['relerr_pos']
+
+                #Weighted sums of two avenues to density:
+                total_relerr_sums=(rho_logg['relerr_pos']+rho_logg['relerr_neg']+rho_MR['relerr_pos']+rho_MR['relerr_neg'])
+                self.rhostar = {'val':rho_logg['val']*rho_MR['relerr_sum']/total_relerr_sums+\
+                                 rho_MR['val']*rho_logg['relerr_sum']/total_relerr_sums}
+                self.rhostar['err_neg']=self.rhostar['val']*(rho_logg['relerr_neg']*rho_MR['relerr_sum']/total_relerr_sums+
+                                      rho_MR['relerr_neg']*rho_logg['relerr_sum']/total_relerr_sums)
+                self.rhostar['err_neg']=self.rhostar['val']*(rho_logg['relerr_pos']*rho_MR['relerr_sum']/total_relerr_sums+
+                                      rho_MR['relerr_pos']*rho_logg['relerr_sum']/total_relerr_sums)
+            else:
+                self.rhostar=rho_logg
+        elif type(rhostar) in [np.ndarray,list]:
+            self.rhostar = {'val':rhostar[0]}
+            if len(rhostar)==2:
+                self.rhostar['av_err']=rhostar[1]
+                self.rhostar['err_neg']=rhostar[1]
+                self.rhostar['err_pos']=rhostar[1]
+            else:
+                self.rhostar['err_neg']=rhostar[1]
+                self.rhostar['err_pos']=rhostar[2]
+                self.rhostar['av_err']=0.5*(abs(self.rhostar['err_neg'])+self.rhostar['err_pos'])
+
+            if Mstar is None and hasattr(self,'Mstar') is not None:
+                self.Mstar={'val':self.rhostar['val']*self.Rstar['val']**3}
+                self.Mstar['err_pos']=self.Mstar['val']-(self.rhostar['val']+self.rhostar['err_pos'])*(self.Rstar['val']+self.Rstar['err_pos'])**3
+                self.Mstar['err_neg']=(self.rhostar['val']+abs(self.rhostar['err_neg']))*(self.Rstar['val']+abs(self.Rstar['err_neg']))**3-self.Mstar['val']
+                self.Mstar['av_err']=0.5*(self.Mstar['err_pos']+self.Mstar['err_neg'])
+        if Mstar is None and not hasattr(self,'Mstar'):
+            self.Mstar = {'val':1.0, 'av_err':0.33, 'err_neg':0.33, 'err_pos':0.33}
+    
     def search_monos(self,mono_SNR_thresh=6.5,mono_BIC_thresh=-6,n_durs=5,poly_order=3,
                      n_oversamp=20,binsize=15/1440.0,custom_mask=None,
                      transit_zoom=3.5,use_flat=False,use_binned=True,use_poly=True,
@@ -152,7 +264,7 @@ class target():
         search_xrange=[]
         
         mincad=np.min([float(cad.split('_')[1])/86400 for cad in np.unique(self.lc.cadence_list)])
-        self.mono_search_interpmodels, self.mono_search_tdurs = self.get_interpmodels(self.Rs['val'], self.Ms['val'], self.Teff['val'], 
+        self.mono_search_interpmodels, self.mono_search_tdurs = self.get_interpmodels(self.Rstar['val'], self.Mstar['val'], self.Teff['val'], 
                                                n_durs=n_durs, texp=mincad)
         
         #print("Checking input model matches. flux:",np.nanmedian(uselc[:,0]),"std",np.nanstd(uselc[:,1]),"transit model:",
@@ -354,7 +466,7 @@ class target():
                 n_sigs=np.sum(signfct)
                 nix+=1
     
-    def init_mono(self,tcen,tdur,depth,name=None,otherinfo=None):
+    def init_mono(self,tcen,tdur,depth,name=None,otherinfo=None, **kwargs):
         """Initalise Monotransit
 
         Args:
@@ -371,9 +483,9 @@ class target():
             self.detns[name].update({col:otherinfo[col] for col in otherinfo.index if col not in self.detns[name]})
         self.monos+=[name]
 
-        self.QuickMonoFit(name,ndurs=4.5)
+        self.QuickMonoFit(name,ndurs=4.5,**kwargs)
     
-    def init_multi(self,tcen,tdur,depth,period,name=None,otherinfo=None):
+    def init_multi(self,tcen,tdur,depth,period,name=None,otherinfo=None,**kwargs):
         """Initalise multi-transiting candidate
 
         Args:
@@ -392,15 +504,18 @@ class target():
         self.multis+=[name]
         
         #Fitting:
-        self.QuickMonoFit(name,ndurs=4.5,fluxindex='flux_flat',fit_poly=False)
+        self.QuickMonoFit(name,ndurs=4.5,fluxindex='flux_flat',fit_poly=False,**kwargs)
 
     def remove_detn(self,name):
-        """Remove candidate detection given the name
+        """Remove candidate detection given the name. 
+        This stores the data in "olddetns", but the candidate is removed from multis/monos dicts
 
         Args:
             name (str): key from the `detns` dict to remove.
         """
-        _=self.detns.pop(name)
+        if not hasattr(self,'olddetns'):
+            self.olddetns={}
+        self.olddetns['x'+name]=self.detns.pop(name)
         if name in self.multis:
             self.multis.remove(name)
         if name in self.monos:
@@ -641,7 +756,56 @@ class target():
         #plt.xlim(1414,1416)
         return plot_loc
 
-    def broken_TLS(self,masked_t,masked_y,masked_yerr,max_period=None,min_period=1.1):
+    def run_BLS(self,modx,mody,modyerr,dur_shift=0.04,n_durs=6,min_period=1.1,max_period=None):
+        """run a Box-Least-Squares search
+
+        Args:
+            dur_shift (float, optional): Fractional shift in duration per loop. Defaults to 0.05.
+            min_per (float, optional): Minimum period. Defaults to 1.1.
+            max_per (float, optional): Maximum period. Defaults to None, which derives a maxp
+        """
+        from astropy.timeseries import BoxLeastSquares
+
+        max_period=0.66*np.sum(np.diff(modx)[np.diff(modx)<0.4]) if max_period is None else max_period
+        time_span=np.max(modx)-np.min(modx)
+        
+        #The fractional shift in P^(4/3) from the e.g. expected duration and lightcurve timespan:
+        frac_p43_shift=86400**(-2/3)*np.sqrt((1+0.025)**2 - 0.41**2) * (3/(np.pi**2*6.67e-11*1409.78*self.Mstar['val']/self.Rstar['val']**3))**(1/3)*dur_shift/time_span
+        pers=[min_period]
+        while pers[-1]<max_period:
+            pers+=[pers[-1]+frac_p43_shift*pers[-1]**(4/3)]
+        samp_pers = np.array(pers) 
+        samp_durs = np.random.normal(self.Rstar['val'],self.Rstar['av_err'],len(samp_pers)) * np.sqrt((1+0.025)**2 - np.random.random(len(samp_pers))**2) * ((3*samp_pers*86400)/(np.pi**2*6.67e-11*1409.78*np.random.normal(self.Mstar['val'],self.Mstar['av_err'],len(samp_pers))))**(1/3)/86400
+        model = BoxLeastSquares(modx, mody, dy=modyerr)
+
+        print(np.percentile(samp_durs,np.linspace(2,98,n_durs)),np.percentile(samp_durs,np.arange(8,98,n_durs)))
+        periodogram = model.power(samp_pers, duration=np.percentile(samp_durs,np.linspace(8,98,n_durs)), oversample=1/dur_shift)
+
+        detn = np.argmax(periodogram['power'])
+
+        stats = model.compute_stats(periodogram.period[detn],
+                            periodogram.duration[detn],
+                            periodogram.transit_time[detn])
+
+        tlslike_periodogram={'power':periodogram['power'],'periods':periodogram['period'],
+                             'period':periodogram['period'][detn],
+                             'snr':periodogram['depth_snr'][detn],'depth':periodogram['depth'][detn],
+                             'T0':periodogram['transit_time'][detn],'duration':periodogram['duration'][detn],
+                             'transit_times':stats['transit_times'][stats['per_transit_count']>0],
+                             'SDE_raw':periodogram['power'][detn],
+                             'depth_mean_even':stats['depth_even'], 'depth_mean_odd':stats['depth_odd'],
+                             'llk_per_transit':stats['per_transit_log_likelihood'][stats['per_transit_count']>0],
+                             'total_llk':stats['harmonic_delta_log_likelihood'],'n_trans':np.sum(stats['per_transit_count']>0),
+                             'pts_per_transit':stats['per_transit_count'][stats['per_transit_count']>0]}
+        tlslike_periodogram['model_lightcurve_phase']=(modx-tlslike_periodogram['T0']-0.5*tlslike_periodogram['period'])%tlslike_periodogram['period']-0.5*tlslike_periodogram['period']
+        tlslike_periodogram['model_lightcurve_time']=modx[:]
+        tlslike_periodogram['model_lightcurve_model']=np.where(abs(tlslike_periodogram['model_lightcurve_phase'])<0.5*tlslike_periodogram['depth'],1.0-tlslike_periodogram['depth'],1.0)
+        #'tcen', 'tdur', 'depth', 'period', 'orbit_flag', 'duration_tls', 'snr_tls', 'FAP_tls', 'SDE_tls', 'SDE_raw_tls', 'chi2_min_tls', 'rp_rs_tls', 'odd_even_mismatch_tls', 'transit_count_tls', 'transit_depths_tls', 'transit_times_tls', 'model_lightcurve_time_tls', 'model_lightcurve_model_tls', 'log_lik_mono_monofit', 'model_success_monofit', 'mean_monofit', 'tcen_monofit', 'log_tdur_monofit', 'tdur_monofit', 'b_monofit', 'log_ror_monofit', 'ror_monofit', 'circ_per_monofit', 'r_pl_monofit', 'depth_lc_monofit', 'light_curve_monofit', 'third_light_monofit', 'x_monofit', 'ymodel_monofit', 'y_monofit', 'yerr_monofit', 'depth_monofit', 'depth_err_monofit', 'snr_monofit', 'interpmodel_monofit', 'Ntrans_monofit', 'cdpp_monofit', 'snr_r_monofit'
+        #'transit_times', 'per_transit_count', 'per_transit_log_likelihood', 'depth', 'depth_phased', 'depth_half', 'depth_odd', 'depth_even', 'harmonic_amplitude', 'harmonic_delta_log_likelihood
+        return tlslike_periodogram, np.column_stack((periodogram['period'],periodogram['power']))
+
+
+    def run_broken_TLS(self,masked_t,masked_y,masked_yerr,max_period=None,min_period=1.1):
         """Running TLS on non-consecutive timeseries.
         This is performed by searching for short-period planets in individual sectors and then stacking the resulting power spectra together using interpolation.
         For detections found in the stacked power spectrum, a focused TLS is re-run on a small (1%-wide) period window to hone the period.
@@ -670,7 +834,7 @@ class target():
             for nt,it in enumerate(time_regions):
                 ix=(masked_t>it[0])*(masked_t<it[1])
                 model = transitleastsquares(masked_t[ix], masked_y[ix], masked_yerr[ix])
-                iresults+=[model.power(period_min=min_period,period_max=np.min(reg_durs)/3,duration_grid_step=1.0625,Rstar=self.Rs['val'],Mstar=self.Ms['val'],
+                iresults+=[model.power(period_min=min_period,period_max=np.clip(np.min(reg_durs)/3,min_period,max_period),duration_grid_step=1.0625,Rstar=self.Rstar['val'],Mstar=self.Mstar['val'],
                                        use_threads=1,show_progress_bar=False, n_transits_min=3)]
             #print(reg_durs)
             base_arr = np.column_stack((iresults[np.argmax(reg_durs)].periods,iresults[np.argmax(reg_durs)].power))
@@ -679,17 +843,20 @@ class target():
                     base_arr=np.column_stack((base_arr,
                                     interp.interp1d(iresults[nt].periods,iresults[nt].power)(np.clip(base_arr[:,0],np.min(iresults[nt].periods),np.max(iresults[nt].periods)))))
             mixed_spec = np.sum(base_arr[:,1:]**2,axis=1)**0.5
-
-            model = transitleastsquares(masked_t, masked_y, masked_yerr)
-            iresults+=[model.power(period_min=np.min(reg_durs)/3,period_max=max_period,duration_grid_step=1.0625,Rstar=self.Rs['val'],Mstar=self.Ms['val'],
-                                    use_threads=1,show_progress_bar=False, n_transits_min=3)]
-            print(np.min(iresults[-1].periods),np.max(iresults[-1].periods))
-            all_periods=np.hstack((base_arr[:,0],iresults[-1].periods))
-            all_powers =np.hstack((mixed_spec,iresults[-1].power))
-            detper=all_periods[np.argmax(mixed_spec)]
+            if max_period>np.min(reg_durs)/3:
+                model = transitleastsquares(masked_t, masked_y, masked_yerr)
+                iresults+=[model.power(period_min=np.min(reg_durs)/3,period_max=max_period,duration_grid_step=1.0625,Rstar=self.Rstar['val'],Mstar=self.Mstar['val'],
+                                        use_threads=1,show_progress_bar=False, n_transits_min=3)]
+                print(np.min(iresults[-1].periods),np.max(iresults[-1].periods))
+                all_periods=np.hstack((base_arr[:,0],iresults[-1].periods))
+                all_powers =np.hstack((mixed_spec,iresults[-1].power))
+            else:
+                all_periods=base_arr[:,0]
+                all_powers=mixed_spec
+            detper=all_periods[np.argmax(all_powers)]
             if detper<np.min(reg_durs)/3:
                 #Re-doing the TLS with a very constrained (1%) fine-point fit:
-                result=model.power(period_min=detper*0.99,period_max=detper*1.01,duration_grid_step=1.033,Rstar=self.Rs['val'],Mstar=self.Ms['val'],
+                result=model.power(period_min=detper*0.99,period_max=detper*1.01,duration_grid_step=1.033,Rstar=self.Rstar['val'],Mstar=self.Mstar['val'],
                                         use_threads=1,show_progress_bar=False, n_transits_min=3)
             else:
                 #Using the result from the longer-span TLS run
@@ -701,15 +868,15 @@ class target():
             return result, np.column_stack((all_periods,all_powers))[np.argsort(all_periods),:]
         else:
             model = transitleastsquares(masked_t, masked_y, masked_yerr)
-            res=model.power(period_min=min_period,period_max=max_period,duration_grid_step=1.0625,Rstar=self.Rs['val'],Mstar=self.Ms['val'],
+            res=model.power(period_min=min_period,period_max=max_period,duration_grid_step=1.0625,Rstar=self.Rstar['val'],Mstar=self.Mstar['val'],
                                use_threads=1,show_progress_bar=False, n_transits_min=3)
             return res, np.column_stack((res.periods,res.power))
 
 
 
-    def search_multi_planets(self, fluxname='bin_flux_flat', binsize=15/1440.0, n_search_loops=5,
-                            multi_FAP_thresh=0.00125, multi_SNR_thresh=7.0,
-                            mask_prev_planets=False, **kwargs):
+    def search_multi_planets(self, fluxname='bin_flux_flat', binsize=15/1440.0, n_search_loops=5, use_tls=True,
+                            multi_FAP_thresh=0.00125, multi_SNR_thresh=7.0, max_period=None,
+                            mask_prev_planets=False, do_sample=False, **kwargs):
         """Use transitleastsquares to search for periodic planets.
 
         Args:
@@ -718,18 +885,21 @@ class target():
             n_search_loops (int, optional): Maximum number of times to run a TLS search (i.e. multiple detections). Defaults to 5.
             multi_FAP_thresh (float, optional): False Alarm Probability threshold for multi detection. Defaults to 0.00125.
             multi_SNR_thresh (float, optional): Signal to Noise Ratio threshold for multi detection. Defaults to 7.0.
+            max_period (float, optional): Maximum period up to which to search. If None, then uses 66% of the sum of all cadences
             mask_prev_planets (bool, optional): Whether to mask those events we found during other searches (e.g. search_mono_planets). Defaults to False.
         """
         #Searches an LC (ideally masked for the monotransiting planet) for other *periodic* planets.
-        print("Using TLS on ID="+str(self.id)+" to search for multi-transiting planets")
+        print("Using "+["BLS","TLS"][int(use_tls)]+" on ID="+str(self.id)+" to search for multi-transiting planets")
         self.multi_power_spectra={}
 
+        if not hasattr(self,'Rstar'):
+            self.init_starpars()
         #Max period is half the total observed time NOT half the distance from t[0] to t[-1]
-        p_max=0.66*np.sum(np.diff(self.lc.time)[np.diff(self.lc.time)<0.4])
+        p_max=0.66*np.sum(np.diff(self.lc.time)[np.diff(self.lc.time)<0.4]) if max_period is None else max_period
         #np.clip(0.75*(np.nanmax(lc[prefix+'time'])-np.nanmin(lc[prefix+'time'])),10,80)
         if 'flat' in fluxname:
             #Setting the window to fit over as 5*maximum duration
-            rhostar=1.0 if rhostar==0.0 or rhostar is None else rhostar
+            rhostar=1.0 if self.rhostar==0.0 or self.rhostar is None else self.rhostar['val']
             durmax = (p_max/(3125*rhostar))**(1/3)
             
             plmask_0 = np.tile(False,len(self.lc.time))
@@ -737,64 +907,81 @@ class target():
                 self.create_transit_mask()
                 #Masking each of those transit events we detected during the MonoTransit search
                 plmask_0+=self.lc.in_trans
-            self.lc.flatten(knot_dist=1.9*durmax,transit_mask=~plmask_0)
+            
+            self.lc.flatten(knot_dist=1.9*durmax,transit_mask=~plmask_0,**kwargs)
 
         if 'bin' in fluxname:
-            lc=self.lc.bin(binsize=binsize,timeseries_names=[fluxname.replace('bin_','')])
+            lc=self.lc.bin(binsize=binsize,timeseries=[fluxname.replace('bin_','')])
 
         #Looping through, masking planets, until none are found.
         #{'01':{'period':500,'period_err':100,'FAP':np.nan,'snr':np.nan,'tcen':tcen,'tdur':tdur,'rp_rs':np.nan}}
         if 'bin' not in fluxname:
-            time=self.lc.time
+            time=self.lc.time[:]
             anommask=self.lc.mask[:]
         else:
-            time=self.lc.bin_time
+            time=self.lc.bin_time[:]
             print(fluxname, hasattr(self.lc,fluxname))
             anommask=np.isfinite(getattr(self.lc,fluxname))
         plmask=np.tile(False,len(anommask))
-        SNR_last_planet=100;init_n_pl=len(self.detns);n_pl=len(self.detns);results=[]
+        SNR_last_planet=100;init_n_pl=len(self.detns);n_pl=len(self.detns);self.multi_results=[]
         while SNR_last_planet>multi_SNR_thresh and n_pl<(n_search_loops+init_n_pl):
             planet_name=str(len(self.detns)).zfill(2)
+            print("searching for candidate",planet_name)
             assert planet_name not in self.detns
             #Making model. Making sure lc is at 1.0 and in relatie flux, not ppt/ppm:
-            modx = time[:]
-            mody = (getattr(self.lc,fluxname) * self.lc.flx_unit) + (1.0-np.nanmedian(getattr(self.lc,fluxname)[anommask])*self.lc.flx_unit)
-            modyerr = (getattr(self.lc,fluxname+'_err')*self.lc.flx_unit) if hasattr(self.lc,fluxname+'_err') else (getattr(self.lc,'flux_err')*self.lc.flx_unit)
+            modx = time[anommask]
+            mody = (getattr(self.lc,fluxname)[anommask] * self.lc.flx_unit) + (1.0-np.nanmedian(getattr(self.lc,fluxname)[anommask])*self.lc.flx_unit)
+            modyerr = (getattr(self.lc,fluxname+'_err')[anommask]*self.lc.flx_unit) if hasattr(self.lc,fluxname+'_err') else (getattr(self.lc,'flux_err')[anommask]*self.lc.flx_unit)
             #print(n_pl,len(mody),len(anommask),np.sum(anommask),len(plmask),np.sum(plmask))
             if np.sum(plmask)>0:
                 #Filling in the plmask with out-of-transit data:
-                rand_oot_data = mody[anommask*~plmask][np.random.choice(np.sum(anommask*~plmask),np.sum(plmask))][:]
-                print("in-transit points:",np.sum(plmask),", median of all points:",np.nanmedian(mody[anommask]),", median of randomly selected points",
-                      np.nanmedian(rand_oot_data),", median of in-transit points",np.nanmedian(mody[anommask*plmask]))
-                mody[plmask] = rand_oot_data
-            ires=self.broken_TLS(modx,mody,modyerr,p_max,min_period=1.1)
-            results+=[ires[0]]
+                mody[plmask[anommask]] = mody[~plmask[anommask]][np.random.choice(np.sum(~plmask[anommask]),np.sum(plmask[anommask]))]
+                #print("in-transit points:",np.sum(plmask),", median of all points:",np.nanmedian(mody),", median of randomly selected points",
+                #      np.nanmedian(rand_oot_data),", median of in-transit points",np.nanmedian(mody[plmask&anommask]))
+            print(np.isnan(mody).sum(),mody)
+            if use_tls:
+                ires=self.run_broken_TLS(modx,mody,modyerr,p_max,min_period=1.1)
+            else:
+                ires=self.run_BLS(modx,mody,modyerr,max_period=p_max,min_period=1.1)
+            self.multi_results+=[ires[0]]
             self.multi_power_spectra[planet_name]=ires[1]
             #anommask *= tools.CutAnomDiff(mody)
             #print(n_pl,"norm_mask:",np.sum(self.lc.mask),"anoms:",np.sum(anommask),"pl mask",np.sum(plmask),"total len",len(anommask))
             #print(results[-1])
-            print(results[-1])
-            if 'FAP' in results[-1] and 'snr' in results[-1] and not np.isnan(results[-1]['snr']) and 'transit_times' in results[-1]:
-                #Defining transit times as those times where the SNR in transit is consistent with expectation (>-3sigma)
-                snr_per_trans_est=np.sqrt(np.sum(results[-1].snr_per_transit>0))
-                trans=np.array(results[-1]['transit_times'])[results[-1].snr_per_transit>snr_per_trans_est/2]
+            print(self.multi_results[-1])
+            if 'snr' in self.multi_results[-1] and not np.isnan(self.multi_results[-1]['snr']) and 'transit_times' in self.multi_results[-1]:
+                if 'snr_per_transit' in self.multi_results[-1]:
+                    #Defining transit times as those times where the SNR in transit is consistent with expectation (>-3sigma)
+                    snr_per_trans_est=np.sqrt(np.sum(self.multi_results[-1].snr_per_transit>0))
+                    trans=np.array(self.multi_results[-1]['transit_times'])[self.multi_results[-1].snr_per_transit>snr_per_trans_est/2]
+                elif 'llk_per_transit' in self.multi_results[-1]:
+                    per_pt_llk=abs(self.multi_results[-1]['total_llk'])/np.sum(self.multi_results[-1]['pts_per_transit'])
+                    print(len(self.multi_results[-1]['transit_times']),len(self.multi_results[-1]['llk_per_transit']),len(self.multi_results[-1]['pts_per_transit']),
+                          per_pt_llk,self.multi_results[-1]['llk_per_transit'],(self.multi_results[-1]['pts_per_transit']*per_pt_llk*0.5))
+                    trans=self.multi_results[-1]['transit_times'][self.multi_results[-1]['llk_per_transit']>(self.multi_results[-1]['pts_per_transit']*per_pt_llk*0.5)]
             else:
                 trans=[]
-                
-            phase_nr_trans=(time[~plmask&anommask]-results[-1]['T0']-0.5*results[-1]['period'])%results[-1]['period']-0.5*results[-1]['period']
-            if 'FAP' in results[-1] and 'snr' in results[-1] and np.sum(abs(phase_nr_trans)<0.5*np.clip(results[-1]['duration'],0.2,2))>3:
-                if results[-1]['duration']<0.15 or results[-1]['duration']>2:
+            print(len(time),len(anommask),len(plmask))
+            phase_nr_trans=(time[anommask&(~plmask)]-self.multi_results[-1]['T0']-0.5*self.multi_results[-1]['period'])%self.multi_results[-1]['period']-0.5*self.multi_results[-1]['period']
+            if 'snr' in self.multi_results[-1] and np.sum(abs(phase_nr_trans)<0.5*np.clip(self.multi_results[-1]['duration'],0.2,2))>3:
+                if self.multi_results[-1]['duration']<0.15 or self.multi_results[-1]['duration']>2:
                     #TLS throws a crazy-short duration... let's take th duration from period & impact parameter
-                    dur = np.sqrt((1+np.sqrt(1-results[-1]['depth']))**2 - 0.35**2) * ((3*results[-1]['period']*86400)/(np.pi**2*6.67e-11*1409.78*self.Ms['val']/self.Rs['val']**3))**(1/3)/86400
+                    dur = np.sqrt((1+np.sqrt(1-self.multi_results[-1]['depth']))**2 - 0.35**2) * ((3*self.multi_results[-1]['period']*86400)/(np.pi**2*6.67e-11*1409.78*self.Mstar['val']/self.Rstar['val']**3))**(1/3)/86400
                 else:
-                    dur = results[-1]['duration']
-                self.init_multi(tcen=results[-1]['T0'],tdur=dur,
-                                depth=1-results[-1]['depth'],period=results[-1]['period'],
-                                otherinfo=pd.Series({key+'_tls':results[-1][key] for key in ['duration','snr','FAP','SDE','SDE_raw','chi2_min','rp_rs','odd_even_mismatch','transit_count','transit_depths','transit_times','model_lightcurve_time','model_lightcurve_model']}),
-                                name=planet_name)
-                SNR=np.max([self.detns[planet_name]['snr_monofit'],results[-1].snr])
-                FAP=results[-1]['FAP']
-                if SNR>multi_SNR_thresh and FAP<multi_FAP_thresh and len(trans)>2:
+                    dur = self.multi_results[-1]['duration']
+                if use_tls:
+                    oth_inf=pd.Series({key+'_tls':self.multi_results[-1][key] for key in ['duration','snr','FAP','SDE','SDE_raw','chi2_min','rp_rs','odd_even_mismatch','transit_count','transit_depths','transit_times','model_lightcurve_time','model_lightcurve_model']})
+                else:
+                    oth_inf=pd.Series({key+'_bls':self.multi_results[-1][key] for key in ['duration','snr','SDE_raw','total_llk','llk_per_transit','pts_per_transit','transit_times','model_lightcurve_time','model_lightcurve_model']})
+
+                self.init_multi(tcen=self.multi_results[-1]['T0'],tdur=dur,
+                                depth=1-self.multi_results[-1]['depth'],period=self.multi_results[-1]['period'],
+                                otherinfo=oth_inf,
+                                name=planet_name,
+                                sample_model=do_sample)
+                SNR=np.max([self.detns[planet_name]['snr_monofit'],self.multi_results[-1]['snr']])
+                print(SNR,self.multi_results[-1]['snr'],self.detns[planet_name]['period'],self.detns[planet_name]['tdur_monofit'])
+                if SNR>multi_SNR_thresh and len(trans)>2:
                     #Removing planet from future data to be searched
                     this_pl_masked=abs((time-self.detns[planet_name]['tcen']+0.5*self.detns[planet_name]['period'])%self.detns[planet_name]['period']-0.5*self.detns[planet_name]['period'])<(0.6*self.detns[planet_name]['tdur_monofit'])
                     plmask=plmask+this_pl_masked#Masking previously-detected transits
@@ -842,6 +1029,14 @@ class target():
         axes={}
         max_all_depths = np.max([self.detns[mult]['depth_monofit']*self.lc.flx_unit for mult in self.multis])
         
+        all_in_trans=np.tile(False,len(self.lc.time))
+        if len(self.multis)>0:
+            for n_m,mult in enumerate(self.multis):
+                phase=(self.lc.time-self.detns[mult]['tcen']-0.5*self.detns[mult]['period'])%self.detns[mult]['period']-0.5*self.detns[mult]['period']
+                all_in_trans+=abs(phase)<0.55*self.detns[mult]['tdur_monofit']
+        self.lc.flatten(in_trans_mask=~all_in_trans)
+        self.lc.bin(timeseries=['flux_flat'])
+
         for ni,isle in enumerate(islands):
             axes['timeseries_'+str(ni)]=fig.add_subplot(gs[1,plot_ix[ni]:plot_ix[ni+1]])
             #rast=True if np.sum(self.lc.self.lc.mask>12000) else False
@@ -865,7 +1060,7 @@ class target():
                                   linewidth=1.5,alpha=0.25,c=sns.color_palette()[n_m+2])
 
                 axes['spec'].plot(self.multi_power_spectra[mult][:,0],
-                                  (2*len(self.multis)-2-2*n_m)+self.multi_power_spectra[mult][:,1],c=sns.color_palette()[n_m+2],alpha=0.6,linewidth=0.8,label='Detection '+mult)
+                                  (2*len(self.multis)-2-2*n_m)+self.multi_power_spectra[mult][:,1],c=sns.color_palette()[n_m+2],alpha=0.6,linewidth=0.8)
 
                 phase=(self.lc.time-self.detns[mult]['tcen']-0.5*self.detns[mult]['period'])%self.detns[mult]['period']-0.5*self.detns[mult]['period']
                 axes['zoom_'+mult]=fig.add_subplot(gs[2,int(n_m*nplots/len(self.multis)):int((n_m+1)*nplots/len(self.multis))])
@@ -874,10 +1069,26 @@ class target():
                 else:
                     axes['zoom_'+mult].set_yticklabels([])
                 for ni,isle in enumerate(islands):
-                    plotmodix=(self.detns[mult]['model_lightcurve_time_tls']>isle[0])*(self.detns[mult]['model_lightcurve_time_tls']<isle[1])*(self.detns[mult]['model_lightcurve_model_tls']<1.0)
-                    axes['timeseries_'+str(ni)].plot(self.detns[mult]['model_lightcurve_time_tls'][plotmodix],
-                                                     (self.detns[mult]['model_lightcurve_model_tls'][plotmodix]-np.nanmedian(self.detns[mult]['model_lightcurve_model_tls']))/self.lc.flx_unit,
-                                                     '.', alpha=0.8, markersize=1,c=sns.color_palette()[2+n_m],label=mult+'/det='+str(n_m), rasterized=rast)
+                    
+                    if 'model_lightcurve_time_tls' not in self.detns[mult]:
+                        phase = (self.lc.time-self.detns[mult]['tcen']-0.5*self.detns[mult]['period'])%self.detns[mult]['period']-0.5*self.detns[mult]['period']
+                        plotmodix=(self.lc.time>isle[0])*(self.lc.time<isle[1])*abs(phase)<0.65*self.detns[mult]['tdur']
+                        mod = np.where(abs(phase)<0.5*self.detns[mult]['tdur'],1000*(self.detns[mult]['depth']-1),0.0)
+                        axes['timeseries_'+str(ni)].plot(self.lc.time[plotmodix],mod[plotmodix],
+                                                         '-', alpha=0.4, linewidth=1,c=sns.color_palette()[2+n_m],label=mult+'/det='+str(n_m), rasterized=rast)
+                    else:
+                        plotmodix=(self.detns[mult]['model_lightcurve_time_tls']>isle[0])*(self.detns[mult]['model_lightcurve_time_tls']<isle[1])*(self.detns[mult]['model_lightcurve_model_tls']<1.0)
+                        axes['timeseries_'+str(ni)].plot(self.detns[mult]['model_lightcurve_time_tls'][plotmodix],
+                                                        (self.detns[mult]['model_lightcurve_model_tls'][plotmodix]-np.nanmedian(self.detns[mult]['model_lightcurve_model_tls']))/self.lc.flx_unit,
+                                                        '-', alpha=0.4, linewidth=1,c=sns.color_palette()[2+n_m],label=mult+'/det='+str(n_m), rasterized=rast)
+                    trans_in_isle=np.arange(np.ceil((isle[0]-self.detns[mult]['tcen'])/self.detns[mult]['period']),
+                                            np.floor((isle[1]-self.detns[mult]['tcen'])/self.detns[mult]['period'])+1,1)
+                    axes['timeseries_'+str(ni)].plot(self.detns[mult]['tcen']+self.detns[mult]['period']*trans_in_isle,
+                                                     np.tile(-1.1*self.detns[mult]['depth_monofit'] - 4*np.nanstd(self.lc.bin_flux),len(trans_in_isle)),
+                                                     "^",markersize=8,alpha=0.6,c=sns.color_palette()[2+n_m],rasterized=rast)
+                    if ni>0:
+                        axes['timeseries_'+str(ni)].set_yticklabels([])
+                    axes['timeseries_'+str(ni)].set_ylim(2*np.nanpercentile(self.lc.bin_flux,[0.05,99.95]))
                 #print("subplot ",3, len(multis), len(multis)*2+1+n_m)
                 bin_phase=tools.bin_lc_segment(np.column_stack((np.sort(phase[(abs(phase)<1.2)*self.lc.mask]),
                                                                 self.lc.flux[(abs(phase)<1.2)*self.lc.mask][np.argsort(phase[(abs(phase)<1.2)*self.lc.mask])],
@@ -901,7 +1112,7 @@ class target():
 
         #Even if we don't have a detection, there will still be a final power spectrum in multi_power_spectra
         last_index=list(self.multi_power_spectra.keys())[-1]
-        axes['spec'].plot(self.multi_power_spectra[last_index][:,0],self.multi_power_spectra[last_index][:,1],label='no detection')
+        #axes['spec'].plot(self.multi_power_spectra[last_index][:,0],self.multi_power_spectra[last_index][:,1],label='no detection')
         axes['spec'].legend()
         axes['spec'].set_xlabel('Period [d]')
         axes['spec'].set_ylabel('Power')
@@ -923,8 +1134,8 @@ class target():
         
         fig.savefig(plot_loc, dpi=400)
 
-    def QuickMonoFit(self, planet, useL2=False, fit_poly=True,tdur_prior='loguniform',
-                     polyorder=2, ndurs=3.3, fluxindex='flux_flat',mask=None, **kwargs):
+    def QuickMonoFit(self, planet, useL2=False, fit_poly=True, tdur_prior='loguniform', sample_model=True, 
+                     polyorder=3, ndurs=3.3, fluxindex='flux', mask=None, **kwargs):
         """Performs simple planet fit to monotransit dip given the detection data.
 
         Args:
@@ -932,6 +1143,7 @@ class target():
             useL2 (bool, optional): Use diluted second light. Defaults to False.
             fit_poly (bool, optional): Fit a transit dip AND a polynomial trend around transit. Defaults to True.
             tdur_prior (str, optional): Prior function to use on tdur - 'lognormal','loguniform','normal' or 'uniform'. Defaults to 'loguniform'.
+            sample_model (bool, optional): Whether to run a quick HMC sampling. Defaults to False.
             polyorder (int, optional): Degree of polynomial fit. Defaults to 2.
             ndurs (float, optional): Number of transit durations to fit each side. Defaults to 3.3
             fluxindex (str, optional): Which array in self.lc to use for the fitting. Defaults to 'flux_flat'.
@@ -981,17 +1193,18 @@ class target():
             int_flux=np.nanmedian(y[(abs(x)<0.35*dur)])
             init_poly=None
         else:
-            init_poly=np.polyfit(x[abs(x)>0.7*dur],y[abs(x)>0.7*dur],polyorder)
+            init_poly=np.polyfit(x[abs(x)>0.55*dur],y[abs(x)>0.55*dur],polyorder-1)
             oot_flux=np.nanmedian((y-np.polyval(init_poly,x))[abs(x)>0.65*dur])
             int_flux=np.nanmedian((y-np.polyval(init_poly,x))[abs(x)<0.35*dur])
         dep=abs(oot_flux-int_flux)
         print(dep,dur,init_poly)
+        print(x[abs(x)>0.55*dur],y[abs(x)>0.55*dur])
         
         with pm.Model() as model:
             # Parameters for the stellar properties
             if fit_poly:
-                trend = pm.Normal("trend", mu=0, sd=10.0 ** -np.arange(polyorder+1)[::-1], shape=polyorder+1,testval=init_poly)
-                flux_trend = pm.Deterministic("flux_trend", tt.dot(np.vander(x, polyorder+1), trend))
+                trend = pm.Normal("trend", mu=0, sd=np.exp(np.arange(1-polyorder,1,1.0)), shape=polyorder, testval=init_poly)
+                flux_trend = pm.Deterministic("flux_trend", tt.dot(np.vander(x, polyorder), trend))
                 #trend = pm.Uniform("trend", upper=np.tile(1,polyorder+1), shape=polyorder+1,
                 #                  lower=np.tile(-1,polyorder+1), testval=init_poly)
                 #trend = pm.Normal("trend", mu=np.zeros(polyorder+1), sd=5*(10.0 ** -np.arange(polyorder+1)[::-1]), 
@@ -1004,7 +1217,7 @@ class target():
 
             u_star = tools.getLDs(self.Teff['val'])[0]
             #xo.distributions.QuadLimbDark("u_star")
-            rhostar=self.Ms['val']/self.Rs['val']**3
+            rhostar=self.Mstar['val']/self.Rstar['val']**3
 
             #init_per = abs(18226*rhostar*((2*np.sqrt((1+dep**0.5)**2-0.41**2))/dur)**-3) if ('period' not in self.detns[planet] or not np.isfinite(self.detns[planet]['period'])) else self.detns[planet]['period']
             #print(rhostar,init_per,(2*np.sqrt((1+dep**0.5)**2-0.41**2)))
@@ -1040,16 +1253,16 @@ class target():
             
             #pm.Potential("ror_prior", -logror) #Prior towards larger logror
 
-            r_pl = pm.Deterministic("r_pl", ror*self.Rs['val']*109.1)
+            r_pl = pm.Deterministic("r_pl", ror*self.Rstar['val']*109.1)
 
             #period = pm.Deterministic("period", tt.exp(log_per))
 
             # Orbit model
-            orbit = xo.orbits.KeplerianOrbit(r_star=self.Rs['val'], m_star=self.Ms['val'],
+            orbit = xo.orbits.KeplerianOrbit(r_star=self.Rstar['val'], m_star=self.Mstar['val'],
                                              period=circ_per, t0=tcen, b=b)
             
             #vx, vy, _ = orbit.get_relative_velocity(tcen)
-            #vrel=pm.Deterministic("vrel",tt.sqrt(vx**2 + vy**2)/self.Rs['val'])
+            #vrel=pm.Deterministic("vrel",tt.sqrt(vx**2 + vy**2)/self.Rstar['val'])
             
             #tdur=pm.Deterministic("tdur",(2*tt.sqrt(1-b**2))/vrel)
             #correcting for grazing transits by multiplying b by 1-rp/rs
@@ -1092,30 +1305,49 @@ class target():
             
             map_soln, func = pmx.optimize(start=map_soln,verbose=False,return_info=True)
         
-        #print(func)
-        interpt=np.linspace(map_soln['tcen']-winsize,map_soln['tcen']+winsize,600)
-        if 'third_light' not in map_soln:
-            map_soln['third_light']=np.array(0.0)
-        
-        transit_zoom = (xo.LimbDarkLightCurve(u_star).get_light_curve(
-                            orbit=xo.orbits.KeplerianOrbit(r_star=self.Rs['val'],m_star=self.Ms['val'],
-                                                        period=map_soln['circ_per'],t0=map_soln['tcen'], b=map_soln['b']),
-                                                        r=map_soln['r_pl']/109.1, t=interpt, texp=cad
-                                                        )*(1+map_soln['third_light'])
-                    ).eval().ravel()
-
         #Reconstructing best-fit model into a dict:
         best_fit={'log_lik_mono':-1*func['fun'],'model_success':str(func['success'])}
-        for col in map_soln:
-            if 'interval__' not in col:
-                if map_soln[col].size==1:
-                    best_fit[col]=float(map_soln[col])
-                else:
-                    best_fit[col]=map_soln[col].astype(float)
-                
+        
+        if sample_model:
+            with model:
+                trace = pmx.sample(tune=1200, draws=500, chains=3, cores=3, regularization_steps=20,
+                                   start=map_soln, target_accept=0.9)
+            
+            for col in trace.varnames:
+                if 'interval__' not in col:
+                    if trace[col].size<2:
+                        best_fit[col]=np.nanmedian(trace[col])
+                        best_fit[col+"_sd"]=np.nanstd(trace[col])
+                        best_fit[col+"_samps"]=trace[col]
+                    else:
+                        best_fit[col]=np.nanmedian(trace[col],axis=0)
+                        best_fit[col+"_sd"]=np.nanstd(trace[col],axis=0)
+                        best_fit[col+"_samps"]=trace[col]
+        else:
+            for col in map_soln:
+                if 'interval__' not in col:
+                    if map_soln[col].size==1:
+                        best_fit[col]=float(map_soln[col])
+                    else:
+                        best_fit[col]=map_soln[col].astype(float)
+
+
+        #print(func)
+        interpt=np.linspace(best_fit['tcen']-winsize,best_fit['tcen']+winsize,600)
+        if 'third_light' not in best_fit:
+            best_fit['third_light']=np.array(0.0)
+        
+        transit_zoom = (xo.LimbDarkLightCurve(u_star).get_light_curve(
+                            orbit=xo.orbits.KeplerianOrbit(r_star=self.Rstar['val'],m_star=self.Mstar['val'],
+                                                        period=best_fit['circ_per'],t0=best_fit['tcen'], b=best_fit['b']),
+                                                        r=best_fit['r_pl']/109.1, t=interpt, texp=cad
+                                                        )*(1+best_fit['third_light'])
+                    ).eval().ravel()
+
+        
         #print({bf:type(best_fit[bf]) for bf in best_fit})
         #print(best_fit["vrel"],best_fit["b"],map_soln["tdur"],best_fit["tcen"])
-        if np.isnan(map_soln["tdur"]):
+        if np.isnan(best_fit["tdur"]):
             best_fit['tdur']=dur
         #Adding depth:
         best_fit['x']=x+self.detns[planet]['tcen']

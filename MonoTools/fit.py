@@ -3,11 +3,6 @@ import exoplanet as xo
 import numpy as np
 import matplotlib.pyplot as plt
 import pandas as pd
-
-from bokeh.plotting import figure, output_file, save, curdoc, show
-from bokeh.models import Band, Whisker, ColumnDataSource, Range1d
-from bokeh.models.arrow_heads import TeeHead
-from bokeh.layouts import gridplot, row, column, layout
 from iteround import saferound
 
 from astropy.io import fits
@@ -135,6 +130,7 @@ class monoModel():
                        'interpolate_v_prior':True, # Whether to use interpolation to produce transit velocity prior
                        'ecc_prior':'auto',      # ecc_prior - string - 'uniform', 'kipping' or 'vaneylen'. If 'auto' we decide based on multiplicity
                        'per_index':-8/3,        # per_index - float - period prior index e.g. P^{index}. -8/3 in to Kipping 2018
+                       'mutual_incl_sigma':None,# mutual_incl_sigma - float - Mutual inclination standard deviation. Normally not used but for coplanar resonant systems can help constrain b.
                        'derive_K':True,         # If we have RVs, do we derive K for each alias or fit for a single K param
                        'pred_all':False,        # Do we predict all time array, or only a cut-down version?
                        'use_multinest':False,   # use_multinest - bool - currently not supported
@@ -231,13 +227,13 @@ class monoModel():
             self.init_trans_to_plot()
 
             #And let's clip gp and lightcurves and pseudo-variables from the trace:
-            medvars=[var for var in self.trace.varnames if 'gp_' not in var and '_gp' not in var and 'light_curve' not in var and '__' not in var]
-            for key in medvars:
+            remvars=[var for var in self.trace.varnames if (('gp_' in var or '_gp' in var or 'light_curve' in var) and np.product(self.trace[var].shape)>6*len(self.trace['Rs'])) or '__' in var]
+            for key in remvars:
                 #Permanently deleting these values from the trace.
                 self.trace.remove_values(key)
             #medvars=[var for var in self.trace.varnames if 'gp_' not in var and '_gp' not in var and 'light_curve' not in var]
         n_bytes = 2**31
-        max_bytes = 2**31 - 1
+        max_bytes = 2**31-1
 
         bytes_out = pickle.dumps(self.__dict__)
         #bytes_out = pickle.dumps(self)
@@ -381,7 +377,7 @@ class monoModel():
         self.planets[name]=pl_dic
         self.multis+=[name]
 
-    def add_mono(self, pl_dic, name):
+    def add_mono(self, pl_dic, name, gap_prob_thresh=1e-10,prob_index=-5/3, gap_width_thresh=0.5):
         """Adds a transiting planet with a single transit to planet properties dict
 
         Args:
@@ -392,6 +388,9 @@ class monoModel():
                 period_err: transit period error in same units as time array (i.e. days)
                 K: RV semi-amplitude in m/s
             name (str): Planet name (i.e. '01', 'b', or 'Malcolm')
+            gap_prob_thresh (float,optional): Threshold in prior probability, below which we remove a "gap" from the period space.
+            gap_width_thresh (float,optional): Threshold in observation width (in units of transit duration), below which we merge gaps and ignore the observations
+                                               i.e. if there is a 2-hour observation which splits the probability space up into gaps, then we can ignore it for a 4-hour transit if gap_width_thresh>0.5
         """
         #Adds planet with single eclipses
 
@@ -401,10 +400,16 @@ class monoModel():
 
         #Calculating whether there are period gaps:
         assert name not in self.planets
-        p_gaps,rms_series=self.compute_period_gaps(pl_dic['tcen'],tdur=pl_dic['tdur'],depth=pl_dic['depth'])
+        p_gaps,rms_series=self.compute_period_gaps(pl_dic['tcen'],tdur=pl_dic['tdur'],depth=pl_dic['depth'], gap_width_thresh=gap_width_thresh)
         pl_dic['per_gaps']={'gap_starts':p_gaps[:,0],'gap_ends':p_gaps[:,1],
-                           'gap_widths':p_gaps[:,1]-p_gaps[:,0],'gap_probs':-5/3*(p_gaps[:,1]**(-5/3)-p_gaps[:,0]**(-5/3))}
+                           'gap_widths':p_gaps[:,1]-p_gaps[:,0],'gap_probs':prob_index*(p_gaps[:,1]**(prob_index)-p_gaps[:,0]**(prob_index))}
         pl_dic['per_gaps']['gap_probs']/=np.sum(pl_dic['per_gaps']['gap_probs'])
+        
+        # Removing gaps which have negligible prior probability:
+        prob_thresh_ix = pl_dic['per_gaps']['gap_probs']>gap_prob_thresh
+        for col in pl_dic['per_gaps']:
+            pl_dic['per_gaps'][col]=pl_dic['per_gaps'][col][prob_thresh_ix]
+
         pl_dic['P_min']=p_gaps[0,0]
         pl_dic['rms_series']=rms_series
         if 'log_ror' not in pl_dic:
@@ -484,7 +489,7 @@ class monoModel():
             '''
         return np.column_stack((np.hstack(bins),np.hstack(rms_series_sh)))
 
-    def compute_period_gaps(self,tcen,tdur,depth,max_per=8000,SNR_thresh=4):
+    def compute_period_gaps(self,tcen,tdur,depth,max_per=8000,SNR_thresh=4, gap_width_thresh=0.5):
         """Compute regions of period space which are not covered by photometry (i.e. find the gaps)
                 e.g. Given the time array, the t0 of transit, and the fact that another transit is not observed,
                 we want to calculate a distribution of impossible periods to remove from the Period PDF post-MCMC
@@ -496,6 +501,7 @@ class monoModel():
             depth (float): transit depth (in ratio, i.e. NOT ppt/ppm)
             max_per (int, optional): Maximum period bound. Defaults to 8000.
             SNR_thresh (int, optional): [description]. Defaults to 4.
+            gap_width_thresh (float, optional): Width of photometric timeseries (in transit durations) below which we ignore)
 
         Returns:
             gap_start_ends (array): Period gap start and ends, with each gap start/end forming a tuple entry to the array
@@ -1214,7 +1220,7 @@ class monoModel():
             ######################################
             #     Initialising dictionaries
             ######################################
-            pers={};t0s={};logrors={};rors={};rpls={};logmassests={};bs={};dist_in_transits={};a_Rs={};tdurs={};vels={};logvels={};
+            pers={};t0s={};logrors={};rors={};rpls={};logmassests={};bs={};dist_in_transits={};a_Rs={};tdurs={};vels={};logvels={};incls={}
             self.n_margs={}
             if not self.assume_circ:
                 eccs={};omegas={}
@@ -1377,6 +1383,7 @@ class monoModel():
 
                 #Circular a_Rs
                 a_Rs[pl]=pm.Deterministic("a_Rs_"+pl,((6.67e-11*(rho_S*1409.78)*(86400*pers[pl])**2)/(3*np.pi))**(1/3))
+                incls[pl] = pm.Deterministic("incl_"+pl,tt.arccos(bs[pl]/a_Rs[pl])*180/np.pi) #incl in degrees.
                 if hasattr(self,'rvs'):
                     # Using density directly to connect radius (well-constrained) to mass (likely poorly constrained).
                     # Testval uses mass assuming std of RVs is from planet mass
@@ -1610,6 +1617,11 @@ class monoModel():
                     self.gp['all'] = celerite2.theano.GaussianProcess(kernel, self.lc.time.astype(floattype),
                                                                diag = self.lc.flux_err.astype(floattype)**2 + \
                                                                tt.dot(self.lc.cadence_index,pm.math.exp(logs2)), quiet=True)
+                if self.mutual_incl_sigma is not None and len(self.planets)>3:
+                    #Including mutual inclination prior (for high-order multi systems only)
+                    av_incl = pm.Deterministic("av_incl",tt.mean([incls[pl] for pl in self.planets]))
+                    sd_incl = pm.Deterministic("sd_incl",tt.std([incls[pl] for pl in self.planets]))
+                    mut_incl_prior = pm.Potential("mut_incl_prior", tt.exp(-0.5* ((sd_incl - self.mutual_incl_sigma)/self.mutual_incl_sigma)**2))
             else:
                 phot_mean=pm.Normal("phot_mean",mu=np.median(self.model_flux),  sd=2*np.std(self.model_flux))
             ################################################
@@ -1880,8 +1892,8 @@ class monoModel():
                         rhos[pl]=pm.Deterministic("rho_"+pl,Mps[pl]/rpls[pl]**3)
 
                     else:
-                        tt.printing.Print("pers")(pers[pl])
-                        tt.printing.Print("logKs")(logKs[pl])
+                        tt.printing.Print("pers"+pl)(pers[pl])
+                        tt.printing.Print("logKs"+pl)(logKs[pl])
                         #if pl in self.duos+self.monos:
                         model_rvs[pl] = pm.Deterministic('model_rv_'+pl, rvorbits[pl].get_radial_velocity(self.rvs['time'],
                                                                                                       K=tt.exp(logKs[pl])))
@@ -2817,6 +2829,10 @@ class monoModel():
         heights_sort = np.hstack((0,np.cumsum(heights).astype(int)))+6*len(other_pls)
 
         if interactive:
+            from bokeh.plotting import figure, output_file, save, curdoc, show
+            from bokeh.models import Band, Whisker, ColumnDataSource, Range1d, arrow_heads
+            from bokeh.layouts import gridplot, row, column, layout
+
             if plot_loc is None:
                 savename=self.savenames[0]+'_model_plot.html'
             else:
@@ -2890,6 +2906,10 @@ class monoModel():
 
 
         elif interactive:
+            from bokeh.plotting import figure, output_file, save, curdoc, show
+            from bokeh.models import Band, Whisker, ColumnDataSource, Range1d, arrow_heads
+            from bokeh.layouts import gridplot, row, column, layout
+
             #For Bokeh plots, we can just use the size in pixels
             f_alls=figure(width=800-200*len(all_pls_in_rvs), plot_height=350, title=None)
             pl=(self.duos+self.monos)[nmargtoplot]
@@ -2914,8 +2934,8 @@ class monoModel():
                    upper=self.rvs['rv'][scope_ix] - self.rvs_to_plot['x']["offsets"]["med"][nc] + self.rvs['rv_err'][scope_ix]))
                 f_alls.add_layout(Whisker(source=errors, base='base', upper='upper',lower='lower',
                                   line_color='#dddddd', line_alpha=0.5,
-                                  upper_head=TeeHead(line_color='#dddddd',line_alpha=0.5),
-                                  lower_head=TeeHead(line_color='#dddddd',line_alpha=0.5)))
+                                  upper_head=arrow_heads.TeeHead(line_color='#dddddd',line_alpha=0.5),
+                                  lower_head=arrow_heads.TeeHead(line_color='#dddddd',line_alpha=0.5)))
 
             modelband = ColumnDataSource(data=dict(base=self.rvs['t']['time'],
                                                 lower=self.rvs_to_plot['t']['gp_pred'] - self.rvs_to_plot['t']['gp_sd'],
@@ -2986,8 +3006,8 @@ class monoModel():
                                                 upper=self.rvs['rv']-other_plsx-self.rvs_to_plot['x']['trend+offset']['med'] + self.rvs['rv_err']))
                         f_phase[pl][n].add_layout(Whisker(source=errors, base='base', upper='upper',lower='lower',
                                                      line_color='#dddddd', line_alpha=0.5,
-                                                     upper_head=TeeHead(line_color='#dddddd',line_alpha=0.5),
-                                                     lower_head=TeeHead(line_color='#dddddd',line_alpha=0.5)))
+                                                     upper_head=arrow_heads.TeeHead(line_color='#dddddd',line_alpha=0.5),
+                                                     lower_head=arrow_heads.TeeHead(line_color='#dddddd',line_alpha=0.5)))
                         f_phase[pl][n].circle(self.rvs_to_plot['x'][pl][i]['phase'],
                                               self.rvs['rv']-other_plsx-self.rvs_to_plot['x']['trend+offset']['med'],
                                           color='C0', alpha=0.6, size=4)
@@ -3082,8 +3102,8 @@ class monoModel():
                                             upper=self.rvs['rv']-other_plsx-self.rvs_to_plot['x']['trend+offset']['med'] + self.rvs['rv_err']))
                     f_phase[pl].add_layout(Whisker(source=errors, base='base', upper='upper',lower='lower',
                                                  line_color='#dddddd', line_alpha=0.5,
-                                                 upper_head=TeeHead(line_color='#dddddd',line_alpha=0.5),
-                                                 lower_head=TeeHead(line_color='#dddddd',line_alpha=0.5)))
+                                                 upper_head=arrow_heads.TeeHead(line_color='#dddddd',line_alpha=0.5),
+                                                 lower_head=arrow_heads.TeeHead(line_color='#dddddd',line_alpha=0.5)))
                     f_phase[pl].circle(self.rvs_to_plot['x'][pl]['phase'],
                                           self.rvs['rv']-other_plsx-self.rvs_to_plot['x']['trend+offset']['med'],
                                       color='C0', alpha=0.6, size=4)
@@ -3250,6 +3270,10 @@ class monoModel():
         subplots_ix = tools.partition_list(np.array([self.lc_regions[j]['total_dur'] for j in self.lc_regions]), plot_rows)
 
         if interactive:
+            from bokeh.plotting import figure, output_file, save, curdoc, show
+            from bokeh.models import Band, Whisker, ColumnDataSource, Range1d, arrow_heads
+            from bokeh.layouts import gridplot, row, column, layout
+
             if plot_loc is None:
                 savename=self.savenames[0]+'_model_plot.html'
             else:
@@ -3404,8 +3428,8 @@ class monoModel():
 
                         f_alls[key].add_layout(Whisker(source=errors, base='base', upper='upper',lower='lower',
                                                      line_color='#dddddd', line_alpha=0.5,
-                                                     upper_head=TeeHead(line_color='#dddddd',line_alpha=0.5),
-                                                     lower_head=TeeHead(line_color='#dddddd',line_alpha=0.5)))
+                                                     upper_head=arrow_heads.TeeHead(line_color='#dddddd',line_alpha=0.5),
+                                                     lower_head=arrow_heads.TeeHead(line_color='#dddddd',line_alpha=0.5)))
                     else:
                         #PLOTTING DETRENDED FLUX, NO BINNING
                         f_alls[key].circle(self.lc.time[self.lc_regions[key]['ix']],
@@ -3432,8 +3456,8 @@ class monoModel():
                                                          upper=bin_detrend[:,1]-bin_detrend[:,2]))
                             f_alls[n].add_layout(Whisker(source=errors, base='base', upper='upper',lower='lower',
                                                          line_color='#dddddd', line_alpha=0.5,
-                                                         upper_head=TeeHead(line_color='#dddddd',line_alpha=0.5),
-                                                         lower_head=TeeHead(line_color='#dddddd',line_alpha=0.5)))
+                                                         upper_head=arrow_heads.TeeHead(line_color='#dddddd',line_alpha=0.5),
+                                                         lower_head=arrow_heads.TeeHead(line_color='#dddddd',line_alpha=0.5)))
                         else:
                             f_alls[n].circle(self.lc.time[self.lc_regions[key]['ix']],
                                              self.lc.flux[self.lc_regions[key]['ix']]-self.gp_to_plot['gp_pred'][self.lc_regions[key]['ix']],
@@ -3481,8 +3505,8 @@ class monoModel():
                                          self.lc.bin_flux_err[self.lc_regions[key]['bin_ix']]))
                             f_alls[key].add_layout(Whisker(source=errors, base='base', upper='upper',lower='lower',
                                                          line_color='#dddddd', line_alpha=0.5,
-                                                         upper_head=TeeHead(line_color='#dddddd',line_alpha=0.5),
-                                                         lower_head=TeeHead(line_color='#dddddd',line_alpha=0.5)))
+                                                         upper_head=arrow_heads.TeeHead(line_color='#dddddd',line_alpha=0.5),
+                                                         lower_head=arrow_heads.TeeHead(line_color='#dddddd',line_alpha=0.5)))
 
                         #Here we plot the detrended flux:
                         f_alls[key].circle(self.lc.time[self.lc_regions[key]['ix']],
@@ -3500,8 +3524,8 @@ class monoModel():
                                          self.lc.bin_flux_err[self.lc_regions[key]['bin_ix']]))
                             f_alls[n].add_layout(Whisker(source=errors, base='base', upper='upper',lower='lower',
                                                          line_color='#dddddd', line_alpha=0.5,
-                                                         upper_head=TeeHead(line_color='#dddddd',line_alpha=0.5),
-                                                         lower_head=TeeHead(line_color='#dddddd',line_alpha=0.5)))
+                                                         upper_head=arrow_heads.TeeHead(line_color='#dddddd',line_alpha=0.5),
+                                                         lower_head=arrow_heads.TeeHead(line_color='#dddddd',line_alpha=0.5)))
                     else:
                         #PLOTTING DETRENDED FLUX, NO BINNING
                         f_alls[n].circle(self.lc.time[self.lc_regions[key]['ix']],
@@ -3541,8 +3565,8 @@ class monoModel():
                                                      upper=bin_resids[:,1] + bin_resids[:,2]))
                         f_alls[key].add_layout(Whisker(source=errors, base='base', upper='upper',lower='lower',
                                                      line_color='#dddddd', line_alpha=0.5,
-                                                     upper_head=TeeHead(line_color='#dddddd',line_alpha=0.5),
-                                                     lower_head=TeeHead(line_color='#dddddd',line_alpha=0.5)))
+                                                     upper_head=arrow_heads.TeeHead(line_color='#dddddd',line_alpha=0.5),
+                                                     lower_head=arrow_heads.TeeHead(line_color='#dddddd',line_alpha=0.5)))
                     else:
                         errors = ColumnDataSource(data=dict(base=self.lc.time[self.lc_regions[key]['ix']],
                                           lower=self.lc.flux[self.lc_regions[key]['ix']] - self.gp_to_plot['gp_pred'][self.lc_regions[key]['ix']] - \
@@ -3551,8 +3575,8 @@ class monoModel():
                                            self.trans_to_plot['all']['med'][self.lc_regions[key]['ix']] + self.lc.flux_err[self.lc_regions[key]['ix']]))
                         f_alls[key].add_layout(Whisker(source=errors, base='base', upper='upper',lower='lower',
                                                      line_color='#dddddd', line_alpha=0.5,
-                                                     upper_head=TeeHead(line_color='#dddddd',line_alpha=0.5),
-                                                     lower_head=TeeHead(line_color='#dddddd',line_alpha=0.5)))
+                                                     upper_head=arrow_heads.TeeHead(line_color='#dddddd',line_alpha=0.5),
+                                                     lower_head=arrow_heads.TeeHead(line_color='#dddddd',line_alpha=0.5)))
                 else:
                     #Plotting detrended:
                     phot_mean=np.nanmedian(self.trace['phot_mean']) if hasattr(self,'trace') else self.init_soln['phot_mean']
@@ -3562,8 +3586,8 @@ class monoModel():
                                                 upper=bin_resids[:,1] + bin_resids[:,2]))
                         f_alls[key].add_layout(Whisker(source=errors, base='base', upper='upper',lower='lower',
                                                      line_color='#dddddd', line_alpha=0.5,
-                                                     upper_head=TeeHead(line_color='#dddddd',line_alpha=0.5),
-                                                     lower_head=TeeHead(line_color='#dddddd',line_alpha=0.5)))
+                                                     upper_head=arrow_heads.TeeHead(line_color='#dddddd',line_alpha=0.5),
+                                                     lower_head=arrow_heads.TeeHead(line_color='#dddddd',line_alpha=0.5)))
                     else:
                         f_alls[key].circle(self.lc.time[self.lc_regions[key]['ix']],
                                          self.lc.flux_flat[self.lc_regions[key]['ix']] - phot_mean - \
@@ -3804,8 +3828,8 @@ class monoModel():
                                         upper=bin_phase[:,1] + bin_phase[:,2]))
                 f_trans[pl].add_layout(Whisker(source=errors, base='base', upper='upper',lower='lower',
                                              line_color='#dddddd', line_alpha=0.5,
-                                             upper_head=TeeHead(line_color='#dddddd',line_alpha=0.5),
-                                             lower_head=TeeHead(line_color='#dddddd',line_alpha=0.5)))
+                                             upper_head=arrow_heads.TeeHead(line_color='#dddddd',line_alpha=0.5),
+                                             lower_head=arrow_heads.TeeHead(line_color='#dddddd',line_alpha=0.5)))
                 f_trans[pl].circle(bin_phase[:,0], bin_phase[:,1], alpha=0.65, size=3.5)
                 if '-2sig' in self.trans_to_plot[pl]:
                     trband = ColumnDataSource(data=dict(base=np.sort(phaselc[:,0]),
@@ -3904,7 +3928,7 @@ class monoModel():
             if return_fig:
                 return fig
 
-    def PlotPeriods(self, plot_loc=None, ylog=True, nbins=25, pmax=None, pmin=None, ymin=None,ymax=None,xlog=False):
+    def PlotPeriods(self, plot_loc=None, ylog=True, xlog=True, nbins=25, pmax=None, pmin=None, ymin=None,ymax=None):
         """Plot Marginalised probabilities of the possible periods
 
         Args:
@@ -4011,14 +4035,11 @@ class monoModel():
                     if ylog:
                         plt.yscale('log')
                         plt.ylabel("$\log_{10}{\\rm prob}$")
-                        plt.ylim(ymin,1.0)
-                        print(ymin,1.0)
+                        plt.ylim(ymin, 1.0)
                     else:
                         plt.ylim(0,1.0)
                         plt.ylabel("prob")
-                    print(ymin,ymax,ylog)
-
-                    #plt.xlim(60,80)
+                        #plt.xlim(60,80)
                     plt.xlabel("Period [d]")
                     plt.legend(title="Average prob")
 
@@ -4314,10 +4335,11 @@ class monoModel():
             print("time range",Time(time_start+self.lc.jd_base,format='jd').isot,
                   "->",Time(time_end+self.lc.jd_base,format='jd').isot)
 
-        all_trans=pd.DataFrame()
+        all_trans_fin=pd.DataFrame()
         loopplanets = self.duos+self.multis if include_multis else self.duos
-        all_trans=pd.DataFrame()
+        
         for pl in loopplanets:
+            all_trans=pd.DataFrame()
             if pl in self.duos:
                 sum_all_probs=np.logaddexp.reduce(np.nanmedian(self.trace['logprob_marg_'+pl],axis=0))
                 trans_p0=np.floor(np.nanmedian(time_start - self.trace['t0_2_'+pl])/np.nanmedian(self.trace['per_'+pl],axis=0))
@@ -4387,16 +4409,17 @@ class monoModel():
                 unq_trans.loc[i,'aliases_ps']=','.join(list(np.round(oths['alias_p'].values,4).astype(str)))
                 unq_trans.loc[i,'num_aliases']=len(oths)
                 unq_trans.loc[i,'total_prob']=np.sum(oths['prob'].values)
-        unq_trans = unq_trans.loc[(unq_trans['transit_end_+2sig']>time_start)*(unq_trans['transit_start_-2sig']<time_end)].sort_values('transit_mid_med')
-        unq_trans = unq_trans.set_index(np.arange(len(unq_trans)))
+            all_trans_fin=all_trans_fin.append(unq_trans)
+        all_trans_fin = all_trans_fin.loc[(all_trans_fin['transit_end_+2sig']>time_start)*(all_trans_fin['transit_start_-2sig']<time_end)].sort_values('transit_mid_med')
+        all_trans_fin = all_trans_fin.set_index(np.arange(len(all_trans_fin)))
 
         if save:
-            unq_trans.to_csv(self.savenames[0]+"_list_all_trans.csv")
-        return unq_trans
+            all_trans_fin.to_csv(self.savenames[0]+"_list_all_trans.csv")
+        return all_trans_fin
 
     def MakeCheopsOR(self, DR2ID=None, pl=None, min_eff=45, oot_min_orbits=1.0, timing_sigma=3, t_start=None, t_end=None, Texp=None,
                      max_orbits=14, min_pretrans_orbits=0.5, min_intrans_orbits=None, orbits_flex=1.4, observe_sigma=2, 
-                     observe_threshold=None, max_ORs=None,prio_1_threshold=0.25, prio_3_threshold=0.0, 
+                     observe_threshold=None, max_ORs=None,prio_1_threshold=0.25, prio_3_threshold=0.0, targetnamestring=None,
                      min_orbits=4.0, outfilesuffix='_output_ORs.csv'):
         """Given a list of observable transits (which are outputted from `trace_to_cheops_transits`), 
             create a csv which can be run by pycheops make_xml_files to produce input observing requests (both to FC and observing tool).
@@ -4419,8 +4442,9 @@ class monoModel():
             max_ORs (int, optional): Maximum number of ORs to create. Default is 14
             prio_1_threshold (float, optional): Rough percentage of ORs we want to make P1 on Cheops. Defaults to 0.25.
             prio_3_threshold (float, optional): Rough percentage of ORs we want to make P3 on Cheops. Defaults to 0.0 - i.e. no P3 observations
-            min_orbits (float, optional): Minimum number of total orbits to observe. Defaults to 4.0.
-            outfilesuffix (str, optional): suffix place to save CSV. Defaults to '_output_ORs.csv'.
+            targetnamestring (str, optional): String for target name. Defaults to None (and using the ID)
+            min_orbits (float, optional): Minimum number of total orbits to observe. Defaults to 4.0
+            outfilesuffix (str, optional): suffix place to save CSV. Defaults to '_output_ORs.csv'
 
         Returns:
             df = model.PredictFutureTransits: panda DF to save as csv in location where one can run make_xml_files. e.g. `make_xml_files output.csv --auto-expose -f`
@@ -4518,18 +4542,18 @@ class monoModel():
                     if observe_threshold is None or ipl in self.multis:
                         observe_threshold=0
                     if max_ORs<len(allprobs) and np.sum(sorted_probs>observe_threshold)>max_ORs and ipl not in self.multis:
-                        observe_threshold=np.sort(allprobs)[::-1][max_ORs]-1e9
+                        observe_threshold=np.sort(allprobs)[::-1][max_ORs]
             
             prio_1_prob_threshold = np.ceil(np.sum(allprobs>observe_threshold)*prio_1_threshold)
             prio_3_prob_threshold = np.ceil(np.sum(allprobs>observe_threshold)*(1-prio_3_threshold))
             #print(allprobs,observe_threshold,allpers[allprobs>observe_threshold])
             for nper in allpers:
-                print(allpers,nper,allprobs[nper],observe_threshold)
+                #print(allpers,nper,allprobs[nper],observe_threshold)
                 if allprobs[nper]>observe_threshold:
                     ser={}
                     iper=np.nanmedian(self.trace['per_'+ipl][:,nper]) if len(self.trace['per_'+ipl].shape)>1 else np.nanmedian(self.trace['per_'+ipl])
                     ser['ObsReqName']=self.id_dic[self.mission]+str(self.ID)+'_'+ipl+'_period'+str(np.round(iper,2)).replace('.',';')+'_prob'+str(allprobs[nper])[:4]
-                    ser['Target']=self.id_dic[self.mission]+str(self.ID)
+                    ser['Target']=self.id_dic[self.mission]+str(self.ID) if targetnamestring is None else targetnamestring
                     ser['_RAJ2000']=old_radec.ra.to_string(unit=u.hourangle, sep=':')
                     ser['_DEJ2000']=old_radec.dec.to_string(sep=':')
                     ser['SpTy']=SpTy
@@ -4560,7 +4584,7 @@ class monoModel():
                     else:
                         #We're not covering the whole transit, so we only need to cover half the timing/duration bounds
                         ideal_T_visit = min_intrans_orbits + np.clip(0.5*timing_bounds+0.5*dur_bounds,oot_min_orbits,100) + orbits_flex
-
+                    #print(ideal_T_visit,min_orbits,max_orbits)
                     ser['T_visit']=np.clip(ideal_T_visit,min_orbits,max_orbits)# in orbits
 
                     #np.clip(*86400,(min_orbits*99.77*60), 2.5e5)
@@ -4609,14 +4633,14 @@ class monoModel():
                     #ser["Effic1"]=50
                     ser['N_Ranges']=0
                     out_tab=out_tab.append(pd.Series(ser,name=nper))
-            out_tab['MinEffDur']=out_tab['MinEffDur'].values.astype(int)
-            #print(98.77*60*out_tab['T_visit'].values)
-            out_tab['T_visit']=(98.77*60*out_tab['T_visit'].values).astype(int) #in seconds
-            #print(out_tab['T_visit'].values)
-            out_tab['N_Ranges']=out_tab['N_Ranges'].values.astype(int)
-            out_tab['N_Visits']=out_tab['N_Visits'].values.astype(int)
-            out_tab['Priority']=out_tab['Priority'].values.astype(int)
-
+        out_tab['MinEffDur']=out_tab['MinEffDur'].values.astype(int)
+        #print(98.77*60*out_tab['T_visit'].values)
+        out_tab['T_visit']=(98.77*60*out_tab['T_visit'].values).astype(int) #in seconds
+        #print(out_tab['T_visit'].values)
+        out_tab['N_Ranges']=out_tab['N_Ranges'].values.astype(int)
+        out_tab['N_Visits']=out_tab['N_Visits'].values.astype(int)
+        out_tab['Priority']=out_tab['Priority'].values.astype(int)
+        out_tab = out_tab.set_index(np.arange(len(out_tab)))
         out_tab.to_csv(self.savenames[0]+outfilesuffix)
 
         command="make_xml_files "+self.savenames[0]+outfilesuffix

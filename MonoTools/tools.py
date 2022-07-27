@@ -28,8 +28,6 @@ from astroquery.mast import Catalogs
 from astropy.units import Quantity
 from astroquery.gaia import Gaia
 
-from eleanor import eleanor
-
 import pickle
 import os.path
 from datetime import datetime
@@ -185,16 +183,6 @@ def openFits(f,fname,mission,cut_all_anom_lim=4.0,use_ppt=True,force_raw_flux=Fa
         lc['flux_err']=np.tile(np.nanmedian(abs(np.diff(lc['raw_flux']))),len(lc['time']))
         if force_raw_flux:
             end_of_orbit=True
-    elif type(f)==eleanor.TargetData:
-        #Eleanor TESS object
-        lc={'time':f.time,'flux':f.corr_flux,'flux_err':f.flux_err,'raw_flux':f.raw_flux,
-            'cent_1':f.centroid_xs,'cent_2':f.centroid_ys,'quality':f.quality,
-            'flux_sm_ap':f.all_corr_flux[1],
-            'flux_xl_ap':f.all_corr_flux[16]}
-        #Fixing negative quality values as 2^15
-        lc['quality'][lc['quality']<0.0]=np.power(2,15)
-        lc['quality']=lc['quality'].astype(int)
-        end_of_orbit=True
     elif type(f)==np.ndarray and np.shape(f)[1]==3:
         #Already opened lightcurve file
         lc={'time':f[:,0],'flux':f[:,1],'flux_err':f[:,2]}
@@ -207,10 +195,24 @@ def openFits(f,fname,mission,cut_all_anom_lim=4.0,use_ppt=True,force_raw_flux=Fa
                                    stacked_arr[-1]-np.nanmedian(stacked_arr[11:-1],axis=0)))/errs
             anom_high=np.hstack((np.tile(0,15),np.sum(stacked_arr,axis=0),np.tile(0,15)))
             mask=anom_high<4
-
     elif type(f)==dict:
         lc=f
     else:
+        try:
+            from eleanor import eleanor
+            if type(f)==eleanor.TargetData:
+                #Eleanor TESS object
+                lc={'time':f.time,'flux':f.corr_flux,'flux_err':f.flux_err,'raw_flux':f.raw_flux,
+                    'cent_1':f.centroid_xs,'cent_2':f.centroid_ys,'quality':f.quality,
+                    'flux_sm_ap':f.all_corr_flux[1],
+                    'flux_xl_ap':f.all_corr_flux[16]}
+        except:
+            print("May be eleanor file but we cannot import it.")
+        #Fixing negative quality values as 2^15
+        lc['quality'][lc['quality']<0.0]=np.power(2,15)
+        lc['quality']=lc['quality'].astype(int)
+        end_of_orbit=True
+
         print('cannot identify fits type to identify with')
         #logging.debug('Found fits file but cannot identify fits type to identify with')
         return None
@@ -390,15 +392,15 @@ def CutHighRegions(flux, mask, std_thresh=3.2,n_pts=25,n_loops=2):
         meds=np.nanmedian(stacked_fluxes*stacked_masks,axis=0)
         stds=np.nanstd(stacked_fluxes*stacked_masks,axis=0)
         #Adding to the mask any points identified in 80% of these passes:
-        print(np.vstack([np.hstack((np.tile(False,1+n2),stacked_fluxes[n2]*stacked_masks[n2]>(meds+std_threshs[n]*stds),
-                         np.tile(False,n_pts-n2+1))) for n2 in np.arange(n_pts)]))
-        print(np.nansum(np.vstack([np.hstack((np.tile(False,1+n2),stacked_fluxes[n2]*stacked_masks[n2]>(meds+std_threshs[n]*stds),
-                         np.tile(False,n_pts-n2+1))) for n2 in np.arange(n_pts)]),axis=0))
-        print(np.nansum(np.vstack([np.hstack((np.tile(False,1+n2),stacked_fluxes[n2]*stacked_masks[n2]>(meds+std_threshs[n]*stds),
-                         np.tile(False,n_pts-n2+1))) for n2 in np.arange(n_pts)]),axis=0).shape)
-        print(np.nansum(np.vstack([np.hstack((np.tile(False,1+n2),stacked_fluxes[n2]*stacked_masks[n2]>(meds+std_threshs[n]*stds),
-                         np.tile(False,n_pts-n2+1))) for n2 in np.arange(n_pts)]),axis=0)[1:-1].shape)
-        print(mask.shape)
+        #print(np.vstack([np.hstack((np.tile(False,1+n2),stacked_fluxes[n2]*stacked_masks[n2]>(meds+std_threshs[n]*stds),
+        #                 np.tile(False,n_pts-n2+1))) for n2 in np.arange(n_pts)]))
+        #print(np.nansum(np.vstack([np.hstack((np.tile(False,1+n2),stacked_fluxes[n2]*stacked_masks[n2]>(meds+std_threshs[n]*stds),
+        #                 np.tile(False,n_pts-n2+1))) for n2 in np.arange(n_pts)]),axis=0))
+        #print(np.nansum(np.vstack([np.hstack((np.tile(False,1+n2),stacked_fluxes[n2]*stacked_masks[n2]>(meds+std_threshs[n]*stds),
+        #                 np.tile(False,n_pts-n2+1))) for n2 in np.arange(n_pts)]),axis=0).shape)
+        #print(np.nansum(np.vstack([np.hstack((np.tile(False,1+n2),stacked_fluxes[n2]*stacked_masks[n2]>(meds+std_threshs[n]*stds),
+        #                 np.tile(False,n_pts-n2+1))) for n2 in np.arange(n_pts)]),axis=0)[1:-1].shape)
+        #print(mask.shape)
 
         mask*=np.nansum(np.vstack([np.hstack((np.tile(False,1+n2),
                                               stacked_fluxes[n2]*stacked_masks[n2]>(meds+std_threshs[n]*stds),
@@ -755,7 +757,7 @@ def CutAnomDiff(flux,thresh=4.2):
                      abs(flux[-1]-np.median(flux[-3:-1]))<(np.median(abs(diffarr[0,:]))*thresh*5)))
     return anoms
 
-def observed(tic,radec=None,maxsect=50):
+def observed(tic,radec=None,maxsect=69):
     # Using either "webtess" page or Chris Burke's tesspoint to check if TESS object was observed:
     # Returns dictionary of each sector and whether it was observed or not
     if radec is None:
@@ -932,6 +934,7 @@ def TESS_lc(tic, sectors='all',use_ppt=True, coords=None, use_qlp=None, use_elea
                         qlplcs[key]=openFits(hdus,fitsloc,mission='tess',use_ppt=use_ppt,**kwargs)
                         lchdrs+=[hdus[0].header]
         elif use_eleanor is None or use_eleanor is True:
+            from eleanor import eleanor
             print("Loading Eleanor Lightcurve")
             try:
                 #Getting eleanor lightcurve:
@@ -1014,14 +1017,14 @@ def openLightCurve(ID,mission,coor=None,use_ppt=True,other_data=True,
             res=v.query_region(coor, radius=5*units.arcsec, catalog=['V/133/kic'])
             if 'V/133/kic' in res.keys():
                 if len(res['V/133/kic'])>1:
-                    print(res['V/133/kic'][['KIC','kepmag']], "MULTIPLE KICS FOUND")
+                    #print(res['V/133/kic'][['KIC','kepmag']], "MULTIPLE KICS FOUND")
                     IDs['kepler'] = res['V/133/kic']['KIC'][np.argmin(res['V/133/kic']['kepmag'])]
                 elif len(res['V/133/kic'])==1:
-                    print(res['V/133/kic'][['KIC','kepmag']], "ONE KIC FOUND")
+                    #print(res['V/133/kic'][['KIC','kepmag']], "ONE KIC FOUND")
                     IDs['kepler'] = res['V/133/kic']['KIC'][0]
                 elif len(res['V/133/kic'])==0:
                     IDs['kepler'] = None
-                    print(res['V/133/kic'], "NO KICS FOUND")
+                    #print(res['V/133/kic'], "NO KICS FOUND")
             else:
                 IDs['kepler'] = None
 
@@ -1939,6 +1942,8 @@ def MakeBokehTable(df, dftype='toi', cols2use=None, cols2avoid=None, errtype=' e
               'Cheops_Obs_dates','Year2_obs_times', 'Year3_obs_times','Year4_obs_times', 'TESS_data', 'TESS_dvr']
     elif dftype=='tic' and cols2use is None:
         cols2use='ID, ra, dec, Tmag, plx, eclong, eclat, Bmag, Vmag, Jmag,  Kmag, GAIAmag, Teff, logg, MH, rad, mass, rho, d'.split(', ')
+    else:
+        cols2use=df.columns
     if dftype=='toi' and cols2avoid is None:
         cols2avoid=['SG1A','SG1B','SG2','SG3','SG4','SG5','ACWG ESM','ACWG TSM',
                                'Time Series Observations','Spectroscopy Observations','Imaging Observations',
