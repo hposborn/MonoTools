@@ -25,7 +25,7 @@ The first use of `MonoTools` in a published paper is out now in [Osborn+ (2022)]
 ### Full installation and usage advice on ["ReadTheDocs"](https://monotools.readthedocs.io/en/main)
 
 #### Installing
-To install, I recommend using a virtual environment, as some of the packages required are not at their most recent versions. This avoids dependency management and adoids any clashes with your system packages. To create a new virtual environment (which we call MONO, but you can call it whatever you like):
+To install, I recommend using a virtual environment, as some of the packages required are not at their most recent versions. This avoids dependency management and avoids any clashes with your system packages. To create a new virtual environment (which we call MONO, but you can call it whatever you like):
 
 ```
 python -m venv MONO
