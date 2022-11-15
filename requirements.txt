@@ -7,9 +7,9 @@ astroquery
 batman-package
 lightkurve==1.11.0
 arviz==0.11
-pymc3==3.8
-pymcs_ext
-exoplanet
+pymc3==3.11.4
+pymc3_ext
+exoplanet==0.5.2
 celerite2
 requests
 urllib3
@@ -25,3 +25,4 @@ sphinx==4.3.1
 nbsphinx
 myst_parser
 sphinx_rtd_theme
+Theano-PyMC==1.1.2
