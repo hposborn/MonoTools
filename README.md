@@ -25,7 +25,16 @@ The first use of `MonoTools` in a published paper is out now in [Osborn+ (2022)]
 ### Full installation and usage advice on ["ReadTheDocs"](https://monotools.readthedocs.io/en/main)
 
 #### Installing
-To install, I recommend using a virtual environment, as some of the packages required are not at their most recent versions.
+To install, I recommend using a virtual environment, as some of the packages required are not at their most recent versions. This avoids dependency management and avoids any clashes with your system packages. To create a new virtual environment (which we call MONO, but you can call it whatever you like):
+
+```
+python -m venv MONO
+source MONO/bin/activate
+```
+To 'exit' the virtual environment, simply type ```deactivate``` in your terminal. If you are running MonoTools in a jupyter notebook using a virtual environment you have to make sure you install a kernel which matches your virtual environment and then select it for the notebook. This is done by executing the following in a terminal:
+
+```ipython kernel install --name "MONO" --user```
+
 MonoTools should be pip installable, therefore run `pip install MonoTools`.
 
 Alternatively, to run the most up-to-date development version, you can run `git clone http://github.com/hposborn/MonoTools`, `cd` into the MonoTools folder, then run `pip install .` (plus make sure the folder where MonoTools is installed is included in your `$PYTHONPATH`, e.g. by adding `export PYTHONPATH=/path/to/dir:$PYTHONPATH` to your `.bashrc` file).
@@ -43,6 +52,5 @@ https://github.com/hposborn/MonoTools/blob/master/MonoTools/examples/Search_Exam
 
 For examples on how to run the fitting code (including with RVs), see [using_fit.ipynb](https://github.com/hposborn/MonoTools/blob/main/docs/using_fit.ipynb).
 
-<--
 #### Extra steps to install:
 If stellar parameters are not given and not accessible from the input catalogues provided, Dan Huber's ["Isoclassify"](https://github.com/danxhuber/isoclassify) is required to estimate density given info scraped in the `stellar` module from Gaia, input catalogues, wide-field surveys, spectra, etc. A modified version is included. However, the "mesa.h5" file must be downloaded using `wget https://www.dropbox.com/s/vrr8hc7qav1fzyb/mesa.h5?dl=0` in `stellar/isochrones`. mwdust modules may also require specific installation.-->
