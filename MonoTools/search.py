@@ -1012,7 +1012,8 @@ class target():
         """
         sns.set_palette("viridis",10)
         fig = plt.figure(figsize=(11.69,8.27))
-        gs = gridspec.GridSpec(3, 24,hspace=0.25)
+        nplots=len(self.multis)*24
+        gs = gridspec.GridSpec(3, nplots,hspace=0.25)
 
         rast=True if np.sum(self.lc.mask>12000) else False
 
@@ -1024,7 +1025,7 @@ class target():
         #Cutting the lightcurve into regions and fitting these onto the first plot row:
         isl_lens=[islands[j][1]-islands[j][0] for j in range(len(islands))]
         from iteround import saferound
-        nplots=24 if len(self.multis)<5 else 30
+        
         plot_ix = np.hstack((0,np.cumsum(saferound(nplots*np.array(isl_lens)/np.sum(isl_lens), places=0)))).astype(int)
         axes={}
         max_all_depths = np.max([self.detns[mult]['depth_monofit']*self.lc.flx_unit for mult in self.multis])
@@ -1045,8 +1046,9 @@ class target():
             axes['timeseries_'+str(ni)].plot(self.lc.time[timeix],self.lc.flux_flat[timeix],'.k',alpha=0.28,markersize=0.75, rasterized=rast)
             axes['timeseries_'+str(ni)].plot(self.lc.bin_time[bin_timeix],self.lc.bin_flux_flat[bin_timeix],'.',alpha=0.8, rasterized=rast)
             axes['timeseries_'+str(ni)].set_xlim(isle[0]-0.3,isle[1]+0.3)
-            axes['timeseries_'+str(ni)].set_ylim(1.5*np.nanpercentile(self.lc.flux_flat,[0.1,99.9]))
-            axes['timeseries_'+str(ni)].set_ylim(-3.5*np.nanstd(self.lc.flux_flat)-max_all_depths, 3.5*np.nanstd(self.lc.flux_flat))
+            print(1.5*np.nanpercentile(self.lc.flux_flat[self.lc.mask],[0.25,99.75]))
+            axes['timeseries_'+str(ni)].set_ylim(1.5*np.nanpercentile(self.lc.flux_flat[self.lc.mask],[0.1,99.9]))
+            #axes['timeseries_'+str(ni)].set_ylim(-3.5*np.nanstd(self.lc.flux_flat[self.lc.mask])-max_all_depths, 3.5*np.nanstd(self.lc.flux_flat[self.lc.mask]))
 
         axes['spec']=fig.add_subplot(gs[0,:])
         max_all_time = np.max([np.max(self.multi_power_spectra[mult][:,1]) for mult in self.multi_power_spectra])
@@ -1063,7 +1065,7 @@ class target():
                                   (2*len(self.multis)-2-2*n_m)+self.multi_power_spectra[mult][:,1],c=sns.color_palette()[n_m+2],alpha=0.6,linewidth=0.8)
 
                 phase=(self.lc.time-self.detns[mult]['tcen']-0.5*self.detns[mult]['period'])%self.detns[mult]['period']-0.5*self.detns[mult]['period']
-                axes['zoom_'+mult]=fig.add_subplot(gs[2,int(n_m*nplots/len(self.multis)):int((n_m+1)*nplots/len(self.multis))])
+                axes['zoom_'+mult]=fig.add_subplot(gs[2,int(n_m*24):int((n_m+1)*24)])
                 if n_m==0:
                     axes['zoom_'+mult].set_ylabel("Flux ["+self.lc.flx_system+"]")
                 else:
@@ -1084,11 +1086,11 @@ class target():
                     trans_in_isle=np.arange(np.ceil((isle[0]-self.detns[mult]['tcen'])/self.detns[mult]['period']),
                                             np.floor((isle[1]-self.detns[mult]['tcen'])/self.detns[mult]['period'])+1,1)
                     axes['timeseries_'+str(ni)].plot(self.detns[mult]['tcen']+self.detns[mult]['period']*trans_in_isle,
-                                                     np.tile(-1.1*self.detns[mult]['depth_monofit'] - 4*np.nanstd(self.lc.bin_flux),len(trans_in_isle)),
+                                                     np.tile(-1.1*self.detns[mult]['depth_monofit'] - 4*np.nanstd(self.lc.bin_flux_flat),len(trans_in_isle)),
                                                      "^",markersize=8,alpha=0.6,c=sns.color_palette()[2+n_m],rasterized=rast)
                     if ni>0:
                         axes['timeseries_'+str(ni)].set_yticklabels([])
-                    axes['timeseries_'+str(ni)].set_ylim(2*np.nanpercentile(self.lc.bin_flux,[0.05,99.95]))
+                    axes['timeseries_'+str(ni)].set_ylim(2*np.nanpercentile(self.lc.bin_flux_flat,[0.05,99.95]))
                 #print("subplot ",3, len(multis), len(multis)*2+1+n_m)
                 bin_phase=tools.bin_lc_segment(np.column_stack((np.sort(phase[(abs(phase)<1.2)*self.lc.mask]),
                                                                 self.lc.flux[(abs(phase)<1.2)*self.lc.mask][np.argsort(phase[(abs(phase)<1.2)*self.lc.mask])],
@@ -1096,7 +1098,7 @@ class target():
                 #time_shift=0.4*np.nanstd(bin_phase[:,1])*(self.lc.time[abs(phase)<1.2][np.argsort(phase[abs(phase)<1.2])] - \
                 #                                                                                self.detns[mult]['tcen'])/self.detns[mult]['period']
                 #plt.scatter(phase[abs(phase)<1.2],time_shift+self.lc.flux[abs(phase)<1.2],
-                axes['zoom_'+mult].scatter(phase[abs(phase)<1.2],self.lc.flux[abs(phase)<1.2],
+                axes['zoom_'+mult].scatter(phase[self.lc.mask&(abs(phase)<1.2)],self.lc.flux[self.lc.mask&(abs(phase)<1.2)],
                             s=0.5,c='k',alpha=0.25)
                 axes['zoom_'+mult].errorbar(bin_phase[:,0],bin_phase[:,1],yerr=bin_phase[:,2],fmt='.',markersize=4,
                             c=sns.color_palette()[n_m+2],zorder=10)
@@ -1107,8 +1109,8 @@ class target():
                 #         np.nanmax(bin_phase[:,1])+2*np.nanstd(bin_phase[:,1]))
                 axes['zoom_'+mult].set_title(mult+'/det='+str(n_m))
                 axes['zoom_'+mult].set_xlim(-0.5*plot_extent,0.5*plot_extent)
-                axes['zoom_'+mult].set_ylim(-3*np.nanstd(self.lc.flux_flat)-self.detns[mult]['depth_monofit']/self.lc.flx_unit,
-                                            3*np.nanstd(self.lc.flux_flat))
+                axes['zoom_'+mult].set_ylim(-3*np.nanstd(self.lc.flux_flat[self.lc.mask])-self.detns[mult]['depth_monofit']/self.lc.flx_unit,
+                                            3*np.nanstd(self.lc.flux_flat[self.lc.mask]))
 
         #Even if we don't have a detection, there will still be a final power spectrum in multi_power_spectra
         last_index=list(self.multi_power_spectra.keys())[-1]
@@ -1116,7 +1118,7 @@ class target():
         axes['spec'].legend()
         axes['spec'].set_xlabel('Period [d]')
         axes['spec'].set_ylabel('Power')
-        axes['spec'].set_ylim(-1,1.1*max_all_time)
+        axes['spec'].set_ylim(-1,1.1*max_all_time+(2*len(self.multis)-2))
         axes['spec'].set_xlim(0,np.max(self.multi_power_spectra[last_index][:,0]))
 
         if plot_loc is None:

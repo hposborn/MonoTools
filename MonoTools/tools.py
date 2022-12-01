@@ -760,11 +760,9 @@ def CutAnomDiff(flux,thresh=4.2):
 def observed(tic,radec=None,maxsect=69):
     # Using either "webtess" page or Chris Burke's tesspoint to check if TESS object was observed:
     # Returns dictionary of each sector and whether it was observed or not
-    if radec is None:
+    if radec is None and type(tic)!=SkyCoord:
         if type(tic) in [np.int64,np.float64,int,float]:
             page = requests.get('https://heasarc.gsfc.nasa.gov/cgi-bin/tess/webtess/wtv.py?Entry='+str(int(tic)))
-        elif type(tic)==SkyCoord:
-            page = requests.get('https://heasarc.gsfc.nasa.gov/cgi-bin/tess/webtess/wtv.py?Entry='+str(tic.ra.deg)+"%2C+"+str(tic.dec.deg))
         else:
             print(type(tic),"- unrecognised")
         #print('https://heasarc.gsfc.nasa.gov/cgi-bin/tess/webtess/wtv.py?Entry='+str(tic))
@@ -847,7 +845,7 @@ def update_lc_locs(epoch,most_recent_sect):
     epoch.to_csv(MonoData_tablepath+"/tess_lc_locations.csv")
     return epoch
 
-def TESS_lc(tic, sectors='all',use_ppt=True, coords=None, use_qlp=None, use_eleanor=None, data_loc=None, search_fast=False, **kwargs):
+def TESS_lc(tic, sectors='all',use_ppt=True, coords=None, use_qlp=None, use_eleanor=None, data_loc=None, search_fast=False, update_logs=True, **kwargs):
     #Downloading TESS lc
     if data_loc is None:
         data_loc=MonoData_savepath+"/TIC"+str(int(tic)).zfill(11)
@@ -1232,6 +1230,17 @@ def lcBin(lc,binsize=1/48,split_gap_size=0.8,use_flat=True,use_masked=True, use_
         ret_lc['bin_cadence']=binlc['bin_cadence'].ravel()
         return ret_lc
 
+def bin_lc_given_new_x(lc_segment, new_x):
+    binsize=np.nanmedian(np.diff(new_x))
+    #Making bin divisions half way between each defined x point here
+    new_bins=np.hstack((new_x[0]-0.5*binsize,0.5*(new_x[:-1]+new_x[1:]),new_x[-1]+0.5*binsize))
+    digi=np.digitize(lc_segment[:,0],new_bins)
+    print(len(np.unique(digi)),np.max(digi),np.min(digi))
+    fluxes=np.vstack([[weighted_avg_and_std(lc_segment[digi==d,1],lc_segment[digi==d,2])] for d in range(1,len(new_bins))])
+    print(len(new_x),fluxes.shape, len(new_bins), new_x[:2],new_bins[:3],new_x[-3:],new_bins[-4:],)
+    binlc=np.column_stack((new_x,fluxes))
+    return binlc
+
 def bin_lc_segment(lc_segment, binsize,return_digi=False):
     if len(lc_segment)>0:
         digi=np.digitize(lc_segment[:,0],np.arange(np.min(lc_segment[:,0])-0.5*binsize,np.max(lc_segment[:,0])+0.5*binsize,binsize))
@@ -1544,24 +1553,29 @@ def getLDs(Ts,logg=4.43812,FeH=0.0,mission="TESS"):
     if mission[0]=="T" or mission[0]=="t":
         import pandas as pd
         from astropy.io import ascii
-        TessLDs=ascii.read(os.path.join(MonoData_tablepath,'tessLDs.txt')).to_pandas()
-        TessLDs=TessLDs.rename(columns={'col1':'logg','col2':'Teff','col3':'FeH','col4':'L/HP','col5':'a',
-                                           'col6':'b','col7':'mu','col8':'chi2','col9':'Mod','col10':'scope'})
-        a_interp=ct2d(np.column_stack((TessLDs.Teff.values.astype(float),TessLDs.logg.values.astype(float))),TessLDs.a.values.astype(float))
-        b_interp=ct2d(np.column_stack((TessLDs.Teff.values.astype(float),TessLDs.logg.values.astype(float))),TessLDs.b.values.astype(float))
+        #
+        from astroquery.vizier import Vizier
+        #v = Vizier(catalog=[])
+        Vizier.ROW_LIMIT = -1
+        TessLDs=Vizier.get_catalogs('J/A+A/600/A30/tableab')[0].to_pandas()
+        TessLDs=TessLDs.loc[(TessLDs['Type']=='r')&((TessLDs['Mod']=="PD")^(TessLDs['Teff']>3000)),'Teff']
+        #TessLDs=ascii.read(os.path.join(MonoData_tablepath,'tessLDs.txt')).to_pandas()
+        a_interp=ct2d(np.column_stack((TessLDs['Teff'].values.astype(float),TessLDs['logg'].values.astype(float))),TessLDs['aLSM'].values.astype(float))
+        b_interp=ct2d(np.column_stack((TessLDs['Teff'].values.astype(float),TessLDs['logg'].values.astype(float))),TessLDs['bLSM'].values.astype(float))
 
         if type(Ts) in [float,int,np.float64,np.int64]:
             Ts=np.array([Ts])
         if type(logg) is float:
-            outarr=np.column_stack((np.array([a_interp(T,logg) for T in np.clip(Ts,2300,12000)]),
-                                    np.array([b_interp(T,logg) for T in np.clip(Ts,2300,12000)])))
+            outarr=np.column_stack((np.array([a_interp(T,logg) for T in np.clip(Ts,2000,12000)]),
+                                    np.array([b_interp(T,logg) for T in np.clip(Ts,2000,12000)])))
         else:
-            outarr=np.column_stack((a_interp(np.clip(Ts,2300,12000),logg),b_interp(np.clip(Ts,2300,12000),logg)))
+            outarr=np.column_stack((a_interp(np.clip(Ts,2000,12000),logg),b_interp(np.clip(Ts,2000,12000),logg)))
         return outarr
     elif mission[0]=="k" or mission[0]=="K":
         #Get Kepler Limb darkening coefficients.
         #print(label)
         types={'1':[3],'2':[4, 5],'3':[6, 7, 8],'4':[9, 10, 11, 12]}
+        how='2'#quadratic
         if how in types:
             checkint = types[how]
             #print(checkint)
@@ -1910,7 +1924,7 @@ def err_string_parse(s):
         if len(s)>len(estr) and s[:len(estr)]==estr:
             return True, s[len(estr):]
     
-    for estr in [' err','_err1','_err2',' Error']:
+    for estr in [' err','_err1','err1','err2','_err2',' Error']:
         if len(s)>len(estr) and s[-1*len(estr):]==estr:
             return True, s[:-1*len(estr)]
     return False, None
@@ -1934,29 +1948,33 @@ def MakeBokehTable(df, dftype='toi', cols2use=None, cols2avoid=None, errtype=' e
 
     if type(df)==pd.Series:
         df=pd.DataFrame(df).T
-
-    if dftype=='toi' and cols2use is None:
-        cols2use=['TIC ID','TESS Disposition', 'TFOPWG Disposition', 'TESS Mag','RA', 'Dec',
-              'Epoch (BJD)','Period (days)','Duration (hours)', 'Depth (mmag)','Planet Radius (R_Earth)','SNR_per_transit',
-              'Stellar Eff Temp (K)', 'Stellar Radius (R_Sun)','Comments','Cheops_Observability','Cheops_Max_Efficiency',
-              'Cheops_Obs_dates','Year2_obs_times', 'Year3_obs_times','Year4_obs_times', 'TESS_data', 'TESS_dvr']
-    elif dftype=='tic' and cols2use is None:
-        cols2use='ID, ra, dec, Tmag, plx, eclong, eclat, Bmag, Vmag, Jmag,  Kmag, GAIAmag, Teff, logg, MH, rad, mass, rho, d'.split(', ')
-    else:
-        cols2use=df.columns
-    if dftype=='toi' and cols2avoid is None:
-        cols2avoid=['SG1A','SG1B','SG2','SG3','SG4','SG5','ACWG ESM','ACWG TSM',
-                               'Time Series Observations','Spectroscopy Observations','Imaging Observations',
-                               'TESS Disposition','Master','Planet Insolation (Earth Flux)','Depth (mmag)',
-                               'Planet Equil Temp (K)','Previous CTOI','PM RA (mas/yr)','PM Dec (mas/yr)']
-    elif dftype=='tic' and cols2avoid is None:
-        cols2avoid='pmRA, pmDEC, objType, typeSrc, version, HIP, TYC, UCAC, TWOMASS, SDSS, ALLWISE, GAIA, APASS, KIC, POSflag, PMflag, lumclass, lum, ebv, numcont, contratio, disposition, duplicate_id, priority, EBVflagTeffFlag, gaiabp, gaiarp, gaiaqflag, starchareFlag, VmagFlag, BmagFlag, splists, RA_orig, Dec_orig, raddflag, wdflag, dstArcSec'.split(', ')
+    if cols2use is None:
+        if dftype is None or dftype=='':
+            cols2use=df.columns
+        elif dftype=='toi':
+            cols2use=['TIC ID','TESS Disposition', 'TFOPWG Disposition', 'TESS Mag','RA', 'Dec',
+                'Epoch (BJD)','Period (days)','Duration (hours)', 'Depth (mmag)','Planet Radius (R_Earth)','SNR_per_transit',
+                'Stellar Eff Temp (K)', 'Stellar Radius (R_Sun)','Comments','Cheops_Observability','Cheops_Max_Efficiency',
+                'Cheops_Obs_dates','Year2_obs_times', 'Year3_obs_times','Year4_obs_times', 'TESS_data', 'TESS_dvr']
+        elif dftype=='tic':
+            cols2use='ID, ra, dec, Tmag, plx, eclong, eclat, Bmag, Vmag, Jmag,  Kmag, GAIAmag, Teff, logg, MH, rad, mass, rho, d'.split(', ')
+    if cols2avoid is None:
+        if dftype is None or dftype=='':
+            cols2avoid=[]
+        elif dftype=='toi':
+            cols2avoid=['SG1A','SG1B','SG2','SG3','SG4','SG5','ACWG ESM','ACWG TSM',
+                                'Time Series Observations','Spectroscopy Observations','Imaging Observations',
+                                'TESS Disposition','Master','Planet Insolation (Earth Flux)','Depth (mmag)',
+                                'Planet Equil Temp (K)','Previous CTOI','PM RA (mas/yr)','PM Dec (mas/yr)']
+        elif dftype=='tic':
+            cols2avoid='pmRA, pmDEC, objType, typeSrc, version, HIP, TYC, UCAC, TWOMASS, SDSS, ALLWISE, GAIA, APASS, KIC, POSflag, PMflag, lumclass, lum, ebv, numcont, contratio, disposition, duplicate_id, priority, EBVflagTeffFlag, gaiabp, gaiarp, gaiaqflag, starchareFlag, VmagFlag, BmagFlag, splists, RA_orig, Dec_orig, raddflag, wdflag, dstArcSec'.split(', ')
     #Making Datatable inset:
     err_cols=[]
     nonerr_cols=[]
     #errless_cols=[]
 
     cols2use=[c for c in cols2use if not err_string_parse(c)[0]]
+   
     df=df.rename(columns={col:col[:-1] for col in df.columns if col[-1]==' '}) #Removing trailing spaces
 
     #Creating error arrays
@@ -1965,7 +1983,7 @@ def MakeBokehTable(df, dftype='toi', cols2use=None, cols2avoid=None, errtype=' e
             nonerr_cols+=[col]
             err_cols+=['e_'+col]
             #If we have multiple errors, we'll do a median to make sure we only end up with one:
-            df['e_'+col]=np.nanmedian(np.vstack([df[ecol].values.astype(float) for ecol in ['e_'+col,'epos_'+col,'eneg_'+col,col+' err',col+'_err1',col+'_err2',col+' Error'] if ecol in df.columns]),axis=0)
+            df['e_'+col]=np.nanmedian(np.vstack([abs(df[ecol].values.astype(float)) for ecol in ['e_'+col,'epos_'+col,'eneg_'+col,col+' err',col+'_err1',col+'_err2',col+' Error'] if ecol in df.columns]),axis=0)
 
         elif col in cols2use and col not in cols2avoid and type(df[col].values[0]) in [int,float,np.float64,np.int64,str] and 'e_'+col not in df.columns:
             nonerr_cols+=[col]
@@ -1986,8 +2004,7 @@ def MakeBokehTable(df, dftype='toi', cols2use=None, cols2avoid=None, errtype=' e
         elif 'id' in df.columns:
             name = str(df.iloc[pl]['id'])+' '
         else:
-            name = ''
-        print([df.iloc[pl][val] for val in err_cols])
+            name = str(df.iloc[pl].name)+' '
         newdf[name+'Value']=[0.0 if df.iloc[pl][val] in [None,np.nan,-np.inf,np.inf,''] else df.iloc[pl][val] for val in nonerr_cols]
         newdf[name+'Errs']=[0.0 if df.iloc[pl][val] in [None,np.nan,-np.inf,np.inf,''] else df.iloc[pl][val] for val in err_cols]
         #newdf=newdf.fillna(0.0)

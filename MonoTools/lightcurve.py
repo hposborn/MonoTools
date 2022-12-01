@@ -405,8 +405,8 @@ class lc():
                     if hasattr(self,'in_trans') and np.sum(self.in_trans)>0 and type(transit_mask)!=np.ndarray:
                         transit_mask = ~self.in_trans
                     if type(transit_mask)==np.ndarray:
-                        if self.debug: print("transit mask:",type(initmask),len(initmask),
-                            initmask[0],type(transit_mask),len(transit_mask),transit_mask[0])
+                        #if self.debug: print("transit mask:",type(initmask),len(initmask),
+                        #    initmask[0],type(transit_mask),len(transit_mask),transit_mask[0])
                         initmask=(initmask.astype(bool)&transit_mask).astype(int)
                 else:
                     initmask=(np.isfinite(uselc[:,1])&np.isfinite(uselc[:,2])).astype(int)
@@ -589,7 +589,7 @@ class lc():
                     getattr(self,'bin'+binsuffix+'_'+fkey+'_err')[bintime_bools==j]=binnedlc[:,1]
         self.timeseries=list(np.unique(self.timeseries))
    
-    def plot(self, plot_rows=1, timeseries=['flux'], jump_thresh=10, ylim=None, xlim=None, 
+    def plot(self, plot_rows=1, timeseries=['flux'], jump_thresh=10, ylim=None, xlim=None, bin_only=False,
              yoffset=0, savepng=False, savepdf=False,savefileloc=None,plot_ephem=None, plot_masked=True):
         """Plot the lightcurve using Matplotlib.
 
@@ -639,11 +639,13 @@ class lc():
                 #So much data that we should bin it back down (to 2-hour bins)
                 if not hasattr(self,'bin2_'+itimeseries):
                     self.bin(timeseries=[itimeseries], binsize=1/12,binsuffix='2')
-                ax.plot(self.time[ix],yoffset*it+getattr(self,itimeseries)[ix],'.k',markersize=0.75,alpha=0.25)
+                if not bin_only:
+                    ax.plot(self.time[ix],yoffset*it+getattr(self,itimeseries)[ix],'.k',markersize=0.75,alpha=0.25)
                 ax.plot(getattr(self,'bin2_time'),yoffset*it+getattr(self,"bin2_"+itimeseries),'.',alpha=0.8,markersize=3.0,color='C'+str(it),label=itimeseries)
             else:
                 #Plotting real points as fine scatters and binned points above:
-                ax.plot(self.time[ix],yoffset*it+getattr(self,itimeseries)[ix],'.k',markersize=0.75,alpha=0.25)
+                if not bin_only:
+                    ax.plot(self.time[ix],yoffset*it+getattr(self,itimeseries)[ix],'.k',markersize=0.75,alpha=0.25)
                 ax.plot(self.bin_time,yoffset*it+getattr(self,"bin_"+itimeseries),'.',alpha=0.8,markersize=3.0,color='C'+str(it),label=itimeseries)
             ax.set_ylabel("Relative Flux ["+self.flx_system+"]")
             ax.set_xlabel("Time [BJD-"+str(int(self.jd_base))+"]")
@@ -671,7 +673,8 @@ class multilc(lc):
     mylc=lc(203311200,'k2')
     mylc.
     """
-    def __init__(self,id,mission,radec=None,load=True, do_search=True,flx_system='ppt',jd_base=2457000.,savefileloc=None,extralc=None,**kwargs):
+    def __init__(self,id,mission,radec=None, load=True, do_search=True,flx_system='ppt',
+                 jd_base=2457000.,savefileloc=None,extralc=None,update_tess_file=True,**kwargs):
         """AI is creating summary for __init__
 
         Args:
@@ -684,10 +687,14 @@ class multilc(lc):
             jd_base (float,optional): Base of timing system in julian date. Defaults to 2457000
             savefileloc (str,optional): File location to load and/or save lightcurve. Defaults to a new target-specific folder in `tools.MonoData_savepath`
             extralc (lightcurve.lc, optional): A seperate lightcurve to include in the stack
+            update_tess_file (bool, optional): Whether to check if the stored TESS location file needs updating
         """
         self.savefileloc = os.path.join(tools.MonoData_savepath,tools.id_dic[mission]+str(id).zfill(11),tools.id_dic[mission]+str(id).zfill(11)+'_lc.pkl.gz') if savefileloc is None else savefileloc
         if load and os.path.exists(self.savefileloc):
             self.load_pickle()
+            #Need this for cases where we have an old lightcurve stored:
+            if not hasattr(self,'update_tess_file'):
+                self.update_tess_file=update_tess_file
         else:
             if radec is not None:
                 self.radec=radec
@@ -704,6 +711,7 @@ class multilc(lc):
             self.timeseries=[]
             self.flx_system=flx_system
             self.jd_base=jd_base
+            self.update_tess_file=update_tess_file
             
             self.info={}
             self.all_ids={'tess':{},'k2':{},'kepler':{},'corot':{}}
@@ -719,7 +727,7 @@ class multilc(lc):
             for key in pick:
                 setattr(self,key,pick[key])
 
-    def stack(self, newlcs, priorities=None):
+    def stack(self, newlcs, priorities=None,**kwargs):
         """Stacks lightcurves onto the multilc object
 
         Args:
@@ -730,7 +738,7 @@ class multilc(lc):
         if priorities is None:
             #Here we can list the priorities for Kepler/K2 and TESS:
             priorities=["k1_120_pdc","k1_1800_pdc","k2_120_ev","k2_120_vand","k2_120_pdc","k2_1800_ev","k2_1800_vand","k2_1800_pdc","ts_20_pdc","ts_120_pdc","ts_600_pdc","ts_1800_pdc","ts_600_tica","ts_600_qlp","ts_1800_qlp","ts_1800_tica","ts_600_el","ts_1800_el"]
-
+        #
         # Tidying up before stacking:
         if newlcs is not None and len(newlcs)>0:
             #Initialising the flux system and jd base based on the first new lightcurve we add
@@ -897,7 +905,6 @@ class multilc(lc):
         
         # TESS ID and data:
         if (overwrite or self.all_ids['tess']=={}) and ('all' in search or 'tess' in search):
-           
             tess_id = Catalogs.query_criteria(coordinates=self.radec.transform_to(FK5(equinox='J2000.0')),radius=12*u.arcsec,catalog="TIC",
                                                 objType="STAR",columns=['ID','KIC','Tmag']).to_pandas()
             if tess_id is not None and len(tess_id)>0:
@@ -966,7 +973,7 @@ class multilc(lc):
         #print(all_lcs)
         #print(hasattr(self,'mask'),self.mask,self.mask.shape,np.sum(self.mask))
         #print([hasattr(ilc,'mask') for ilc in all_lcs])
-        self.stack([newlc for newlc in all_lcs if newlc is not None])
+        self.stack([newlc for newlc in all_lcs if newlc is not None],**kwargs)
         #print(hasattr(self,'mask'),self.mask,self.mask.shape,np.sum(self.mask))
         assert hasattr(self,'flux') and hasattr(self,'cadence'), "No lightcurves found!"
         self.make_mask()
@@ -1037,7 +1044,7 @@ class multilc(lc):
         from astropy.time import Time
         most_recent_sect = int(np.ceil((Time(datetime.now().strftime("%Y-%m-%d")).jd-2458325.29278)/27.295))
         epoch=pd.read_csv(tools.MonoData_tablepath+"/tess_lc_locations.csv",index_col=0)
-        if most_recent_sect>np.max(np.array(list(epoch.index))):
+        if most_recent_sect>np.max(np.array(list(epoch.index))) and self.update_tess_file:
             for newsec in np.arange(np.max(np.array(list(epoch.index))),most_recent_sect+1,1):
                 epoch=tools.update_lc_locs(epoch,newsec)
             #print(epoch)
@@ -1227,7 +1234,7 @@ class multilc(lc):
             id = self.all_ids['k2']['id']
         assert id is not None
         if ('all' in search or 'everest' in search) and camp!='E':
-            ilc = self.get_everest_k2_lc(int(id), int(float(camp)),**kwargs)
+            ilc = self.get_everest_k2_lc(int(id), int(float(camp)), **kwargs)
             if ilc is not None:
                 return ilc
         if ('all' in search or 'vand' in search):
@@ -1333,7 +1340,7 @@ class multilc(lc):
             if int(resp[0]['status']) < 400:
                 return self.read_from_file(fits.open(urlfitsname,show_progress=False),urlfitsname,mission='k2',src='vand',sect=camp,**kwargs)
 
-    def get_everest_k2_lc(self,id,camp):
+    def get_everest_k2_lc(self, id, camp, **kwargs):
         """Get single Everest (Luger et al 2016) K2 lightcurve for selected campaign
 
         Args:
@@ -1374,7 +1381,7 @@ class multilc(lc):
                 print(c,"not possible to load")
         if hdr is not None:
             lcev.update(hdr)
-            out=self.read_from_file(lcev,hdr,mission='k2',sect=camp,src='ev')
+            out=self.read_from_file(lcev,hdr,mission='k2',sect=camp,src='ev',**kwargs)
             return out
         else:
             return None
@@ -1792,9 +1799,9 @@ class multilc(lc):
                 #Specifically flattening while ignoring the in-transit points:
                 self.flatten(ephems=plot_ephem)#transit_mask=~trans_ix)
 
-    def plot(self, plot_rows=None, timeseries=['flux'], ylim=None, xlim=None, overwrite=False,norm_all_timeseries=True,
+    def plot(self, plot_rows=None, timeseries=['flux'], ylim=None, xlim=None, overwrite=False,norm_all_timeseries=True,bin_only=False,
              yoffset=0, savepng=True, savepdf=False, plot_ephem=None, plot_row_min=3,Rstar=None,cadences=[],plot_masked=True,
-             plot_legend=True):
+             plot_legend=True, title=None):
         """Plot the lightcurve using Matplotlib.
 
         In the default case, either data that is extremely long (i.e Kepler), or data that has a large gap (i.e. TESS Y1/3) will be split into two rows.
@@ -1817,6 +1824,7 @@ class multilc(lc):
             cadences (list, optional): Whether to include specific cadences when plotting
             plot_masked (bool, optional): Whether to plot while masking anomalous regions. Default is True
             plot_legend (bool, optional): Whether to include legend on plot. Default is True
+            title (str, optional): Include an optional title. Default is None (i.e. no title)
         """
         #By default only not overwriting if the saved plot init data matched the saved lightcurve (i.e. in length)
         overwrite = hasattr(self,'init_plot_info') and len(self.init_plot_info['xlim_mask'])==len(self.time) if overwrite is False else overwrite
@@ -1856,23 +1864,27 @@ class multilc(lc):
             for cad in self.init_plot_info['ordered_cadences']:
                 #subplots[cad]=fig.add_subplot(gs[self.init_plot_info['fine_cuts'][cad]['n_plot_row'],self.init_plot_info['fine_cuts'][cad]['n_plot_col'][0]:self.init_plot_info['fine_cuts'][cad]['n_plot_col'][1]])
                 if plot_masked:
-                    ix=(self.cadence==cad)*self.mask
+                    ix=((self.cadence==cad)*self.mask).astype(bool)
                 else:
-                    ix=(self.cadence==cad)
+                    ix=(self.cadence==cad).astype(bool)
                 bin_ix=(self.bin_cadence==cad)*np.isfinite(getattr(self,"bin_"+itimeseries))
+                #print(cad,subplots,getattr(self,itimeseries),ix,type(ix))
                 if (self.init_plot_info['fine_cuts'][cad]['cadence']*1440)>20 and self.init_plot_info['total_time']<500:
                     #Plotting only real points as "binned points" style:
+                    print(itimeseries,cad,subplots.keys(),ix)
                     subplots[cad].plot(self.time[ix],yoffset*it+(getattr(self,itimeseries)[ix]-norm_sub)*norm_mult,'.',alpha=0.8,markersize=3.0,color='C'+str(it),label=itimeseries)
                 elif (self.init_plot_info['fine_cuts'][cad]['cadence']*1440)>20 and self.init_plot_info['total_time']>500:
                     #So much data that we should bin it back down (to 2-hour bins)
                     self.bin(timeseries=[itimeseries], binsize=1/12,binsuffix='2',use_masked=plot_masked)
                     bin_ix2=(self.bin2_cadence==cad)*np.isfinite(getattr(self,"bin2_"+itimeseries))
-                    subplots[cad].plot(self.time[ix],yoffset*it+(getattr(self,itimeseries)[ix]-norm_sub)*norm_mult,'.k',markersize=0.75,alpha=0.25)
+                    if not bin_only:
+                        subplots[cad].plot(self.time[ix],yoffset*it+(getattr(self,itimeseries)[ix]-norm_sub)*norm_mult,'.k',markersize=0.75,alpha=0.25)
                     subplots[cad].plot(self.bin2_time[bin_ix2],yoffset*it+(getattr(self,"bin2_"+itimeseries)[bin_ix2]-norm_sub)*norm_mult,
                                        '.',alpha=0.8,markersize=3.0,color='C'+str(it),label=itimeseries)
                 else:
                     #Plotting real points as fine scatters and binned points above:
-                    subplots[cad].plot(self.time[ix],yoffset*it+(getattr(self,itimeseries)[ix]-norm_sub)*norm_mult,'.k',markersize=0.75,alpha=0.25)
+                    if not bin_only:
+                        subplots[cad].plot(self.time[ix],yoffset*it+(getattr(self,itimeseries)[ix]-norm_sub)*norm_mult,'.k',markersize=0.75,alpha=0.25)
                     subplots[cad].plot(self.bin_time[bin_ix],yoffset*it+(getattr(self,"bin_"+itimeseries)[bin_ix]-norm_sub)*norm_mult,'.',
                                        alpha=0.8,markersize=3.0,color='C'+str(it),label=itimeseries)
                 if plot_ephem is not None:
@@ -1901,6 +1913,8 @@ class multilc(lc):
                         subplots[cad].set_xlim(xlim)
                     if plot_ephem is not None and len(plot_ephem)>1 and plot_legend:
                         subplots[cad].legend()
+        if title is not None:
+            subplots[self.init_plot_info['ordered_cadences'][0]].set_title(title)
         if plot_legend:
             subplots[cad].legend()
         plt.tight_layout()
@@ -1909,8 +1923,10 @@ class multilc(lc):
         if savepdf:
             plt.savefig(self.savefileloc.replace('_lc.pkl.gz','_lc.pdf'))
 
-    def interactive_plot(self, plot_rows=None, timeseries=['flux'], ylim=None, xlim=None, overwrite=None, cadences=[], norm_all_timeseries=True, include_table='tic', binsize=1/48,
-                        yoffset=0, plot_ephem=None, plot_row_min=3, return_only_subfigures=False, plot_width=1000, plot_height=600, Rstar=None, saveloc=None, show=False, **kwargs):
+    def interactive_plot(self, plot_rows=None, timeseries=['flux'], ylim=None, xlim=None, overwrite=None, cadences=[], 
+                         norm_all_timeseries=True, include_table='tic', binsize=1/48,
+                         yoffset=0, plot_ephem=None, plot_row_min=3, return_only_subfigures=False, 
+                         plot_width=1000, plot_height=600, Rstar=None, saveloc=None, show=False, **kwargs):
         """Plot the lightcurve using Bokeh.
 
         In the default case, either data that is extremely long (i.e Kepler), or data that has a large gap (i.e. TESS Y1/3) will be split into two rows.
@@ -1944,7 +1960,9 @@ class multilc(lc):
             self.init_plot(plot_rows=plot_rows,timeseries=timeseries,xlim=xlim,cadences=cadences,
                             plot_row_min=plot_row_min,plot_ephem=plot_ephem,Rstar=Rstar)
         elif hasattr(self,'init_plot_info'):
-            assert 'fine_cuts' in self.init_plot_info and 'ordered_cadences' in self.init_plot_info and 'ephem' in self.init_plot_info and self.init_plot_info['ephem'].keys()==plot_ephem.keys()
+            assert 'fine_cuts' in self.init_plot_info and 'ordered_cadences' in self.init_plot_info
+        if plot_ephem is not None:
+            assert 'ephems' in self.init_plot_info and self.init_plot_info['ephems'].keys()==plot_ephem.keys()
         
         from bokeh.plotting import figure, output_file, save, show
         from bokeh.models import Range1d
@@ -2058,17 +2076,191 @@ class multilc(lc):
                     rowlens+=[len(rows[i])]
                 if len(rowlens)>2:
                     if type(include_table)==str and include_table=='tic':
-                        tab = tools.MakeBokehTable(self.all_ids['tess']['data'],dftype='tic',width=160,**kwargs)
+                        tab = tools.MakeBokehTable(self.all_ids['tess']['data'],dftype='tic',width=160,height=int(plot_height/self.init_plot_info['plot_rows']),**kwargs)
                     elif type(include_table) in [pd.Series,pd.DataFrame]:
-                        tab = tools.MakeBokehTable(self.all_ids['tess']['data'],dftype='toi',width=160,**kwargs)
+                        tab = tools.MakeBokehTable(include_table,dftype=None,width=160,height=int(plot_height/self.init_plot_info['plot_rows']),**kwargs)
                     rows[np.argmin(rowlens)]=[tab]+rows[np.argmin(rowlens)]
                 else:
                     if type(include_table)==str and include_table=='tic':
-                        tab = tools.MakeBokehTable(self.all_ids['tess']['data'],dftype='tic',width=plot_width, height=80,**kwargs)
+                        tab = tools.MakeBokehTable(self.all_ids['tess']['data'],dftype='tic',width=plot_width, height=int(plot_height/self.init_plot_info['plot_rows']), **kwargs)
                     elif type(include_table) in [pd.Series,pd.DataFrame]:
-                        tab = tools.MakeBokehTable(self.all_ids['tess']['data'],dftype='toi',width=plot_width, height=80,**kwargs)
+                        tab = tools.MakeBokehTable(include_table, width=plot_width, dftype=None, height=int(plot_height/self.init_plot_info['plot_rows']), **kwargs)
                     rows=[[tab]]+rows
             p = layout(rows, sizing_mode='stretch_both')
             save(p)
             if show:
                 show(p)
+    def make_source_table(self):
+        tab="\\begin{table}\n   \\centering\n   \\caption{Photometric survey data description.}\n"
+        tab+="   \\begin{tabular}{c c c c}\n      \\hline\n"
+        tab+="      Spacecraft & Sector & Cadence [s] & Source \\\\\n      \\hline\n"
+        missions={"k1":"{\\it Kepler}","k2":"{\\it K2}","ts":"{\\it TESS}","ch":"{\\it CHEOPS}","co":"{\\it CoRoT}"}
+        rep=""
+        srcs={"pdc":["SPOC PDCSAP \\citep{Stumpe2012}","TESS-SPOC HLSP \\citep{Caldwell2020}"],"ev":"Everest \\citep{Luger2018}","vand":"\\citet{Vanderburg2014}",
+              "tica":"TICA\\citep{Fausnaugh2020}","qlp":["QLP \\citep{Huang2020}","QLP \\citep{Kunimoto2021}"],"el":"Eleanor \\citep{Feinstein2019}"}
+        #priorities=["k1_120_pdc","k1_1800_pdc","k2_120_ev","k2_120_vand","k2_120_pdc","k2_1800_ev","k2_1800_vand","k2_1800_pdc","ts_20_pdc","ts_120_pdc","ts_600_pdc","ts_1800_pdc","ts_600_tica","ts_600_qlp","ts_1800_qlp","ts_1800_tica","ts_600_el","ts_1800_el"]
+
+        for cad in self.cadence_list:
+            dat=cad.split("_")
+            if dat[0]=='ts':
+                sec="S. "+dat[3]
+            elif dat[0]=='k2':
+                sec="C. "+dat[3]
+                rep+="Campaign"
+            elif dat[0]=='k1':
+                sec="Q. "+dat[3]
+                rep+="Quarter"
+            if dat[0]=="ts" and dat[1] not in ["120","20"] and dat[2]=="pdc":
+                src=srcs[dat[2]][1]
+            elif dat[2]=="pdc":
+                src=srcs[dat[2]][0]
+            if dat[2]=="qlp" and int(dat[3])<=26:
+                src=srcs[dat[2]][0]
+            elif dat[2]=="qlp" and int(dat[3])>26: #and int(dat[3])<=39
+                src=srcs[dat[2]][1]
+
+            tab+="      "+missions[dat[0]]+" & "+sec+" & "+dat[1]+" & "+src+"\\\\\n"
+        if len(rep)>0:
+            tab=tab.replace("Sector","Sector/"+rep)
+        tab+="      \\hline\n   \\end{tabular}\n   \\label{tab:phot_srcs}\n\\end{table}"
+
+        extra_text="""@ARTICLE{Luger2018,
+       author = {{Luger}, Rodrigo and {Kruse}, Ethan and {Foreman-Mackey}, Daniel and {Agol}, Eric and {Saunders}, Nicholas},
+        title = "{An Update to the EVEREST K2 Pipeline: Short Cadence, Saturated Stars, and Kepler-like Photometry Down to Kp = 15}",
+      journal = {\aj},
+     keywords = {catalogs, planets and satellites: detection, techniques: photometric, Astrophysics - Instrumentation and Methods for Astrophysics, Astrophysics - Earth and Planetary Astrophysics},
+         year = 2018,
+        month = sep,
+       volume = {156},
+       number = {3},
+          eid = {99},
+        pages = {99},
+          doi = {10.3847/1538-3881/aad230},
+archivePrefix = {arXiv},
+       eprint = {1702.05488},
+ primaryClass = {astro-ph.IM},
+       adsurl = {https://ui.adsabs.harvard.edu/abs/2018AJ....156...99L},
+      adsnote = {Provided by the SAO/NASA Astrophysics Data System}
+}
+@ARTICLE{Stumpe2012,
+       author = {{Stumpe}, Martin C. and {Smith}, Jeffrey C. and {Van Cleve}, Jeffrey E. and {Twicken}, Joseph D. and {Barclay}, Thomas S. and {Fanelli}, Michael N. and {Girouard}, Forrest R. and {Jenkins}, Jon M. and {Kolodziejczak}, Jeffery J. and {McCauliff}, Sean D. and {Morris}, Robert L.},
+        title = "{Kepler Presearch Data Conditioning I{\textemdash}Architecture and Algorithms for Error Correction in Kepler Light Curves}",
+      journal = {\pasp},
+     keywords = {Astrophysics - Instrumentation and Methods for Astrophysics, Statistics - Applications},
+         year = 2012,
+        month = sep,
+       volume = {124},
+       number = {919},
+        pages = {985},
+          doi = {10.1086/667698},
+archivePrefix = {arXiv},
+       eprint = {1203.1382},
+ primaryClass = {astro-ph.IM},
+       adsurl = {https://ui.adsabs.harvard.edu/abs/2012PASP..124..985S},
+      adsnote = {Provided by the SAO/NASA Astrophysics Data System}
+}
+
+@ARTICLE{Vanderburg2014,
+       author = {{Vanderburg}, Andrew and {Johnson}, John Asher},
+        title = "{A Technique for Extracting Highly Precise Photometry for the Two-Wheeled Kepler Mission}",
+      journal = {\pasp},
+     keywords = {Astrophysics - Instrumentation and Methods for Astrophysics, Astrophysics - Earth and Planetary Astrophysics, Astrophysics - Solar and Stellar Astrophysics},
+         year = 2014,
+        month = oct,
+       volume = {126},
+       number = {944},
+        pages = {948},
+          doi = {10.1086/678764},
+archivePrefix = {arXiv},
+       eprint = {1408.3853},
+ primaryClass = {astro-ph.IM},
+       adsurl = {https://ui.adsabs.harvard.edu/abs/2014PASP..126..948V},
+      adsnote = {Provided by the SAO/NASA Astrophysics Data System}
+}
+@ARTICLE{Fausnaugh2020,
+       author = {{Fausnaugh}, Michael M. and {Burke}, Christopher J. and {Ricker}, George R. and {Vanderspek}, Roland},
+        title = "{Calibrated Full-frame Images for the TESS Quick Look Pipeline}",
+      journal = {Research Notes of the American Astronomical Society},
+     keywords = {Astronomy data reduction, Astronomy data analysis, 1861, 1858},
+         year = 2020,
+        month = dec,
+       volume = {4},
+       number = {12},
+          eid = {251},
+        pages = {251},
+          doi = {10.3847/2515-5172/abd63a},
+       adsurl = {https://ui.adsabs.harvard.edu/abs/2020RNAAS...4..251F},
+      adsnote = {Provided by the SAO/NASA Astrophysics Data System}
+}
+
+@ARTICLE{Huang2020,
+       author = {{Huang}, Chelsea X. and {Vanderburg}, Andrew and {P{\'a}l}, Andras and {Sha}, Lizhou and {Yu}, Liang and {Fong}, Willie and {Fausnaugh}, Michael and {Shporer}, Avi and {Guerrero}, Natalia and {Vanderspek}, Roland and {Ricker}, George},
+        title = "{Photometry of 10 Million Stars from the First Two Years of TESS Full Frame Images: Part II}",
+      journal = {Research Notes of the American Astronomical Society},
+     keywords = {Space telescopes, Transit photometry, Astronomy data analysis, 1547, 1709, 1858},
+         year = 2020,
+        month = nov,
+       volume = {4},
+       number = {11},
+          eid = {206},
+        pages = {206},
+          doi = {10.3847/2515-5172/abca2d},
+       adsurl = {https://ui.adsabs.harvard.edu/abs/2020RNAAS...4..206H},
+      adsnote = {Provided by the SAO/NASA Astrophysics Data System}
+}
+
+@ARTICLE{Kunimoto2021,
+       author = {{Kunimoto}, Michelle and {Huang}, Chelsea and {Tey}, Evan and {Fong}, Willie and {Hesse}, Katharine and {Shporer}, Avi and {Guerrero}, Natalia and {Fausnaugh}, Michael and {Vanderspek}, Roland and {Ricker}, George},
+        title = "{Quick-look Pipeline Lightcurves for 9.1 Million Stars Observed over the First Year of the TESS Extended Mission}",
+      journal = {Research Notes of the American Astronomical Society},
+     keywords = {Light curves, Transit photometry, Exoplanets, 918, 1709, 498, Astrophysics - Earth and Planetary Astrophysics, Astrophysics - Instrumentation and Methods for Astrophysics, Astrophysics - Solar and Stellar Astrophysics},
+         year = 2021,
+        month = oct,
+       volume = {5},
+       number = {10},
+          eid = {234},
+        pages = {234},
+          doi = {10.3847/2515-5172/ac2ef0},
+archivePrefix = {arXiv},
+       eprint = {2110.05542},
+ primaryClass = {astro-ph.EP},
+       adsurl = {https://ui.adsabs.harvard.edu/abs/2021RNAAS...5..234K},
+      adsnote = {Provided by the SAO/NASA Astrophysics Data System}
+}
+
+@ARTICLE{Caldwell2020,
+       author = {{Caldwell}, Douglas A. and {Tenenbaum}, Peter and {Twicken}, Joseph D. and {Jenkins}, Jon M. and {Ting}, Eric and {Smith}, Jeffrey C. and {Hedges}, Christina and {Fausnaugh}, Michael M. and {Rose}, Mark and {Burke}, Christopher},
+        title = "{TESS Science Processing Operations Center FFI Target List Products}",
+      journal = {Research Notes of the American Astronomical Society},
+     keywords = {Catalogs, CCD photometry, Stellar photometry, 205, 208, 1620, Astrophysics - Earth and Planetary Astrophysics, Astrophysics - Instrumentation and Methods for Astrophysics, Astrophysics - Solar and Stellar Astrophysics},
+         year = 2020,
+        month = nov,
+       volume = {4},
+       number = {11},
+          eid = {201},
+        pages = {201},
+          doi = {10.3847/2515-5172/abc9b3},
+archivePrefix = {arXiv},
+       eprint = {2011.05495},
+ primaryClass = {astro-ph.EP},
+       adsurl = {https://ui.adsabs.harvard.edu/abs/2020RNAAS...4..201C},
+      adsnote = {Provided by the SAO/NASA Astrophysics Data System}
+}
+@ARTICLE{Feinstein2019,
+       author = {{Feinstein}, Adina D. and {Montet}, Benjamin T. and {Foreman-Mackey}, Daniel and {Bedell}, Megan E. and {Saunders}, Nicholas and {Bean}, Jacob L. and {Christiansen}, Jessie L. and {Hedges}, Christina and {Luger}, Rodrigo and {Scolnic}, Daniel and {Cardoso}, Jos{\'e} Vin{\'\i}cius de Miranda},
+        title = "{eleanor: An Open-source Tool for Extracting Light Curves from the TESS Full-frame Images}",
+      journal = {\pasp},
+     keywords = {Astrophysics - Instrumentation and Methods for Astrophysics, Astrophysics - Earth and Planetary Astrophysics, Astrophysics - Solar and Stellar Astrophysics},
+         year = 2019,
+        month = sep,
+       volume = {131},
+       number = {1003},
+        pages = {094502},
+          doi = {10.1088/1538-3873/ab291c},
+archivePrefix = {arXiv},
+       eprint = {1903.09152},
+ primaryClass = {astro-ph.IM},
+       adsurl = {https://ui.adsabs.harvard.edu/abs/2019PASP..131i4502F},
+      adsnote = {Provided by the SAO/NASA Astrophysics Data System}
+}"""
+        return tab+"\n\n"+extra_text
