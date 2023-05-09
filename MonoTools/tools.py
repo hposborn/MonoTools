@@ -830,6 +830,112 @@ def getCorotLC(corid,use_ppt=True,**kwargs):
     else:
         return None
 
+def update_tce_timeseres(maxsect=None,overwrite=False):
+    """Update the TCE timeseries file using newly detected TCEs
+
+    Args:
+        maxsect (int, optional): Maximum sector to use. Defaults to None which loads the last sector in the `tess_lc_locations.csv` file
+        overwrite (bool, optional): Restart the file from scratch? Defaults to False.
+    """
+    from astropy.time import Time
+    import httplib2
+    
+    #Getting the latest sector from the tess_lc_locations file
+    maxsect = np.max(pd.read_csv(MonoData_tablepath+"/tess_lc_locations.csv",index_col=0).index.values.astype(int)) if maxsect is None else maxsect
+
+    #Getting timing info for each sector from the TESS data release notes
+    h=httplib2.Http()
+    resp = h.request("https://heasarc.gsfc.nasa.gov/docs/tess/data_release_notes.html", 'HEAD')
+    if int(resp[0]['status']) < 400:
+        dat=h.request("https://heasarc.gsfc.nasa.gov/docs/tess/data_release_notes.html", 'GET')[1].decode()
+        dat_no_space=dat.replace(" ","").replace("<td>","").replace("</td>","").split("\n")
+        dat=dat.split("\n")
+        jds={}
+        for sect in range(1,maxsect+1):
+            if "<p>"+str(8+sect*2)+"</p>" in dat_no_space:
+                i_startstop=np.max([dat_no_space.index("<p>"+str(7+sect*2)+"</p>"),dat_no_space.index("<p>"+str(8+sect*2)+"</p>")])
+                startstops=[]
+                for i_s in [i_startstop+1,i_startstop+2]:
+                    purestr=dat[i_s].replace("<td>","").replace("<p>","").replace("</p>","").replace("--","-").replace("</td>","").replace(" ","")
+                    startstops+=["-".join(purestr.split("-")[:3]),"-".join(purestr.split("-")[3:])]
+                jds[sect]=[Time(startstops[0].replace(" ","")+"T12:00:00",format="isot").jd,Time(startstops[3].replace(" ","")+"T12:00:00",format="isot").jd]    
+            else:
+                print(sect, "doesn't yet have TESS DRN data available.")    
+    
+    #Loading the old file and checking up to where we are complete
+    tcefile=pd.read_csv(MonoData_tablepath+"/tess_tce_fractions.csv.gz",index_col=0,compression="gzip") if not overwrite else pd.DataFrame()
+    ends=np.array([jds[j][1] for j in np.sort(list(jds.keys()))])
+    
+    #The sect to start from is therefore the index of the sorted last "end" plus one (to account for starting at 1) plus one (as we need the next available sector)
+    minsect=np.argmin(abs(ends-np.max(tcefile.index.values)))+2 if not overwrite else 1
+
+    #Getting the tables of single-sector TCE data:
+    h=httplib2.Http()
+    resp = h.request("https://archive.stsci.edu/tess/bulk_downloads/bulk_downloads_tce.html", 'HEAD')
+    if int(resp[0]['status']) < 400:
+        dat=h.request("https://archive.stsci.edu/tess/bulk_downloads/bulk_downloads_tce.html", 'GET')[1].decode()
+        start_row=".csv File</th>\n</tr>\n</thead>\n<tbody>\n<tr>"
+        end_row="\n</tbody>\n</table>"
+        tce_singlesect_tables=pd.read_html("<tbody>\n<table>\n"+dat[dat.find(start_row)+len(start_row)+1:dat.find(end_row)]+"\n</tbody>\n</table>",index_col=0)[0]
+        dat=dat[dat.find(end_row)+20:]
+        tce_multisect_tables=pd.read_html("<tbody>\n<table>\n"+dat[dat.find(start_row)+len(start_row)+1:dat.find(end_row)]+"\n</tbody>\n</table>",index_col=0)[0]
+        tce_multisect_tables['s_start']=[int(s.split(' ')[1]) for s in tce_multisect_tables.index.values]
+        tce_multisect_tables['s_end']=[int(s.split(' ')[1]) for s in tce_multisect_tables[1].values]
+    #print(tce_multisect_tables)
+    #Looping through all sectors, computing TCE per cadence, adding to a list
+    from astropy.io import ascii
+    times=[]
+    frac_in_tce=[]
+    maxsect=70
+    if minsect>=maxsect:
+        return None
+    for s in np.arange(minsect,maxsect+1):
+        times+=[np.arange(jds[s][0]-0.25,jds[s][1]+0.25,0.05)]
+        h=httplib2.Http()
+        fileloc="https://archive.stsci.edu/missions/tess/catalogs/tce/"+tce_singlesect_tables.loc["Sector "+str(s),2]
+        resp=h.request(fileloc,"HEAD")
+        total=0
+        print("Sector",s)
+        frac_in_tce+=[np.zeros(len(times[-1]))]
+        if int(resp[0]['status'])<400:
+            df=ascii.read(fileloc).to_pandas()
+            df=df.loc[(df['tce_period']>7)&(df['tce_model_snr']<25)]
+            total+=df.shape[1]
+            frac_in_tce[-1]+=np.sum(abs((times[-1][:,None]-0.5*df['tce_period'][None,:]-df['tce_time0bt'][None,:])%df['tce_period'][None,:]-0.5*df['tce_period'][None,:])<(0.02+df['tce_duration'][None,:]/48),axis=1)
+        #Looping through multis
+        for multis in tce_multisect_tables.loc[(s>=tce_multisect_tables['s_start'])&(s<=tce_multisect_tables['s_end'])].iterrows():
+            h=httplib2.Http()
+            fileloc="https://archive.stsci.edu/missions/tess/catalogs/tce/"+multis[1][2]
+            resp=h.request(fileloc,"HEAD")
+            if int(resp[0]['status'])<400:
+                df=ascii.read(fileloc).to_pandas()
+                df=df.loc[(df['tce_period']>14)&(df['tce_model_snr']<30)]
+                total+=df.shape[1]
+                frac_in_tce[-1]+=np.sum(abs((times[-1][:,None]-0.5*df['tce_period'][None,:]-df['tce_time0bt'][None,:])%df['tce_period'][None,:]-0.5*df['tce_period'][None,:])<(0.02+df['tce_duration'][None,:]/48),axis=1)
+        frac_in_tce[-1]/=float(total)
+        #Normalising:
+        frac_in_tce[-1]/=np.nanmedian(frac_in_tce[-1])
+        frac_in_tce[-1]-=1.0
+        frac_in_tce[-1]/=np.nanstd(frac_in_tce[-1])
+    
+    #Stacking new TCE lists with the old ones
+    newtcefile=pd.DataFrame()
+    newtcefile['TJD']=np.hstack(times)
+    newtcefile['TCE_fraction']=np.hstack(frac_in_tce)
+    newtcefile=newtcefile.sort_values('TJD')
+    newtcefile=newtcefile.set_index(newtcefile['TJD']).loc[:,['TCE_fraction']]
+    
+    #There may be overlapping values due to date issues... averaging the values where there are overlaps
+    overlaps=np.where(np.diff(newtcefile['TJD'])<0.045)[0]
+    oldtimes=newtcefile.loc[~np.isin(range(len(newtcefile)),np.unique(np.hstack((overlaps,overlaps+1)))),'TJD']
+    oldtces=newtcefile.loc[~np.isin(range(len(newtcefile)),np.unique(np.hstack((overlaps,overlaps+1)))),'TCE_fraction']
+    newertcefile=pd.DataFrame()
+    newertcefile['TJD']=np.hstack((oldtimes,0.5*(newtcefile.loc[overlaps,'TJD'].values+newtcefile.loc[overlaps+1,'TJD'].values)))
+    newertcefile['TCE_fraction']=np.hstack((oldtces,0.5*(newtcefile.loc[overlaps,'TCE_fraction'].values+newtcefile.loc[overlaps+1,'TCE_fraction'].values)))
+    newertcefile=newertcefile.sort_values('TJD')
+    newertcefile=newertcefile.set_index(newertcefile['TJD']).loc[:,['TCE_fraction']]
+    newertcefile.to_csv(MonoData_tablepath+"/tess_tce_fractions.csv.gz",compression="gzip")
+
 def update_lc_locs(epoch,most_recent_sect):
     #Updating the table of lightcurve locations using the scripts on the MAST/TESS "Bulk Downloads" page.
     all_sects=np.arange(np.max(epoch.index.values),most_recent_sect).astype(int)+1
@@ -1235,9 +1341,9 @@ def bin_lc_given_new_x(lc_segment, new_x):
     #Making bin divisions half way between each defined x point here
     new_bins=np.hstack((new_x[0]-0.5*binsize,0.5*(new_x[:-1]+new_x[1:]),new_x[-1]+0.5*binsize))
     digi=np.digitize(lc_segment[:,0],new_bins)
-    print(len(np.unique(digi)),np.max(digi),np.min(digi))
+    #print(len(np.unique(digi)),np.max(digi),np.min(digi))
     fluxes=np.vstack([[weighted_avg_and_std(lc_segment[digi==d,1],lc_segment[digi==d,2])] for d in range(1,len(new_bins))])
-    print(len(new_x),fluxes.shape, len(new_bins), new_x[:2],new_bins[:3],new_x[-3:],new_bins[-4:],)
+    #print(len(new_x),fluxes.shape, len(new_bins), new_x[:2],new_bins[:3],new_x[-3:],new_bins[-4:],)
     binlc=np.column_stack((new_x,fluxes))
     return binlc
 
@@ -1558,7 +1664,7 @@ def getLDs(Ts,logg=4.43812,FeH=0.0,mission="TESS"):
         #v = Vizier(catalog=[])
         Vizier.ROW_LIMIT = -1
         TessLDs=Vizier.get_catalogs('J/A+A/600/A30/tableab')[0].to_pandas()
-        TessLDs=TessLDs.loc[(TessLDs['Type']=='r')&((TessLDs['Mod']=="PD")^(TessLDs['Teff']>3000)),'Teff']
+        TessLDs=TessLDs.loc[(TessLDs['Type']=='r')&((TessLDs['Mod']=="PD")^(TessLDs['Teff']>3000))]
         #TessLDs=ascii.read(os.path.join(MonoData_tablepath,'tessLDs.txt')).to_pandas()
         a_interp=ct2d(np.column_stack((TessLDs['Teff'].values.astype(float),TessLDs['logg'].values.astype(float))),TessLDs['aLSM'].values.astype(float))
         b_interp=ct2d(np.column_stack((TessLDs['Teff'].values.astype(float),TessLDs['logg'].values.astype(float))),TessLDs['bLSM'].values.astype(float))
@@ -2013,3 +2119,30 @@ def MakeBokehTable(df, dftype='toi', cols2use=None, cols2avoid=None, errtype=' e
     #print(newdf)
     data_table = DataTable(source=ColumnDataSource(newdf), columns=columns, width=width, height=height)    
     return data_table
+
+def GapCull(t0,t,dat,std_thresh=10,boolean=None,time_jump_thresh=0.4):
+    #Removes data before/after gaps and jumps in t & y
+    #If there's a big gap or a big jump, we'll remove the far side of that
+    if boolean is None:
+        boolean=np.tile(True,len(t))
+    if np.max(np.diff(t[boolean]))>time_jump_thresh:
+        jump_n=np.argmax(np.diff(t[boolean]))
+        jump_time=0.5*(t[boolean][jump_n]+t[boolean][jump_n+1])
+        #print("TIME JUMP IN CENTROID AT",jump_time)
+        if jump_time < t0:
+            boolean*=(t>jump_time)
+        elif jump_time > t0:
+            boolean*=(t<jump_time)
+    #data must be iterable list
+    for arr in dat:
+        noise=np.nanmedian(abs(np.diff(arr[boolean])))
+        #5-sigma x centroid jump - need to cut
+        if np.sum(boolean)>0 and np.nanmax(abs(np.diff(arr[boolean])))>std_thresh*noise:
+            jump_n=np.argmax(np.diff(arr[boolean]))
+            jump_time=0.5*(t[boolean][jump_n]+t[boolean][jump_n+1])
+            #print("X JUMP IN CENTROID AT",jump_time)
+            if jump_time < t0:
+                boolean*=(t>jump_time)
+            elif jump_time > t0:
+                boolean*=(t<jump_time)
+    return boolean

@@ -347,7 +347,7 @@ class lc():
         self.make_mask()
 
     def flatten(self, timeseries=['flux'], knot_dist=1.25, maxiter=10, sigmaclip = 3., flattype='bspline', 
-                stepsize=0.15, reflect=True, polydegree=3, transit_mask=None, ephems=None,**kwargs):
+                stepsize=0.15, reflect=True, polydegree=3, transit_mask=None, ephems=None, flatcadences='all',**kwargs):
         """Flatten the lightcurve using either a spline or polynomial out-of-box fitting
 
         Args:
@@ -362,6 +362,7 @@ class lc():
             polydegree (int, optional): [description]. Defaults to 3.
             transit_mask (np.ndarray, optional): Mask of transits where 0 = in transit and 1 = out of transit. Defaults to None.
             ephems (dict of dicts, optional): Dictionary of ephemeris dictionaries for each planet - each with 't0', 'P' & 'dur' keys. Defaults to None
+            flatcadences (str, optional): Cadences to flatten separated by commas. Defaults to 'all'
         """
         self.sort_timeseries() #Requires timeseries sorted in time
         
@@ -382,8 +383,16 @@ class lc():
                 timearr=self.bin_time[:] if 'bin_' in its else self.time[:]
 
                 maskarr=self.mask[:] if 'bin_' not in its else None
-                spline = tools.kepler_spline(timearr,getattr(self,its),flux_mask=maskarr,
-                                             maxiter=maxiter,bk_space=knot_dist,transit_mask=transit_mask,reflect=reflect)[0]
+                if flatcadences is not 'all':
+                    if 'bin_' in its:
+                        cadmask=np.isin(self.bin_cadence,np.array(flatcadences.split(',')))
+                    else:
+                        cadmask=np.isin(self.cadence,np.array(flatcadences.split(',')))
+                else:
+                    cadmask=np.tile(True,len(timearr))
+                spline=np.zeros(len(timearr))
+                spline[cadmask] = tools.kepler_spline(timearr[cadmask],getattr(self,its)[cadmask],flux_mask=maskarr[cadmask],
+                                                maxiter=maxiter,bk_space=knot_dist,transit_mask=transit_mask[cadmask],reflect=reflect)[0]
                 setattr(self, its+'_spline', spline)
                 self.timeseries+=[its+'_spline']
                 setattr(self, its+'_flat', getattr(self,its) - spline)
@@ -553,7 +562,7 @@ class lc():
 
         #Now doing cadence:
         digis={}
-        bin_cads=np.empty(len(getattr(self,'bin'+binsuffix+'_time')),dtype='U16')
+        bin_cads=np.empty(len(getattr(self,'bin'+binsuffix+'_time')),dtype='U17')
         for j in np.arange(1,1+np.max(time_bools)).astype(int):
             if np.sum(bintime_bools==j)==np.sum(time_bools==j):
                 bin_cads[bintime_bools==j]=self.cadence[time_bools==j]
@@ -953,7 +962,7 @@ class multilc(lc):
 
         if self.all_ids['tess'] is not None and self.all_ids['tess'] is not {} and 'search' in self.all_ids['tess'] and self.all_ids['tess']['search'] is not None:
             for sector in self.all_ids['tess']['search']:
-                searchlist=['20_spoc','120_spoc','1800_spoc','1800_qlp'] if all_pipelines else ['all']
+                searchlist=['spoc_20','spoc_120','spoc_1800','qlp_1800'] if all_pipelines else ['all']
                 for search in searchlist:
                     all_lcs+=[self.get_tess_lc(sector,search=search,**kwargs)]
         if self.all_ids['k2'] is not None and self.all_ids['k2'] is not {} and 'search' in self.all_ids['k2'] and self.all_ids['k2']['search'] is not None:
@@ -1117,7 +1126,7 @@ class multilc(lc):
             return df
     
     def get_tess_lc(self,sector,search=['all'],use_fast=False,use_eleanor=False,**kwargs):
-        """Access TESS ligthcurve for given sector
+        """Access TESS lightcurve for given sector
 
         Args:
             sector (int): sector to search
@@ -1190,29 +1199,29 @@ class multilc(lc):
                     with fits.open(fitsloc,show_progress=False) as hdus:
                         return self.read_from_file(hdus,fitsloc,mission='tess',src='qlpfts',sect=str(sector),**kwargs)
             searched+=['te_'+cad+'_qlp_'+str(sector)]
-        if ('all' in search or 'eleanor_1800' in search or 'eleanor_600' in search) and use_eleanor:
-            import eleanor
-            print("Loading Eleanor Lightcurve")
-            try:
-                #Getting eleanor lightcurve:
-                try:
-                    star = eleanor.Source(tic=id, sector=sector)
-                except:
-                    star = eleanor.Source(coords=self.radec, sector=sector)
-                try:
-                    elen_obj=eleanor.TargetData(star, height=15, width=15, bkg_size=31, do_psf=True, do_pca=True,save_postcard=False)
-                except:
-                    try:
-                        elen_obj=eleanor.TargetData(star, height=15, width=15, bkg_size=31, do_psf=True, do_pca=False,save_postcard=False)
-                    except:
-                        elen_obj=eleanor.TargetData(star, height=15, width=15, bkg_size=31, do_psf=False, do_pca=False,save_postcard=False)
-                elen_hdr={'ID':star.tic,'GaiaID':star.gaia,'Tmag':star.tess_mag,
-                        'RA':star.coords[0],'dec':star.coords[1],'mission':'TESS','campaign':sector,'source':'eleanor',
-                        'ap_masks':elen_obj.all_apertures,'ap_image':np.nanmedian(elen_obj.tpf[50:80],axis=0)}
-                return self.read_from_file(elen_obj,elen_hdr,mission='tess',src='el',sect=str(sector),**kwargs)
-            except Exception as e:
-                print(e)
-            searched+=['te_'+cad+'_eleanor_'+str(sector)]
+        # if ('all' in search or 'eleanor_1800' in search or 'eleanor_600' in search) and use_eleanor:
+        #     import eleanor
+        #     print("Loading Eleanor Lightcurve")
+        #     try:
+        #         #Getting eleanor lightcurve:
+        #         try:
+        #             star = eleanor.Source(tic=id, sector=sector)
+        #         except:
+        #             star = eleanor.Source(coords=self.radec, sector=sector)
+        #         try:
+        #             elen_obj=eleanor.TargetData(star, height=15, width=15, bkg_size=31, do_psf=True, do_pca=True,save_postcard=False)
+        #         except:
+        #             try:
+        #                 elen_obj=eleanor.TargetData(star, height=15, width=15, bkg_size=31, do_psf=True, do_pca=False,save_postcard=False)
+        #             except:
+        #                 elen_obj=eleanor.TargetData(star, height=15, width=15, bkg_size=31, do_psf=False, do_pca=False,save_postcard=False)
+        #         elen_hdr={'ID':star.tic,'GaiaID':star.gaia,'Tmag':star.tess_mag,
+        #                 'RA':star.coords[0],'dec':star.coords[1],'mission':'TESS','campaign':sector,'source':'eleanor',
+        #                 'ap_masks':elen_obj.all_apertures,'ap_image':np.nanmedian(elen_obj.tpf[50:80],axis=0)}
+        #         return self.read_from_file(elen_obj,elen_hdr,mission='tess',src='el',sect=str(sector),**kwargs)
+        #     except Exception as e:
+        #         print(e)
+        #     searched+=['te_'+cad+'_eleanor_'+str(sector)]
         return None
     
 
@@ -1491,7 +1500,7 @@ class multilc(lc):
         """
         if type(f)!=fits.hdu.hdulist.HDUList and type(f)!=fits.fitsrec.FITS_rec:
             #Making sure we have the tools needed to identify possible file types:
-            import eleanor
+            #import eleanor
             import lightkurve
             import h5py
         else:
@@ -1664,16 +1673,16 @@ class multilc(lc):
                          cent_2=f['LightCurve']['AperturePhotometry']['Aperture_003']['Y'][:],
                          quality=np.array([np.power(2,15) if c=='G' else 0.0 for c in f['LightCurve']['AperturePhotometry']['Aperture_003']['QualityFlag'][:]]).astype(int))
             return ilc
-        elif type(f)==eleanor.TargetData:
-            # Eleanor TESS object
-            q=f.quality
-            # Fixing negative quality values as 2^15
-            q[q<0.0]=np.power(2,15)
-            q=q.astype(int)
-            ilc.load_lc(f.time,fluxes={'flux':f.corr_flux,'raw_flux':f.raw_flux,'xs_ap_flux':f.all_corr_flux[1],'xl_ap_flux':f.all_corr_flux[16]},
-                         flux_errs={'flux_err':f.flux_err}, src='el',mission='tess', jd_base=2457000, flx_system='elec', sect=sect,
-                         cent_1=f.centroid_xs,cent_2=f.centroid_ys,quality=q)
-            return ilc
+        # elif type(f)==eleanor.TargetData:
+        #     # Eleanor TESS object
+        #     q=f.quality
+        #     # Fixing negative quality values as 2^15
+        #     q[q<0.0]=np.power(2,15)
+        #     q=q.astype(int)
+        #     ilc.load_lc(f.time,fluxes={'flux':f.corr_flux,'raw_flux':f.raw_flux,'xs_ap_flux':f.all_corr_flux[1],'xl_ap_flux':f.all_corr_flux[16]},
+        #                  flux_errs={'flux_err':f.flux_err}, src='el',mission='tess', jd_base=2457000, flx_system='elec', sect=sect,
+        #                  cent_1=f.centroid_xs,cent_2=f.centroid_ys,quality=q)
+        #     return ilc
         elif type(f)==np.ndarray and np.shape(f)[1]==3:
             #Already opened lightcurve file
             ilc.load_lc(f[:,0],fluxes={'flux':f[:,1]},flux_errs={'flux_err':f[:,2]},
@@ -1871,7 +1880,7 @@ class multilc(lc):
                 #print(cad,subplots,getattr(self,itimeseries),ix,type(ix))
                 if (self.init_plot_info['fine_cuts'][cad]['cadence']*1440)>20 and self.init_plot_info['total_time']<500:
                     #Plotting only real points as "binned points" style:
-                    print(itimeseries,cad,subplots.keys(),ix)
+                    #print(itimeseries,cad,subplots.keys(),ix)
                     subplots[cad].plot(self.time[ix],yoffset*it+(getattr(self,itimeseries)[ix]-norm_sub)*norm_mult,'.',alpha=0.8,markersize=3.0,color='C'+str(it),label=itimeseries)
                 elif (self.init_plot_info['fine_cuts'][cad]['cadence']*1440)>20 and self.init_plot_info['total_time']>500:
                     #So much data that we should bin it back down (to 2-hour bins)
@@ -1882,6 +1891,7 @@ class multilc(lc):
                     subplots[cad].plot(self.bin2_time[bin_ix2],yoffset*it+(getattr(self,"bin2_"+itimeseries)[bin_ix2]-norm_sub)*norm_mult,
                                        '.',alpha=0.8,markersize=3.0,color='C'+str(it),label=itimeseries)
                 else:
+                    #print(cad,itimeseries,np.sum(bin_ix),len(self.bin_time[bin_ix]),np.nanmedian(yoffset*it+(getattr(self,"bin_"+itimeseries)[bin_ix]-norm_sub)*norm_mult))
                     #Plotting real points as fine scatters and binned points above:
                     if not bin_only:
                         subplots[cad].plot(self.time[ix],yoffset*it+(getattr(self,itimeseries)[ix]-norm_sub)*norm_mult,'.k',markersize=0.75,alpha=0.25)
