@@ -125,7 +125,6 @@ class monoModel():
                        'force_match_input':None,# force_match_input - Float/None add potential with this the sigma between the input and the output logror and logdur to force MCMC to match the input duration & maximise logror [e.g. 0.1 = match to 1-sigma=10%]
                        'debug':False,           # debug - bool - print debug statements?
                        'fit_params':['logror','b','tdur', 't0'], # fit_params - list of strings - fit these parameters. Options: ['logror', 'b' or 'tdur', 'ecc', 'omega']
-
                        'marginal_params':['per','ecc','omega'], # marginal_params - list of strings - marginalise over these parameters. Options: ['per', 'b' ´or 'tdur', 'ecc', 'omega','logror']
                        'interpolate_v_prior':True, # Whether to use interpolation to produce transit velocity prior
                        'ecc_prior':'auto',      # ecc_prior - string - 'uniform', 'kipping' or 'vaneylen'. If 'auto' we decide based on multiplicity
@@ -1013,7 +1012,7 @@ class monoModel():
 
         assert len(self.trios+self.duos+self.monos)<2 #Cannot fit more than one planet with uncertain orbits with RVs (currently)
 
-    def init_lc(self, **kwargs):
+    def init_lc(self, oot_binsize=1/48, **kwargs):
         """Initialise light curve. This can be done either after or before model initialisation.
               This function creates transit maskes and flattens/bins the light curve in ways to avoid influencing the transit.
         """
@@ -1049,7 +1048,7 @@ class monoModel():
         if self.cut_distance>0 or not self.use_GP:
             if self.bin_oot:
                 #Creating a pseudo-binned dataset where out-of-transit LC is binned to 30mins but near-transit is not.
-                oot_binsize=1/12 if self.mission.lower()=='kepler' else 1/48
+                oot_binsize=1/12 if self.mission.lower()=='kepler' else oot_binsize
                 self.lc.OOTbin(near_transit_mask=self.lc.near_trans,use_flat=(not self.use_GP),
                                binsize=oot_binsize)
                 self.model_time=self.lc.ootbin_time[:]
@@ -1741,11 +1740,11 @@ class monoModel():
 
                 if self.periodic_kernel is not None:
                     #Building a periodic kernel with amplitude modified by a third kernel term (i.e. allowing amplitude to vary with time)
-                    periodic_w0=pm.Normal("periodic_w0",mu=self.periodic_kernel['period']/(2*np.pi),sd=self.periodic_kernel['period_err']/(2*np.pi))
+                    periodic_w0=pm.Normal("periodic_w0",mu=(2*np.pi)/self.periodic_kernel['period'],sd=(2*np.pi)/self.periodic_kernel['period_err'])
                     periodic_power=pm.Normal("periodic_logpower",mu=self.periodic_kernel['logamp'],sd=self.periodic_kernel['logamp_err'])
-                    periodic_logQ=pm.Normal("periodic_logQ",mu=2,sd=1)
-                    ampl_mult_logc=pm.Normal("ampl_mult_logc",mu=3,sd=1,testval=5)
-                    ampl_mult_loga=pm.Normal("ampl_mult_loga",mu=-1,sd=1,testval=-1)
+                    periodic_logQ=pm.Normal("periodic_logQ",mu=2,sd=2)
+                    ampl_mult_logc=pm.Normal("ampl_mult_logc",mu=3,sd=2,testval=5)
+                    ampl_mult_loga=pm.Normal("ampl_mult_loga",mu=-1,sd=2,testval=-1)
                     ampl_mult_kernel=theano_terms.RealTerm(a=tt.exp(ampl_mult_loga),c=tt.exp(ampl_mult_logc))
                     periodic_kernel = theano_terms.SHOTerm(S0=tt.exp(periodic_power)/(periodic_w0**4), w0=periodic_w0, Q=tt.exp(periodic_logQ))
                 if self.train_GP:
@@ -1769,7 +1768,7 @@ class monoModel():
                     # Transit jitter & GP parameters
                     #logs2 = pm.Normal("logs2", mu=np.log(np.var(y[m])), sd=10)
                     lcrange=self.model_time[-1]-self.model_time[0]
-                    max_cad = np.nanmax([np.nanmedian(np.diff(self.model_time[self.model_cadence_index[:,nc]])) for nc in range(len(self.cads))])
+                    max_cad = np.nanmax([np.nanmedian(np.diff(self.model_time[self.model_cadence_index[:,nc]])) for nc in range(len(self.cads_short))])
                     #freqs bounded from 2pi/minimum_cadence to to 2pi/(4x lc length)
                     success=False;target=0.05
                     while not success and target<0.4:
@@ -1777,24 +1776,31 @@ class monoModel():
 
                             phot_w0 = pm.InverseGamma("phot_w0",testval=(2*np.pi)/10,
                                          **pmx.estimate_inverse_gamma_parameters(lower=(2*np.pi)/(lcrange),
-                                                                                upper=(2*np.pi)/(6*max_cad)))
+                                                                                upper=(2*np.pi)/(15*max_cad)))
                             success=True
                         except:
                             target+=0.05
                             success=False
+                    if not success:
+                        if self.debug: print(lcrange,max_cad,np.log(np.clip(lcrange,0,50)),np.log(6*max_cad),0.5*(np.log(np.clip(lcrange,0,30))+np.log(25*max_cad)),0.25*(np.log(np.clip(lcrange,0,30))-np.log(25*max_cad)))
+                        log_phot_w0=pm.Normal("log_phot_w0",mu=np.log(2*np.pi/(2.5)), sd=2, testval=np.log(2*np.pi/(1.5)))
+                        phot_w0=pm.Deterministic("phot_w0",tt.exp(log_phot_w0))
 
-                    maxpower=12.5*np.nanstd(self.model_flux)
-                    minpower=0.2*np.nanmedian(abs(np.diff(self.model_flux)))
+                    maxpower=2.5*np.nanmedian(abs(np.diff(self.model_flux)))#12.5*np.nanstd(self.model_flux)
+                    minpower=0.02*np.nanmedian(abs(np.diff(self.model_flux)))
                     if self.debug: print(np.nanmedian(abs(np.diff(self.model_flux))),np.nanstd(self.model_flux),minpower,maxpower)
                     success=False;target=0.05
                     while not success and target<0.4:
                         try:
-                            phot_power = pm.InverseGamma("phot_power",testval=minpower*5,
+                            phot_power = pm.InverseGamma("phot_power",testval=minpower*2,
                                                     **pmx.estimate_inverse_gamma_parameters(lower=minpower, upper=maxpower,target=0.1))
                             success=True
                         except:
                             target+=0.05
                             success=False
+                    if not success:
+                        log_phot_power=pm.Normal("log_phot_power",mu=np.log(minpower*0.25),sd=1,testval=np.log(minpower*0.1))
+                        phot_power=pm.Deterministic("phot_power",tt.exp(log_phot_power))
                     phot_mean=pm.Normal("phot_mean",mu=np.median(self.model_flux),  sd=2*np.std(self.model_flux))
                     if self.debug: print(target," after ",int(target/0.05),"attempts")
 
@@ -2232,7 +2238,7 @@ class monoModel():
                 new_yerr = new_yerr_sq**0.5
                 sum_log_new_yerr = tt.sum(-len(self.model_flux)/2 * tt.log(2*np.pi*(new_yerr_sq)))
 
-            stacked_marg_lc={};resids={};logprobs={};logprob_sums={};logprob_margs={}
+            stacked_marg_lc={};resids={};logprobs={};logprob_sums={};logprob_margs={};per_marg_avs={};ecc_marg_avs={}
             print("Intiialised everything. Optimizing")
 
             for pl in self.multis+self.trios+self.duos+self.monos+list(self.rvplanets.keys()):
@@ -2291,10 +2297,10 @@ class monoModel():
                     elif self.interpolate_v_prior:
                         #Getting double-marginalised eccentricity (across omega space given v and then period space)
                         #tt.printing.Print("input_coords")(tt.stack([logvels[pl],max_eccs[pl]],axis=-1))
-                        eccs[pl] = pm.Deterministic('ecc_'+pl,
-                                         self.interpolator_eccmarg.evaluate(tt.stack([logvels[pl],max_eccs[pl]],axis=-1)).T[0])
+                        eccs[pl] = pm.Deterministic('ecc_'+pl, self.interpolator_eccmarg.evaluate(tt.stack([logvels[pl],max_eccs[pl]],axis=-1)).T)
                         #tt.printing.Print("eccs[pl]")(eccs[pl])
-                        pm.Deterministic('ecc_marg_'+pl,tt.sum(eccs[pl]*tt.exp(logprob_margs[pl])))
+                        ecc_marg_avs[pl]=pm.Deterministic('ecc_marg_'+pl,tt.sum(eccs[pl]*tt.exp(logprob_margs[pl])))
+                        pm.Deterministic('ecc_marg_sd_'+pl,tt.sum(tt.exp(logprob_margs[pl])*(eccs[pl]-ecc_marg_avs[pl])**2)/(1-1/self.n_margs[pl]))
                     if 'tdur' not in self.fit_params:
                         pm.Deterministic('tdur_marg_'+pl,tt.sum(tdurs[pl]*tt.exp(logprob_margs[pl])))
                     if 'b' not in self.fit_params:
@@ -2302,7 +2308,8 @@ class monoModel():
                     if 'logror' not in self.fit_params:
                         pm.Deterministic('logror_marg_'+pl,tt.sum(logrors[pl]*tt.exp(logprob_margs[pl])))
                     pm.Deterministic('vel_marg_'+pl,tt.sum(vels[pl]*tt.exp(logprob_margs[pl])))
-                    pm.Deterministic('per_marg_'+pl,tt.sum(pers[pl]*tt.exp(logprob_margs[pl])))
+                    per_marg_avs[pl] = pm.Deterministic('per_marg_mean_'+pl,tt.sum(pers[pl]*tt.exp(logprob_margs[pl])))
+                    pm.Deterministic('per_marg_sd_'+pl,tt.sqrt(tt.sum(tt.exp(logprob_margs[pl])*(pers[pl]-per_marg_avs[pl])**2)/(1-1/self.n_margs[pl])))
                     if not self.interpolate_v_prior:
                         stacked_marg_lc[pl] = pm.Deterministic('marg_light_curve_'+pl,
                                               tt.sum(light_curves[pl] * tt.exp(logprob_margs[pl]).dimshuffle('x',0),axis=1))
@@ -2370,80 +2377,85 @@ class monoModel():
             #   Creating initial model optimisation menu:
             ################################################
             #Setting up optimization depending on what planet models we have:
-            initvars1=[logs2]
-            initvars2=[logs2]#P,t0
-            initvars3=[logrho_S,logs2]
-            initvars4=[logs2]#r,b,P
-            for pl in self.planets:
-                initvars1+=[logrors[pl]];initvars2+=[logrors[pl]];initvars4+=[logrors[pl]]
-                initvars2+=[t0s[pl]]
-                if 'b' in self.fit_params or pl in self.multis:
-                    initvars4+=[bs[pl]]
-                if 'tdur' in self.fit_params and pl not in self.multis:
-                    initvars1+=[tdurs[pl]];initvars4+=[tdurs[pl]]
-                if pl in self.multis:
-                    initvars1+=[bs[pl]]
-                    initvars2+=[pers[pl]];initvars4+=[pers[pl]]
-                if pl in self.monos:
-                    initvars2+=[mono_uniform_index_period[pl]];initvars4+=[mono_uniform_index_period[pl]]
-                if pl in self.duos+self.trios:
-                    initvars2+=[t0_2s[pl]]
-                if pl in self.trios and self.model_t03_ttv:
-                    initvars2+=[t0_3s[pl]]
-                if not self.assume_circ and (not self.interpolate_v_prior or pl in self.multis):
-                    initvars3+=[eccs[pl], omegas[pl]]
-                if hasattr(self,'rvs') and not self.derive_K:
-                    initvars1+=[logKs[pl]]
-                    initvars3+=[logKs[pl]]
-                    #initvars0+=[logMp_wrt_normals[pl]]
-                    #initvars2+=[logMp_wrt_normals[pl]]
-                    #initvars3+=[logMp_wrt_normals[pl]]
-
-            if hasattr(self,'rvs'):
-                if self.rv_npoly>1:
-                    initvars3+=[rv_polys]
-                if len(self.rvplanets)>0:
-                    for pl in self.rvplanets:
+            step_initialise=False
+            if step_initialise:
+                initvars1=[logs2]
+                initvars2=[logs2]#P,t0
+                initvars3=[logrho_S,logs2]
+                initvars4=[logs2]#r,b,P
+                for pl in self.planets:
+                    initvars1+=[logrors[pl]];initvars2+=[logrors[pl]];initvars4+=[logrors[pl]]
+                    initvars2+=[t0s[pl]]
+                    if 'b' in self.fit_params or pl in self.multis:
+                        initvars4+=[bs[pl]]
+                    if 'tdur' in self.fit_params and pl not in self.multis:
+                        initvars1+=[tdurs[pl]];initvars4+=[tdurs[pl]]
+                    if pl in self.multis:
+                        initvars1+=[bs[pl]]
+                        initvars2+=[pers[pl]];initvars4+=[pers[pl]]
+                    if pl in self.monos:
+                        initvars2+=[mono_uniform_index_period[pl]];initvars4+=[mono_uniform_index_period[pl]]
+                    if pl in self.duos+self.trios:
+                        initvars2+=[t0_2s[pl]]
+                    if pl in self.trios and self.model_t03_ttv:
+                        initvars2+=[t0_3s[pl]]
+                    if not self.assume_circ and (not self.interpolate_v_prior or pl in self.multis):
+                        initvars3+=[eccs[pl], omegas[pl]]
+                    if hasattr(self,'rvs') and not self.derive_K:
+                        initvars1+=[logKs[pl]]
                         initvars3+=[logKs[pl]]
-                if not self.derive_K:
-                    for pl in self.planets:
-                        initvars3+=[logKs[pl]]
-                initvars3+=[rv_logs2,Ms]
+                        #initvars0+=[logMp_wrt_normals[pl]]
+                        #initvars2+=[logMp_wrt_normals[pl]]
+                        #initvars3+=[logMp_wrt_normals[pl]]
 
-            if self.use_GP:
-                initvars3+=[logs2, phot_power, phot_w0, phot_mean]
-                if self.periodic_kernel is not None:
-                    initvars3+=[periodic_power, periodic_w0, periodic_logQ]
+                if hasattr(self,'rvs'):
+                    if self.rv_npoly>1:
+                        initvars3+=[rv_polys]
+                    if len(self.rvplanets)>0:
+                        for pl in self.rvplanets:
+                            initvars3+=[logKs[pl]]
+                    if not self.derive_K:
+                        for pl in self.planets:
+                            initvars3+=[logKs[pl]]
+                    initvars3+=[rv_logs2,Ms]
+
+                if self.use_GP:
+                    initvars3+=[logs2, phot_power, phot_w0, phot_mean]
+                    if self.periodic_kernel is not None:
+                        initvars3+=[periodic_power, periodic_w0, periodic_logQ]
+                else:
+                    initvars3+=[phot_mean]
+                initvars5=initvars2+initvars3+[logs2,Rs,Ms]
+                if np.any([c.split('_')[0]=='ts' for c in self.cads_long]):
+                    initvars5+=[u_star_tess]
+                if np.any([c.split('_')[0][0]=='k' for c in self.cads_long]):
+                    initvars5+=[u_star_kep]
+                if np.any([c.split('_')[0]=='co' for c in self.cads_long]):
+                    initvars5+=[u_star_corot]
+                if np.any([c.split('_')[0]=='ch' for c in self.cads_long]):
+                    initvars5+=[u_star_cheops]
+
+                ################################################
+                #                  Optimising:
+                ################################################
+
+                if self.debug: print("before",model.check_test_point())
+                pm.find_MAP(start=start)
+                if self.debug: print("before",model.check_test_point())
+                map_soln = pmx.optimize(start=start, vars=initvars1, verbose=self.debug)
+                map_soln = pmx.optimize(start=map_soln, vars=initvars2, verbose=self.debug)
+                map_soln = pmx.optimize(start=map_soln, vars=initvars3, verbose=self.debug)
+                map_soln = pmx.optimize(start=map_soln, vars=initvars4, verbose=self.debug)
+                #Doing everything except the marginalised periods:
+                map_soln = pmx.optimize(start=map_soln, vars=initvars5, verbose=self.debug)
+                map_soln = pmx.optimize(start=map_soln, verbose=self.debug)
+                map_soln = pmx.optimize(start=map_soln, vars=initvars1, verbose=self.debug)
+                #map_soln = pmx.optimize(start=start, vars=[logs2], verbose=self.debug)
+
+                if self.debug: print("after",model.check_test_point())
             else:
-                initvars3+=[phot_mean]
-            initvars5=initvars2+initvars3+[logs2,Rs,Ms]
-            if np.any([c.split('_')[0]=='ts' for c in self.cads_long]):
-                initvars5+=[u_star_tess]
-            if np.any([c.split('_')[0][0]=='k' for c in self.cads_long]):
-                initvars5+=[u_star_kep]
-            if np.any([c.split('_')[0]=='co' for c in self.cads_long]):
-                initvars5+=[u_star_corot]
-            if np.any([c.split('_')[0]=='ch' for c in self.cads_long]):
-                initvars5+=[u_star_cheops]
-
-            ################################################
-            #                  Optimising:
-            ################################################
-
-            if self.debug: print("before",model.check_test_point())
-            pm.find_MAP(start=start)
-            if self.debug: print("before",model.check_test_point())
-            map_soln = pmx.optimize(start=start, vars=initvars1, verbose=self.debug)
-            map_soln = pmx.optimize(start=map_soln, vars=initvars2, verbose=self.debug)
-            map_soln = pmx.optimize(start=map_soln, vars=initvars3, verbose=self.debug)
-            map_soln = pmx.optimize(start=map_soln, vars=initvars4, verbose=self.debug)
-            #Doing everything except the marginalised periods:
-            map_soln = pmx.optimize(start=map_soln, vars=initvars5, verbose=self.debug)
-            map_soln = pmx.optimize(start=map_soln, verbose=self.debug)
-            map_soln = pmx.optimize(start=map_soln, vars=initvars1, verbose=self.debug)
-            #map_soln = pmx.optimize(start=start, vars=[logs2], verbose=self.debug)
-
-            if self.debug: print("after",model.check_test_point())
+                if self.debug: print("before",model.check_test_point())
+                map_soln = pmx.optimize(verbose=self.debug)
 
             self.model = model
             self.init_soln = map_soln
@@ -2520,7 +2532,8 @@ class monoModel():
             interp (bool, optional): Whether to interpolate the binned out-of-transit GP to the fine time grid (only possible with self.bin_oot is used)
             newgp (bool, optional): Whether to initialise a new GP using the sampled kernel hyperparameters to re-predict the fine time grid
         """
-        assert interp^newgp #There can be only one
+        if self.bin_oot:
+            assert interp^newgp, "Have to either interpolate or use a new GP if the out-of-transit data is binned"
         n_samp = 7 if n_samp is None else n_samp
         print("Initalising GP models for plotting with n_samp=",n_samp)
         if newgp:
@@ -2551,9 +2564,8 @@ class monoModel():
 
         if n_samp==1:
             #Creating the median model:
-
             if interp:
-                assert self.bin_oot
+                #assert self.bin_oot
                 smooth_func=interpolate.interp1d(np.hstack((np.min(self.lc.time)-0.5,self.model_time,np.max(self.lc.time)+0.5)),
                                                  np.hstack((0,self.init_soln['gp_pred'],0)),kind='slinear')
                 print("successfully interpolated GP means")
@@ -2728,8 +2740,13 @@ class monoModel():
         for key1 in self.trans_to_plot['model']:
             self.trans_to_plot['all'][key1]={}
             for key2 in self.trans_to_plot['model'][key1]:
-                self.trans_to_plot['all'][key1][key2]=np.zeros(len(self.lc.time))
-                self.trans_to_plot['all'][key1][key2][self.lc.near_trans*self.lc.mask]=self.trans_to_plot['model'][key1][key2][self.model_near_trans]
+                if hasattr(self,'model_near_trans'):
+                    self.trans_to_plot['all'][key1][key2]=np.zeros(len(self.lc.time))
+                    self.trans_to_plot['all'][key1][key2][self.lc.near_trans*self.lc.mask]=self.trans_to_plot['model'][key1][key2][self.model_near_trans]
+                else:
+                    self.trans_to_plot['all'][key1][key2]=np.zeros(len(self.lc.time))
+                    self.trans_to_plot['all'][key1][key2][self.lc.mask]=self.trans_to_plot['model'][key1][key2][:]
+
         if len(self.planets)==1 and list(self.planets.keys())[0] not in self.trans_to_plot['model']:
             self.trans_to_plot['model'][list(self.planets.keys())[0]] = self.trans_to_plot['model']['allpl']
             self.trans_to_plot['all'][list(self.planets.keys())[0]] = self.trans_to_plot['all']['allpl']
@@ -4160,7 +4177,8 @@ class monoModel():
             if return_fig:
                 return fig
 
-    def PlotPeriods(self, plot_loc=None, ylog=True, xlog=True, nbins=25, pmax=None, pmin=None, ymin=None,ymax=None):
+    def PlotPeriods(self, plot_loc=None, ylog=True, xlog=True, nbins=25, 
+                    pmax=None, pmin=None, ymin=None,ymax=None,extra_factor=1):
         """Plot Marginalised probabilities of the possible periods
 
         Args:
@@ -4187,7 +4205,7 @@ class monoModel():
                 plt.subplot(1,len(plot_pers),npl+1)
                 if pl in self.duos+self.trios:
                     #As we're using the nanmedian log10(prob)s for each period, we need to make sure their sums add to 1.0
-                    probs=logsumexp(self.trace['logprob_marg_'+pl] - logsumexp(self.trace['logprob_marg_'+pl]),axis=0)/np.log(10)
+                    probs=logsumexp(np.log(extra_factor)+self.trace['logprob_marg_'+pl] - logsumexp(np.log(extra_factor)+self.trace['logprob_marg_'+pl]),axis=0)/np.log(10)
                     pers = np.nanmedian(self.trace['per_'+pl],axis=0)
                     pmax = np.nanmax(pers)*1.03 if pmax is None else pmax
                     pmin = np.nanmin(pers)*0.9 if pmin is None else pmin
@@ -4218,8 +4236,8 @@ class monoModel():
                     plt.legend()
                     if xlog:
                         plt.xscale('log')
-                        plt.xticks([20,40,60,80,100,150,200,250,300,350,400,450,500,600,800,1000,1500,2000,2500,3000,3500],
-                                   np.array([20,40,60,80,100,150,200,250,300,350,400,450,500,600,800,1000,1500,2000,2500,3000,3500]).astype(str))
+                        plt.xticks([20,30,40,60,80,100,150,200,250,300,350,400,450,500,600,800,1000,1500,2000,2500,3000,3500],
+                                   np.array([20,30,40,60,80,100,150,200,250,300,350,400,450,500,600,800,1000,1500,2000,2500,3000,3500]).astype(str))
                         #plt.xticklabels([20,40,60,80,100,150,200,250])
                     plt.ylabel("$\log_{10}{p}$")
                     plt.xlabel("Period [d]")
