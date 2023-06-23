@@ -2021,7 +2021,7 @@ class monoModel():
                 if pl not in logvels:
                     logvels[pl]= pm.Deterministic("logvel_"+pl,tt.log(vels[pl]))
                 if pl not in a_Rs:
-                    a_Rs[pl] = pm.Deterministic("a_Rs_"+pl, orbits[pl].a)
+                    a_Rs[pl] = pm.Deterministic("a_Rs_"+pl, orbits[pl].a/Rs)
                 if pl not in tdurs:
                     #if 'tdur' in self.marginal_params:
                     tdurs[pl]=pm.Deterministic("tdur_"+pl,

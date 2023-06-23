@@ -169,8 +169,14 @@ class lc():
                     cuts+=[ts]
                 else:
                     setattr(self,ts,getattr(self,ts)[binixsort])
+            elif 'bin2_' in ts:
+                if not len(getattr(self,ts))==len(self.bin2_time):
+                    delattr(self,ts)
+                    cuts+=[ts]
+                else:
+                    setattr(self,ts,getattr(self,ts)[binixsort])
             else:
-                assert len(getattr(self,ts))==len(self.time)
+                assert len(getattr(self,ts))==len(self.time), ts+" timeseries is not the same length as time ("+str(len(getattr(self,ts)))+" vs "+str(len(self.time))+")"
                 setattr(self,ts,getattr(self,ts)[ixsort])
         for c in cuts:
             self.timeseries.remove(c)
@@ -962,7 +968,7 @@ class multilc(lc):
 
         if self.all_ids['tess'] is not None and self.all_ids['tess'] is not {} and 'search' in self.all_ids['tess'] and self.all_ids['tess']['search'] is not None:
             for sector in self.all_ids['tess']['search']:
-                searchlist=['spoc_20','spoc_120','spoc_1800','qlp_1800'] if all_pipelines else ['all']
+                searchlist=['spoc_20','spoc_120','spoc_200','spoc_600','spoc_1800','qlp_200','qlp_600','qlp_1800'] if all_pipelines else ['all']
                 for search in searchlist:
                     all_lcs+=[self.get_tess_lc(sector,search=search,**kwargs)]
         if self.all_ids['k2'] is not None and self.all_ids['k2'] is not {} and 'search' in self.all_ids['k2'] and self.all_ids['k2']['search'] is not None:
