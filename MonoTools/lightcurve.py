@@ -161,6 +161,8 @@ class lc():
         ixsort=np.argsort(self.time)[:]
         if 'bin_time' in self.timeseries:
             binixsort=np.argsort(self.bin_time)[:]
+        if 'bin2_time' in self.timeseries:
+            bin2ixsort=np.argsort(self.bin2_time)[:]
         cuts=[]
         for ts in self.timeseries:
             if 'bin_' in ts:
@@ -174,7 +176,7 @@ class lc():
                     delattr(self,ts)
                     cuts+=[ts]
                 else:
-                    setattr(self,ts,getattr(self,ts)[binixsort])
+                    setattr(self,ts,getattr(self,ts)[bin2ixsort])
             else:
                 assert len(getattr(self,ts))==len(self.time), ts+" timeseries is not the same length as time ("+str(len(getattr(self,ts)))+" vs "+str(len(self.time))+")"
                 setattr(self,ts,getattr(self,ts)[ixsort])
@@ -389,7 +391,7 @@ class lc():
                 timearr=self.bin_time[:] if 'bin_' in its else self.time[:]
 
                 maskarr=self.mask[:] if 'bin_' not in its else None
-                if flatcadences is not 'all':
+                if flatcadences!='all':
                     if 'bin_' in its:
                         cadmask=np.isin(self.bin_cadence,np.array(flatcadences.split(',')))
                     else:
