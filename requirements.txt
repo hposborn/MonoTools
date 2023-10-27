@@ -1,5 +1,5 @@
 matplotlib
-numpy
+numpy==1.21.0
 pandas
 scipy
 astropy

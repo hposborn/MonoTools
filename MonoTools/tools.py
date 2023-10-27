@@ -254,12 +254,13 @@ def openFits(f,fname,mission,cut_all_anom_lim=4.0,use_ppt=True,force_raw_flux=Fa
 
     return lc
 
-def find_time_regions(time,split_gap_size=1.5):
+def find_time_regions(time,split_gap_size=1.5,min_region_dur=0.25):
     if np.nanmax(np.diff(np.sort(time)))>split_gap_size:
         #We have gaps in the lightcurve, so we'll find the bins by looping through those gaps
         time_starts = np.hstack((np.nanmin(time),np.sort(time)[1+np.where(np.diff(np.sort(time))>split_gap_size)[0]]))
         time_ends   = np.hstack((time[np.where(np.diff(np.sort(time))>split_gap_size)[0]],np.nanmax(time)))
-        return [(time_starts[i],time_ends[i]) for i in range(len(time_starts))]
+        reg_durs=np.array([time_ends[i]-time_starts[i] for i in np.arange(len(time_starts))])
+        return [(time_starts[i],time_ends[i]) for i in np.arange(len(time_starts))[reg_durs>min_region_dur]]
     else:
         return [(np.nanmin(time),np.nanmax(time))]
 
@@ -757,7 +758,7 @@ def CutAnomDiff(flux,thresh=4.2):
                      abs(flux[-1]-np.median(flux[-3:-1]))<(np.median(abs(diffarr[0,:]))*thresh*5)))
     return anoms
 
-def observed(tic,radec=None,maxsect=69):
+def observed(tic,radec=None,maxsect=84):
     # Using either "webtess" page or Chris Burke's tesspoint to check if TESS object was observed:
     # Returns dictionary of each sector and whether it was observed or not
     if radec is None and type(tic)!=SkyCoord:
