@@ -96,7 +96,7 @@ class lc():
         self.flx_unit   = self.flx_unit_dic[flx_system][0] if flx_system!='elec' else 1/np.nanmedian(fluxes['flux'])
 
         #Adding timeseries:
-        finitetimemask=[np.isfinite(time)]
+        finitetimemask=np.isfinite(time)
         self.time = time[finitetimemask]
         self.timeseries+=['time']
         self.cadence = np.tile(cadence_str,np.sum(finitetimemask))
@@ -301,7 +301,7 @@ class lc():
 
             if mask_islands:
                 #Masking islands of data which are <12hrs long and >12hrs from other data
-                time_regions=tools.find_time_regions(self.time)
+                time_regions=tools.find_time_regions(self.time,**kwargs)
                 xmask=np.tile(True,np.sum(self.flux_mask))
                 for j in range(len(time_regions)):
                     jump_before = 100 if j==0 else time_regions[j][0]-time_regions[j-1][1]
@@ -493,8 +493,12 @@ class lc():
         ootlcdict['ootbin_near_trans']=np.hstack((np.tile(False,np.sum(np.isfinite(getattr(self,"bin_"+flux_name)))),
                                                   np.tile(True,np.sum(near_transit_mask*self.mask)) ))
         assert hasattr(self,'in_trans')
-        ootlcdict['ootbin_in_trans']=np.hstack((np.tile(False,np.sum(np.isfinite(getattr(self,"bin_"+flux_name)))),
-                                        self.in_trans[near_transit_mask*self.mask] ))
+        if type(self.in_trans)==dict:
+            ootlcdict['ootbin_in_trans']=np.hstack((np.tile(False,np.sum(np.isfinite(getattr(self,"bin_"+flux_name)))),
+                                                self.in_trans['all'][near_transit_mask*self.mask] ))
+        else:
+            ootlcdict['ootbin_in_trans']=np.hstack((np.tile(False,np.sum(np.isfinite(getattr(self,"bin_"+flux_name)))),
+                                                self.in_trans[near_transit_mask*self.mask] ))
 
         #Sorting these timeseries by the stacked time
         for key in ["ootbin_"+flux_name,'ootbin_flux_err','ootbin_cadence','ootbin_near_trans','ootbin_in_trans']:
@@ -546,7 +550,7 @@ class lc():
         #Found lightcurve gaps - making shorter blocks to loop through.
         if np.nanmax(np.diff(np.sort(self.time)))>split_gap_size:
             #We have gaps in the lightcurve, so we'll find the bins by looping through those gaps
-            time_regions=tools.find_time_regions(self.time)
+            time_regions=tools.find_time_regions(self.time,**kwargs)
             for j in range(len(time_regions)):
                 time_bools[mask*(self.time>=time_regions[j][0])*(self.time<=time_regions[j][1])]=int(j+1)
                 cad=np.nanmedian(np.diff(self.time[time_bools==j+1]))
@@ -607,7 +611,7 @@ class lc():
         self.timeseries=list(np.unique(self.timeseries))
    
     def plot(self, plot_rows=1, timeseries=['flux'], jump_thresh=10, ylim=None, xlim=None, bin_only=False,
-             yoffset=0, savepng=False, savepdf=False,savefileloc=None,plot_ephem=None, plot_masked=True):
+             yoffset=0, savepng=False, savepdf=False,savefileloc=None,plot_ephem=None, plot_masked=True,**kwargs):
         """Plot the lightcurve using Matplotlib.
 
         In the default case, either data that is extremely long (i.e Kepler), or data that has a large gap (i.e. TESS Y1/3) will be split into two rows.
@@ -633,7 +637,7 @@ class lc():
             self.make_mask()
 
         minmax_global = (np.min(self.flux[self.mask]),np.max(self.flux[self.mask]))
-        total_time=self.time[-1]-self.time[0]
+        total_time=self.time[self.mask][-1]-self.time[self.mask][0]
         import seaborn as sns
         sns.set_palette('viridis')
         if 'flux_flat' in timeseries and not hasattr(self,'flux_flat'):
@@ -744,7 +748,7 @@ class multilc(lc):
             for key in pick:
                 setattr(self,key,pick[key])
 
-    def stack(self, newlcs, priorities=None,**kwargs):
+    def stack(self, newlcs, priorities=None, **kwargs):
         """Stacks lightcurves onto the multilc object
 
         Args:
@@ -752,9 +756,10 @@ class multilc(lc):
             priorities (list, optional): Which lightcurve sources take priority in the case that they overlap in timing?
                                          This is required in the case that lightcurves are overlapping... Defaults to None.
         """
+        print(priorities)
         if priorities is None:
             #Here we can list the priorities for Kepler/K2 and TESS:
-            priorities=["k1_120_pdc","k1_1800_pdc","k2_120_ev","k2_120_vand","k2_120_pdc","k2_1800_ev","k2_1800_vand","k2_1800_pdc","ts_20_pdc","ts_120_pdc","ts_600_pdc","ts_1800_pdc","ts_600_tica","ts_600_qlp","ts_1800_qlp","ts_1800_tica","ts_600_el","ts_1800_el"]
+            priorities=["k1_120_pdc","k1_1800_pdc","k2_120_ev","k2_120_vand","k2_120_pdc","k2_1800_ev","k2_1800_vand","k2_1800_pdc","ts_20_pdc","ts_120_pdc","ts_200_pdc","ts_600_pdc","ts_1800_pdc","ts_200_tica","ts_600_tica","ts_200_qlp","ts_600_qlp","ts_1800_qlp","ts_1800_tica","ts_600_el","ts_1800_el"]
         #
         # Tidying up before stacking:
         if newlcs is not None and len(newlcs)>0:
@@ -902,21 +907,22 @@ class multilc(lc):
         if not hasattr(self,'radec') and search!=[self.mission]:
             #OK - we need a coordinate. Hacking one from the ID...
             self.get_radec()
-        from astropy.coordinates import FK5
+        from astropy.coordinates import FK5,GeocentricTrueEcliptic
         # K2 ID and data:
         if (overwrite or self.all_ids['k2']=={}) and ('all' in search or 'k2' in search):
-            v = Vizier(catalog=['J/ApJS/224/2'])
-            res = v.query_region(self.radec.transform_to(FK5(equinox='J2000.0')), radius=k2conerad*u.arcsec, cache=False)
-            if len(res)>0 and len(res[0])>0:
-                self.all_ids['k2']={'id':res[0]['EPIC'][0]}
-            else:
-                v = Vizier(catalog=['IV/34'])
+            if abs(self.radec.transform_to(GeocentricTrueEcliptic).lat.deg)<10:#Only foing this search for candidates close to the ecliptic...
+                v = Vizier(catalog=['J/ApJS/224/2'])
                 res = v.query_region(self.radec.transform_to(FK5(equinox='J2000.0')), radius=k2conerad*u.arcsec, cache=False)
                 if len(res)>0 and len(res[0])>0:
-                    res=res[0].to_pandas()
-                    res=res.iloc[0] if type(res)==pd.DataFrame else res
-                    self.all_ids['k2']={'id':res['ID']}
-                    self.all_ids['k2']['data']=res
+                    self.all_ids['k2']={'id':res[0]['EPIC'][0]}
+                else:
+                    v = Vizier(catalog=['IV/34'])
+                    res = v.query_region(self.radec.transform_to(FK5(equinox='J2000.0')), radius=k2conerad*u.arcsec, cache=False)
+                    if len(res)>0 and len(res[0])>0:
+                        res=res[0].to_pandas()
+                        res=res.iloc[0] if type(res)==pd.DataFrame else res
+                        self.all_ids['k2']={'id':res['ID']}
+                        self.all_ids['k2']['data']=res
         if (self.all_ids['k2']!={} and 'id' in self.all_ids['k2']) and (overwrite or 'search' not in self.all_ids['k2'] or self.all_ids['k2']['search'] is None or len(self.all_ids['k2']['search'])==0) and ('all' in search or 'k2' in search):
             self.all_ids['k2']['search']=self.get_K2_campaigns()
         
@@ -933,25 +939,26 @@ class multilc(lc):
             self.all_ids['tess']['search']=self.get_tess_sectors()
         # Kepler ID and data:
         if (overwrite or self.all_ids['kepler']=={}) and ('all' in search or 'kepler' in search):
-            v = Vizier(catalog=['V/133/kic'])
-            res=v.query_region(self.radec.transform_to(FK5(equinox='J2000')), radius=5*u.arcsec, catalog=['V/133/kic'])
-            if 'V/133/kic' in res.keys():
-                if len(res['V/133/kic'])>1:
-                    #print(res['V/133/kic'][['KIC','kepmag']], "MULTIPLE KICS FOUND")
-                    self.all_ids['kepler'] = {'id':res['V/133/kic']['KIC'][np.argmin(res['V/133/kic']['kepmag'])]}
-                elif len(res['V/133/kic'])==1:
-                    #print(res['V/133/kic'][['KIC','kepmag']], "ONE KIC FOUND")
-                    self.all_ids['kepler'] = {'id':res['V/133/kic']['KIC'][0]}
+            if self.radec.separation(SkyCoord("19:22:40.0 +44:30:00.0", unit=(u.hourangle,u.deg))).deg<8:#Only foing this search for candidates close to the field...
+                v = Vizier(catalog=['V/133/kic'])
+                res=v.query_region(self.radec.transform_to(FK5(equinox='J2000')), radius=5*u.arcsec, catalog=['V/133/kic'])
+                if 'V/133/kic' in res.keys():
+                    if len(res['V/133/kic'])>1:
+                        #print(res['V/133/kic'][['KIC','kepmag']], "MULTIPLE KICS FOUND")
+                        self.all_ids['kepler'] = {'id':res['V/133/kic']['KIC'][np.argmin(res['V/133/kic']['kepmag'])]}
+                    elif len(res['V/133/kic'])==1:
+                        #print(res['V/133/kic'][['KIC','kepmag']], "ONE KIC FOUND")
+                        self.all_ids['kepler'] = {'id':res['V/133/kic']['KIC'][0]}
         if (self.all_ids['kepler']!={} and 'id' in self.all_ids['kepler']) and (overwrite or 'search' not in self.all_ids['kepler'] or self.all_ids['kepler']['search'] is None or len(self.all_ids['kepler']['search'])==0) and ('all' in search or 'kepler' in search):
             self.all_ids['kepler']['search']=np.arange(18)
 
         # CoRoT ID and data:
         if (overwrite or self.all_ids['corot']=={}) and ('all' in search or 'corot' in search):
             #We need to do this process to access the fits files as to find the ID, we can do this at a later point
-            df=self.get_corot_campaigns()
-            if df is not None and len(df)>0:
-                self.all_ids['corot']={'id':df['ID'].values[0],
-                                       'search':df}
+            if np.min(self.radec.separation(SkyCoord(["06:30:00 02:00:00","19:00:00 02:00:00"],unit=(u.hourangle,u.deg))).deg)<12:#Only foing this search for candidates close to the two fields...
+                df=self.get_corot_campaigns()
+                if df is not None and len(df)>0:
+                    self.all_ids['corot']={'id':df['ID'].values[0], 'search':df}
 
     def get_all_lightcurves(self,all_pipelines=False,extralc=None,**kwargs):
         """
@@ -1580,9 +1587,10 @@ class multilc(lc):
                 if 'ORIGIN' in f[0][0].header and f[0][0].header['ORIGIN']=='MIT/QLP':
                     ilc.load_lc(np.hstack([fi[1].data['TIME'] for fi in f]), 
                                 fluxes={'flux':np.hstack([fi[1].data['SAP_FLUX'] for fi in f]),
-                                        'xl_ap_flux':np.hstack([fi[1].data['KSPSAP_FLUX_LAG'] for fi in f]),
-                                        'xs_ap_flux':np.hstack([fi[1].data['KSPSAP_FLUX_SML'] for fi in f])},
-                                flux_errs={'flux_err':np.hstack([fi[1].data['KSPSAP_FLUX_ERR'] for fi in f])},
+                                        'xl_ap_flux':np.hstack([fi[1].data['KSPSAP_FLUX_LAG'] if 'KSPSAP_FLUX_LAG' in fi[1].data.columns.names else fi[1].data['DET_FLUX_LAG'] for fi in f]),
+                                        'xs_ap_flux':np.hstack([fi[1].data['KSPSAP_FLUX_SML'] if 'KSPSAP_FLUX_SML' in fi[1].data.columns.names else fi[1].data['DET_FLUX_SML'] for fi in f]),
+                                        'bg_flux':np.hstack([fi[1].data['SAP_BKG'] for fi in f])},
+                                flux_errs={'flux_err':np.hstack([fi[1].data['KSPSAP_FLUX_ERR'] if 'KSPSAP_FLUX_ERR' in fi[1].data.columns.names else fi[1].data['DET_FLUX_ERR'] for fi in f])},
                                 src='qlp',mission='tess', jd_base=2457000, flx_system='elec', sect=sect, 
                                 cent1=np.hstack([fi[1].data['SAP_X'] for fi in f]), cent2=np.hstack([fi[1].data['SAP_Y'] for fi in f]))
                     return ilc
@@ -1716,7 +1724,7 @@ class multilc(lc):
         if hasattr(self,'flux'):
             self.make_mask()
     
-    def init_plot(self, plot_rows=None, timeseries=[], xlim=None, cadences=[], plot_row_min=3, plot_ephem=None, Rstar=None, use_masked=True):
+    def init_plot(self, plot_rows=None, timeseries=[], xlim=None, cadences=[], plot_row_min=3, plot_ephem=None, Rstar=None, use_masked=True,**kwargs):
         '''Initialise plotting parameters
         '''
         # Step 1 - count total time. Divide by plot_rows, or estimate ideal plot_rows given data duration
@@ -1751,7 +1759,7 @@ class multilc(lc):
                 self.init_plot_info['total_time']+=self.init_plot_info['fine_cuts'][cad]['start_end_dur']
                 self.init_plot_info['ordered_cadences']+=[cad]
         self.init_plot_info['ordered_cadences']=np.array(self.init_plot_info['ordered_cadences'])
-        self.init_plot_info['time_regions']=tools.find_time_regions(self.time[self.init_plot_info['cadence_mask']*self.init_plot_info['xlim_mask']])
+        self.init_plot_info['time_regions']=tools.find_time_regions(self.time[self.init_plot_info['cadence_mask']*self.init_plot_info['xlim_mask']],**kwargs)
         for nj in range(len(self.init_plot_info['time_regions'])):
             all_cads=np.unique(self.cadence[(~np.isin(self.cadence,self.mask_cadences))*(self.time>self.init_plot_info['time_regions'][nj][0])*(self.time<self.init_plot_info['time_regions'][nj][1])])
             self.init_plot_info['big_cuts'][nj]={'start':self.init_plot_info['time_regions'][nj][0],'end':self.init_plot_info['time_regions'][nj][1],
@@ -1818,7 +1826,7 @@ class multilc(lc):
 
     def plot(self, plot_rows=None, timeseries=['flux'], ylim=None, xlim=None, overwrite=False,norm_all_timeseries=True,bin_only=False,
              yoffset=0, savepng=True, savepdf=False, plot_ephem=None, plot_row_min=3,Rstar=None,cadences=[],plot_masked=True,
-             plot_legend=True, title=None):
+             plot_legend=True, title=None, **kwargs):
         """Plot the lightcurve using Matplotlib.
 
         In the default case, either data that is extremely long (i.e Kepler), or data that has a large gap (i.e. TESS Y1/3) will be split into two rows.
@@ -1850,7 +1858,7 @@ class multilc(lc):
         #Initialising the plotting info:
         if not hasattr(self,'init_plot_info') or overwrite:
             self.init_plot(plot_rows=plot_rows,timeseries=timeseries,xlim=xlim,cadences=cadences,
-                            plot_row_min=plot_row_min,plot_ephem=plot_ephem,Rstar=Rstar,use_masked=plot_masked)
+                            plot_row_min=plot_row_min,plot_ephem=plot_ephem,Rstar=Rstar,use_masked=plot_masked, **kwargs)
         elif hasattr(self,'init_plot_info'):
             assert 'fine_cuts' in self.init_plot_info and 'ordered_cadences' in self.init_plot_info
 
@@ -1861,14 +1869,14 @@ class multilc(lc):
         import seaborn as sns
         sns.set_palette('viridis')
         if 'flux_flat' in timeseries and not hasattr(self,'flux_flat'):
-            self.flatten()
+            self.flatten(**kwargs)
                 
         for cad in self.init_plot_info['ordered_cadences']:
             #print(self.init_plot_info['fine_cuts'][cad]['n_plot_col'])
             subplots[cad]=fig.add_subplot(gs[self.init_plot_info['fine_cuts'][cad]['n_plot_row'],self.init_plot_info['fine_cuts'][cad]['n_plot_col'][0]:self.init_plot_info['fine_cuts'][cad]['n_plot_col'][1]])
         for it, itimeseries in enumerate(timeseries):
             if not hasattr(self,'bin_'+itimeseries):
-                self.bin(timeseries=[itimeseries],use_masked=plot_masked)
+                self.bin(timeseries=[itimeseries],use_masked=plot_masked, **kwargs)
             if norm_all_timeseries and 'flux' not in itimeseries:
                 #Normalising
                 norm_sub = np.nanmedian(getattr(self,itimeseries)[self.mask])
@@ -1905,6 +1913,7 @@ class multilc(lc):
                         subplots[cad].plot(self.time[ix],yoffset*it+(getattr(self,itimeseries)[ix]-norm_sub)*norm_mult,'.k',markersize=0.75,alpha=0.25)
                     subplots[cad].plot(self.bin_time[bin_ix],yoffset*it+(getattr(self,"bin_"+itimeseries)[bin_ix]-norm_sub)*norm_mult,'.',
                                        alpha=0.8,markersize=3.0,color='C'+str(it),label=itimeseries)
+
                 if plot_ephem is not None:
                     #Plotting ephemerides as triangles under transits (if necessary)
                     assert type(plot_ephem) is dict
@@ -1986,7 +1995,7 @@ class multilc(lc):
         from bokeh.models import Range1d
         from bokeh.layouts import layout, row
 
-        fig = figure(title=tools.id_dic[self.mission]+str(id).zfill(11), plot_width=plot_width, plot_height=plot_height)
+        fig = figure(title=tools.id_dic[self.mission]+str(id).zfill(11), width=plot_width, height=plot_height)
         if saveloc is None:
             output_file(self.savefileloc.replace('_lc.pkl.gz','_plot.html'))
         else:

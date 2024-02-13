@@ -254,7 +254,7 @@ def openFits(f,fname,mission,cut_all_anom_lim=4.0,use_ppt=True,force_raw_flux=Fa
 
     return lc
 
-def find_time_regions(time,split_gap_size=1.5,min_region_dur=0.25):
+def find_time_regions(time,split_gap_size=1.5,min_region_dur=0.25,**kwargs):
     if np.nanmax(np.diff(np.sort(time)))>split_gap_size:
         #We have gaps in the lightcurve, so we'll find the bins by looping through those gaps
         time_starts = np.hstack((np.nanmin(time),np.sort(time)[1+np.where(np.diff(np.sort(time))>split_gap_size)[0]]))

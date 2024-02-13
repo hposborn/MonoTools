@@ -113,8 +113,12 @@ class monoModel():
         #Initialising default modelling parameters. These can also be updated in init_model()
         self.overwrite=overwrite
         self.defaults={'assume_circ':False,     # assume_circ - bool - Assume circular orbits (no ecc & omega)?
-                       'use_GP':True,           # use_GP - bool - Fit for "second light" (
-                       'train_GP':True,         # train_GP - bool - Fit for "second light" (
+                       'use_GP':True,           # use_GP - bool - Fit a GP for the transit photometry
+                       'train_GP':True,         # train_GP - bool - Train the GP using out-of-transit photometry
+                       'local_spline':False,    # local_spline - bool - For mono/duo/trio transits, include a local spline around transit to incorporate extra correlated noise.
+                       'n_spline_pts':6,        # n_spline_pts - int - Number of spline breakpoints for the around transit bspline
+                       'spline_order':3,        # spline_order - int - Order for spline splitting. Default = 3 (cubic)
+                       'fit_no_flatten':False,  # fit_no_flatten - bool - If no GP, by default we spline-flatten the lightcurve. Use fit_no_flatten to turn this off
                        'constrain_LD':True,     # constrain_LD - bool - Use constrained LDs from model or unconstrained?
                        'ld_mult':3.,            # ld_mult - float - How much to multiply theoretical LD param uncertainties
                        'useL2':False,           # useL2 - bool - Fit for "second light" (i.e. a binary or planet+blend)
@@ -163,8 +167,8 @@ class monoModel():
         if lc is None or type(lc) is not lightcurve.multilc:
             lc = lightcurve.multilc(ID,mission)
         self.lc=lc
-        setattr(lc,'near_trans', np.tile(False, len(lc.time)) if not hasattr(lc,'near_trans') else lc.near_trans)
-        setattr(lc,'in_trans', np.tile(False, len(lc.time)) if not hasattr(lc,'in_trans') else lc.in_trans)
+        setattr(lc,'near_trans', {'all':np.tile(False, len(lc.time))} if not hasattr(lc,'near_trans') else lc.near_trans)
+        setattr(lc,'in_trans', {'all':np.tile(False, len(lc.time))} if not hasattr(lc,'in_trans') else lc.in_trans)
 
         if not np.all(np.array([hasattr(self,starpar) for starpar in ['rhostar','Rstar','logg','Mstar']])):
             self.init_starpars()
@@ -179,7 +183,7 @@ class monoModel():
             self.multis=[];self.monos=[];self.duos=[];self.trios=[]
 
             if planets is not None:
-                for pl in planets:
+                for pl in self.planets:
                     self.add_planet(self, planets[pl]['orbit_flag'], planets[pl], pl)
             self.savefileloc=savefileloc
 
@@ -375,8 +379,10 @@ class monoModel():
                                 ((3*pl_dic['period']*86400) / (np.pi**2*6.67e-11*rho_S*1410))**(-2/3),
                                 0.01,2.0)**0.5
         phase=(self.lc.time-pl_dic['tcen']-0.5*pl_dic['period'])%pl_dic['period']-0.5*pl_dic['period']
-        self.lc.near_trans += abs(phase)<self.cut_distance*pl_dic['tdur']
-        self.lc.in_trans   += abs(phase)<self.mask_distance*pl_dic['tdur']
+        self.lc.near_trans[name] = abs(phase)<self.cut_distance*pl_dic['tdur']
+        self.lc.near_trans['all']+= self.lc.near_trans[name][:]
+        self.lc.in_trans[name] = abs(phase)<self.mask_distance*pl_dic['tdur']
+        self.lc.in_trans['all']+= self.lc.in_trans[name][:]
 
         self.planets[name]=pl_dic
         self.multis+=[name]
@@ -400,8 +406,10 @@ class monoModel():
         #Adds planet with single eclipses
 
         #Adding the planet to the lightcurve mask arrays first (as compute_period_gaps performs flattening).
-        self.lc.near_trans += abs(self.lc.time-pl_dic['tcen'])<self.cut_distance*pl_dic['tdur']
-        self.lc.in_trans   += abs(self.lc.time-pl_dic['tcen'])<self.mask_distance*pl_dic['tdur']
+        self.lc.near_trans[name] = abs(self.lc.time-pl_dic['tcen'])<self.cut_distance*pl_dic['tdur']
+        self.lc.near_trans['all'] += self.lc.near_trans[name][:]
+        self.lc.in_trans[name] = abs(self.lc.time-pl_dic['tcen'])<self.mask_distance*pl_dic['tdur']
+        self.lc.in_trans['all'] += self.lc.in_trans[name][:]
 
         min_P=np.min([self.planets[pl]['period'] for pl in self.multis]) if len(self.multis)>0 else None
 
@@ -477,7 +485,7 @@ class monoModel():
         """
 
         if not hasattr(self.lc,'flux_flat') or len(self.lc.flux_flat)!=len(self.lc.flux_err):
-            self.lc.flatten(transit_mask=~self.lc.in_trans,**kwargs)
+            self.lc.flatten(transit_mask=~self.lc.in_trans['all'],**kwargs)
 
         rms_series=np.zeros((len(self.lc.time)))
         binsize=(1/n_steps_per_dur)*tdur
@@ -770,9 +778,10 @@ class monoModel():
 
         for per in pl_dic['period_aliases']:
             phase=(self.lc.time-pl_dic['tcen']-0.5*per)%per-0.5*per
-            self.lc.near_trans+=abs(phase)<self.cut_distance*pl_dic['tdur']
-        self.lc.in_trans+=abs(self.lc.time-pl_dic['tcen'])<self.mask_distance*pl_dic['tdur']
-        self.lc.in_trans+=abs(self.lc.time-pl_dic['tcen_2'])<self.mask_distance*pl_dic['tdur']
+            self.lc.near_trans[name]=abs(phase)<self.cut_distance*pl_dic['tdur']
+            self.lc.near_trans['all']+=self.lc.near_trans[name][:]
+        self.lc.in_trans[name]=(abs(self.lc.time-pl_dic['tcen'])<self.mask_distance*pl_dic['tdur'])|(abs(self.lc.time-pl_dic['tcen_2'])<self.mask_distance*pl_dic['tdur'])
+        self.lc.in_trans['all']+=self.lc.in_trans[name][:]
 
         self.planets[name]=pl_dic
         self.trios+=[name]
@@ -816,9 +825,10 @@ class monoModel():
 
         for per in pl_dic['period_aliases']:
             phase=(self.lc.time-pl_dic['tcen']-0.5*per)%per-0.5*per
-            self.lc.near_trans+=abs(phase)<self.cut_distance*pl_dic['tdur']
-        self.lc.in_trans+=abs(self.lc.time-pl_dic['tcen'])<self.mask_distance*pl_dic['tdur']
-        self.lc.in_trans+=abs(self.lc.time-pl_dic['tcen_2'])<self.mask_distance*pl_dic['tdur']
+            self.lc.near_trans[name]=abs(phase)<self.cut_distance*pl_dic['tdur']
+            self.lc.near_trans['all']+=self.lc.near_trans[name][:]
+        self.lc.in_trans[name]=(abs(self.lc.time-pl_dic['tcen'])<self.mask_distance*pl_dic['tdur'])|(abs(self.lc.time-pl_dic['tcen_2'])<self.mask_distance*pl_dic['tdur'])
+        self.lc.in_trans['all']+=self.lc.in_trans[name][:]
 
         self.planets[name]=pl_dic
         self.duos+=[name]
@@ -840,14 +850,18 @@ class monoModel():
                 Rstar=self.lc.all_ids['tess']['data'][['rad','eneg_Rad','epos_Rad']].values
             else:
                 Rstar=self.lc.all_ids['tess']['data'][['rad','e_rad','e_rad']].values
+        if Teff is None and hasattr(self.lc,'all_ids') and 'tess' in self.lc.all_ids and 'data' in self.lc.all_ids['tess'] and 'rad' in self.lc.all_ids['tess']['data']:
             if 'eneg_Teff' in self.lc.all_ids['tess']['data'] and self.lc.all_ids['tess']['data']['eneg_Teff'] is not None and self.lc.all_ids['tess']['data']['eneg_Teff']>0:
                 Teff=self.lc.all_ids['tess']['data'][['Teff','eneg_Teff','epos_Teff']].values
             else:
                 Teff=self.lc.all_ids['tess']['data'][['Teff','e_Teff','e_Teff']].values
+        if logg is None:
             if 'eneg_logg' in self.lc.all_ids['tess']['data'] and self.lc.all_ids['tess']['data']['eneg_logg'] is not None and self.lc.all_ids['tess']['data']['eneg_logg']>0:
                 logg=self.lc.all_ids['tess']['data'][['logg','eneg_logg','epos_logg']].values
             else:
                 logg=self.lc.all_ids['tess']['data'][['logg','e_logg','e_logg']].values
+        
+        #Still None at this point means no TIC data...
         if Rstar is None:
             Rstar=np.array([1.0,0.08,0.08])
         if Teff is None:
@@ -1021,8 +1035,8 @@ class monoModel():
         #step=0.133*np.min([self.init_soln['tdur_'+pl] for pl in self.planets]) if hasattr(self,'init_soln') else 0.133*np.min([self.planets[pl]['tdur'] for pl in self.planets])
         #win=6.5*np.max([self.init_soln['tdur_'+pl] for pl in self.planets]) if hasattr(self,'init_soln') else 6.5*np.max([self.planets[pl]['tdur'] for pl in self.planets])
 
-        self.lc.near_trans = np.tile(False, len(self.lc.time))
-        self.lc.in_trans   = np.tile(False, len(self.lc.time))
+        self.lc.near_trans = {'all':np.tile(False, len(self.lc.time))}
+        self.lc.in_trans   = {'all':np.tile(False, len(self.lc.time))}
         for pl in self.planets:
             if pl in self.multis:
                 t0 = self.init_soln['t0_'+pl] if hasattr(self,'init_soln') else self.planets[pl]['tcen']
@@ -1040,29 +1054,32 @@ class monoModel():
                 t0= self.init_soln['t0_'+pl] if hasattr(self,'init_soln') else self.planets[pl]['tcen']
                 phase=abs(self.lc.time-t0)
             dur = self.init_soln['tdur_'+pl] if hasattr(self,'init_soln') else self.planets[pl]['tdur']
-            self.lc.near_trans += abs(phase)<self.cut_distance*dur
-            self.lc.in_trans   += abs(phase)<self.mask_distance*dur
+            self.lc.near_trans[pl] = abs(phase)<self.cut_distance*dur
+            self.lc.near_trans['all'] += self.lc.near_trans[pl][:]
+            self.lc.in_trans[pl] = abs(phase)<self.mask_distance*dur
+            self.lc.in_trans['all'] += self.lc.in_trans[pl][:]
 
-        self.lc.flatten(transit_mask=~self.lc.in_trans,**kwargs)
+        if not self.fit_no_flatten:
+            self.lc.flatten(transit_mask=~self.lc.in_trans['all'],**kwargs)
 
         if self.cut_distance>0 or not self.use_GP:
             if self.bin_oot:
                 #Creating a pseudo-binned dataset where out-of-transit LC is binned to 30mins but near-transit is not.
                 oot_binsize=1/12 if self.mission.lower()=='kepler' else oot_binsize
-                self.lc.OOTbin(near_transit_mask=self.lc.near_trans,use_flat=(not self.use_GP),
+                self.lc.OOTbin(near_transit_mask=self.lc.near_trans['all'],use_flat=(not self.use_GP or self.fit_no_flatten),
                                binsize=oot_binsize)
                 self.model_time=self.lc.ootbin_time[:]
-                self.model_flux=self.lc.ootbin_flux[:] if self.use_GP else self.lc.ootbin_flux_flat[:]
+                self.model_flux=self.lc.ootbin_flux[:] if self.use_GP or self.fit_no_flatten else self.lc.ootbin_flux_flat[:]
                 self.model_flux_err=self.lc.ootbin_flux_err[:]
                 self.model_cadence=self.lc.ootbin_cadence[:]
                 self.model_near_trans=self.lc.ootbin_near_trans[:]
                 self.model_in_trans=self.lc.ootbin_in_trans[:]
             elif not self.bin_oot:
-                self.model_time=self.lc.time[self.lc.mask*self.lc.near_trans][:]
-                self.model_flux=self.lc.flux[self.lc.mask*self.lc.near_trans][:] if self.use_GP else self.lc.flux_flat[self.lc.mask*self.lc.near_trans][:]
-                self.model_flux_err=self.lc.flux_err[self.lc.mask*self.lc.near_trans][:]
-                self.model_cadence=self.lc.cadence[self.lc.mask*self.lc.near_trans][:]
-                self.model_in_trans=self.lc.in_trans[self.lc.mask*self.lc.near_trans][:]
+                self.model_time=self.lc.time[self.lc.mask*self.lc.near_trans['all']][:]
+                self.model_flux=self.lc.flux[self.lc.mask*self.lc.near_trans['all']][:] if self.use_GP or self.fit_no_flatten else self.lc.flux_flat[self.lc.mask*self.lc.near_trans['all']][:]
+                self.model_flux_err=self.lc.flux_err[self.lc.mask*self.lc.near_trans['all']][:]
+                self.model_cadence=self.lc.cadence[self.lc.mask*self.lc.near_trans['all']][:]
+                self.model_in_trans=self.lc.in_trans['all'][self.lc.mask*self.lc.near_trans['all']][:]
                 self.model_near_trans=np.tile(True,len(self.model_time))
                 '''self.lc_near_trans={}
                 lc_len=len(self.lc.time)
@@ -1072,14 +1089,14 @@ class monoModel():
                     else:
                         self.lc_near_trans[key]=self.lc[key]
                 '''
-            if self.debug: print(np.sum(self.lc.near_trans&self.lc.mask),"points in new lightcurve, compared to ",np.sum(self.lc.mask)," in original mask, leaving ",np.sum(self.lc.near_trans),"points in the lc")
+            if self.debug: print(np.sum(self.lc.near_trans['all']&self.lc.mask),"points in new lightcurve, compared to ",np.sum(self.lc.mask)," in original mask, leaving ",np.sum(self.lc.near_trans['all']),"points in the lc")
                 
         else:
             self.model_time=self.lc.time[self.lc.mask][:]
-            self.model_flux=self.lc.flux[self.lc.mask][:] if self.use_GP else self.lc.flux_flat[self.lc.mask][:]
+            self.model_flux=self.lc.flux[self.lc.mask][:] if self.use_GP or self.fit_no_flatten else self.lc.flux_flat[self.lc.mask][:]
             self.model_flux_err=self.lc.flux_err[self.lc.mask][:]
             self.model_cadence=self.lc.cadence[self.lc.mask][:]
-            self.model_in_trans=self.lc.in_trans[self.lc.mask][:]
+            self.model_in_trans=self.lc.in_trans['all'][self.lc.mask][:]
         
         self.cads_long=np.unique(self.lc.cadence[self.lc.mask])
         self.cads_short=np.unique(["_".join(cad.split("_")[:2]) for cad in self.cads_long])
@@ -1183,8 +1200,8 @@ class monoModel():
         print("initialising and training the GP")
 
         prefix='bin_' if use_binned else ''
-        mask=(~self.lc.in_trans)&self.lc.mask
-        if len(self.lc.time[(~self.lc.in_trans)&self.lc.mask])>max_len_lc:
+        mask=(~self.lc.in_trans['all'])&self.lc.mask
+        if len(self.lc.time[(~self.lc.in_trans['all'])&self.lc.mask])>max_len_lc:
             mask[mask]*=np.arange(0,np.sum(mask),1)<max_len_lc
 
         with pm.Model() as gp_train_model:
@@ -1693,7 +1710,7 @@ class monoModel():
                 u_star_cheops = xo.distributions.QuadLimbDark("u_star_cheops", testval=np.array([0.3, 0.2]))
 
             if not hasattr(self,'log_flux_std'):
-                self.log_flux_std=np.array([np.log(np.nanmedian(abs(np.diff(self.lc.flux[(~self.lc.in_trans)&(self.lc.cadence_index[:,nc])])))) for nc in range(len(self.cads_short))]).ravel().astype(floattype)
+                self.log_flux_std=np.array([np.log(np.nanmedian(abs(np.diff(self.lc.flux[(~self.lc.in_trans['all'])&(self.lc.cadence_index[:,nc])])))) for nc in range(len(self.cads_short))]).ravel().astype(floattype)
             if self.debug: print(self.log_flux_std,np.sum(~self.model_in_trans),"/",len(~self.model_in_trans))
 
             logs2 = pm.Normal("logs2", mu = self.log_flux_std-1,
@@ -1831,6 +1848,63 @@ class monoModel():
                     av_incl = pm.Deterministic("av_incl",tt.mean([incls[pl] for pl in self.planets]))
                     sd_incl = pm.Deterministic("sd_incl",tt.std([incls[pl] for pl in self.planets]))
                     mut_incl_prior = pm.Potential("mut_incl_prior", tt.exp(-0.5* ((sd_incl - self.mutual_incl_sigma)/self.mutual_incl_sigma)**2))
+            elif self.local_spline:
+                self.spline_params={}
+                from patsy import dmatrix
+                from scipy.interpolate import BSpline
+                for pl in self.planets:
+                    self.spline_params['spline_model_'+pl]=np.zeros(len(self.model_time))
+                    #Looping over planets - adding polynomial spline across each transit to model unflattened systematics.
+                    if pl not in self.multis:
+                        #knots= np.linspace(self.planets[pl]['tcen']-((self.n_spline_pts)/(self.n_spline_pts-self.spline_order-1))*0.5*self.planets[pl]['tdur'],self.planets[pl]['tcen']+((self.n_spline_pts)/(self.n_spline_pts-self.spline_order-1))*0.5*self.planets[pl]['tdur'],self.n_spline_pts+self.spline_order+1)
+                        self.spline_params['spline_knots_'+pl+'_0']=np.quantile(self.model_time[abs(self.model_time-self.planets[pl]['tcen'])<0.75*self.planets[pl]['tdur']]-self.planets[pl]['tcen'],np.linspace(0,1,self.n_spline_pts+4))*1.5+self.planets[pl]['tcen']
+                        #np.linspace(self.planets[pl]['tcen']+((self.n_spline_pts)/(self.n_spline_pts-self.spline_order-1))*0.5*self.planets[pl]['tdur'],self.planets[pl]['tcen']-((self.n_spline_pts)/(self.n_spline_pts-self.spline_order-1))*0.5*self.planets[pl]['tdur'],self.n_spline_pts+self.spline_order+1)
+                        #
+                        #self.spline_params['timeix_'+pl+'_0'] = abs(self.model_time-self.planets[pl]['tcen'])<1.5*self.planets[pl]['tdur']
+                        self.spline_params['spline_B_'+pl+'_0'] = BSpline.design_matrix(self.model_time, 
+                                                                                   np.hstack([np.tile(np.min(self.model_time),self.spline_order+1), 
+                                                                                              self.spline_params['spline_knots_'+pl+'_0'], 
+                                                                                              np.tile(np.max(self.model_time),self.spline_order+1)]), k=self.spline_order).toarray()
+                        #np.asarray(dmatrix("bs(time, knots=knots, degree="+str(int(self.spline_order))+", include_intercept=True) - 1",
+                        #                                                       {"time": self.model_time.astype(np.float64), "knots": self.spline_params['spline_knots_'+pl+'_0'].astype(np.float64)}), order="F")
+                        nrby=(abs(self.model_time-self.planets[pl]['tcen'])>0.6*self.planets[pl]['tdur'])&(abs(self.model_time-self.planets[pl]['tcen'])<5*self.planets[pl]['tdur'])
+                        sd=np.nanmedian(abs(np.diff(self.model_flux[nrby])))#*np.sqrt(np.nanmedian(self.model_time[nrby])/np.nanmedian(self.spline_params['spline_knots_'+pl+'_0']))
+                        print(self.spline_params['spline_knots_'+pl+'_0'],self.spline_params['spline_B_'+pl+'_0'].shape,sd)
+
+                        self.spline_params['splines_'+pl+'_0'] = pm.Normal('splines_'+pl+'_0', mu=0, sd=sd, shape=self.n_spline_pts,testval=np.random.normal(np.zeros(self.n_spline_pts),np.tile(sd,self.n_spline_pts)))
+                        self.spline_params['spline_model_'+pl+'_0'] = pm.math.dot(self.spline_params['spline_B_'+pl+'_0'], tt.concatenate([tt.zeros(self.spline_order+1),self.spline_params['splines_'+pl+'_0'],tt.zeros(self.spline_order+1)]))
+                        if pl in self.monos:
+                            self.spline_params['spline_model_'+pl] = pm.Deterministic("spline_model_"+pl,self.spline_params['spline_model_'+pl+'_0'])
+                    if pl in self.trios or pl in self.duos:
+                        #self.spline_params['timeix_'+pl+'_1'] = abs(self.model_time-self.planets[pl]['tcen_2'])<1.5*self.planets[pl]['tdur']
+                        self.spline_params['spline_knots_'+pl+'_1']=np.quantile(self.model_time[abs(self.model_time-self.planets[pl]['tcen_2'])<0.5*self.planets[pl]['tdur']],np.linspace(0,1,self.n_spline_pts+4))
+                        #self.spline_params['spline_knots_'+pl+'_1']=np.linspace(self.planets[pl]['tcen_2']-((self.n_spline_pts)/(self.n_spline_pts-self.spline_order-1))*0.5*self.planets[pl]['tdur'],self.planets[pl]['tcen']+((self.n_spline_pts)/(self.n_spline_pts-self.spline_order-1))*0.5*self.planets[pl]['tdur'],self.n_spline_pts+self.spline_order+1)
+                        #np.quantile(self.model_time[abs(self.model_time-self.planets[pl]['tcen_2'])<0.5*self.planets[pl]['tdur']],np.linspace(0,1,self.n_spline_pts))
+                        self.spline_params['spline_B_'+pl+'_1']= BSpline.design_matrix(self.model_time, np.hstack([np.tile(np.min(self.model_time),self.spline_order+1), self.spline_params['spline_knots_'+pl+'_1'], np.tile(np.max(self.model_time),self.spline_order+1)]), k=self.spline_order).toarray()
+                        #dmatrix("bs(time, knots=knots, degree="+str(int(self.spline_order))+", include_intercept=True) - 1",
+                        #                                            {"time": self.model_time, "knots": self.spline_params['spline_knots_'+pl+'_1']})
+                        nrby=(abs(self.model_time-self.planets[pl]['tcen_2'])>0.6*self.planets[pl]['tdur'])&(abs(self.model_time-self.planets[pl]['tcen_2'])<5*self.planets[pl]['tdur'])
+                        sd=np.nanmedian(abs(np.diff(self.model_flux[nrby])))*np.sqrt(np.nanmedian(self.model_time[nrby])/np.nanmedian(self.spline_params['spline_knots_'+pl+'_1']))
+                        self.spline_params['splines_'+pl+'_1'] = pm.Normal('splines_'+pl+'_1', mu=0, sd=sd, shape=self.n_spline_pts, testval=np.random.normal(np.zeros(self.n_spline_pts),np.tile(sd,self.n_spline_pts)))
+                        self.spline_params['spline_model_'+pl+'_1'] = pm.math.dot(self.spline_params['spline_B_'+pl+'_1'], tt.concatenate([tt.zeros(self.spline_order+1),self.spline_params['splines_'+pl+'_1'],tt.zeros(self.spline_order+1)]))
+                        if pl in self.duos:
+                            self.spline_params['spline_model_'+pl]=pm.Deterministic("spline_model_"+pl,self.spline_params['spline_model_'+pl+'_1']+self.spline_params['spline_model_'+pl+'_0'])
+                    if pl in self.trios:
+                        #self.spline_params['timeix_'+pl+'_2'] = abs(self.model_time-self.planets[pl]['tcen_3'])<1.5*self.planets[pl]['tdur']
+                        self.spline_params['spline_knots_'+pl+'_2']=np.quantile(self.model_time[abs(self.model_time-self.planets[pl]['tcen_3'])<0.5*self.planets[pl]['tdur']],np.linspace(0,1,self.n_spline_pts+4))
+                        #self.spline_params['spline_knots_'+pl+'_2']=np.linspace(self.planets[pl]['tcen']-((self.n_spline_pts)/(self.n_spline_pts-self.spline_order-1))*0.5*self.planets[pl]['tdur'],self.planets[pl]['tcen_3']+((self.n_spline_pts)/(self.n_spline_pts-self.spline_order-1))*0.5*self.planets[pl]['tdur'],self.n_spline_pts+self.spline_order+1)
+                        #np.quantile(self.model_time[abs(self.model_time-self.planets[pl]['tcen_3'])<0.5*self.planets[pl]['tdur']],np.linspace(0,1,self.n_spline_pts))
+                        self.spline_params['spline_B_'+pl+'_2']= BSpline.design_matrix(self.model_time, np.hstack([np.tile(np.min(self.model_time),self.spline_order+1), self.spline_params['spline_knots_'+pl+'_2'], np.tile(np.max(self.model_time),self.spline_order+1)]), k=self.spline_order).toarray()
+                        #dmatrix("bs(time, knots=knots, degree="+str(int(self.spline_order))+", include_intercept=True) - 1",
+                        #                                            {"time": self.model_time, "knots": self.spline_params['spline_knots_'+pl+'_2']},)
+                        nrby=(abs(self.model_time-self.planets[pl]['tcen_3'])>0.6*self.planets[pl]['tdur'])&(abs(self.model_time-self.planets[pl]['tcen_3'])<5*self.planets[pl]['tdur'])
+                        sd=np.nanmedian(abs(np.diff(self.model_flux[nrby])))*np.sqrt(np.nanmedian(self.model_time[nrby])/np.nanmedian(self.spline_params['spline_knots_'+pl+'_2']))
+                        self.spline_params['splines_'+pl+'_2'] = pm.Normal('splines_'+pl+'_2', mu=0, sd=sd, shape=self.n_spline_pts, testval=np.random.normal(np.zeros(self.n_spline_pts),np.tile(sd,self.n_spline_pts)))
+                        self.spline_params['spline_model_'+pl+'_2'] = pm.math.dot(self.spline_params['spline_B_'+pl+'_2'], tt.concatenate([tt.zeros(self.spline_order+1),self.spline_params['splines_'+pl+'_2'],tt.zeros(self.spline_order+1)]))
+                        #self.spline_params['spline_model_'+pl]=tt.sum(tt.stack(self.spline_params['spline_model_'+pl+'_0'],self.spline_params['spline_model_'+pl+'_2'],self.spline_params['spline_model_'+pl+'_2']),axis=0)
+                        if pl in self.duos:
+                            self.spline_params['spline_model_'+pl]=pm.Deterministic("spline_model_"+pl,self.spline_params['spline_model_'+pl+'_2']+self.spline_params['spline_model_'+pl+'_1']+self.spline_params['spline_model_'+pl+'_0'])
+                phot_mean=pm.Normal("phot_mean",mu=np.median(self.model_flux),  sd=2*np.std(self.model_flux))
             else:
                 phot_mean=pm.Normal("phot_mean",mu=np.median(self.model_flux),  sd=2*np.std(self.model_flux))
             ################################################
@@ -1871,7 +1945,7 @@ class monoModel():
                 for nc,cad in enumerate(self.cads_short):
                     cadmask=mask&self.model_cadence_index[:,nc]
                     #Taking the texp from the in-transit points (not the potentially binned out-of-transit regions)
-                    texp=np.nanmedian(np.diff(pred_time[cadmask*self.lc.in_trans])) if pred_all else np.nanmedian(np.diff(pred_time[cadmask*self.model_in_trans]))
+                    texp=np.nanmedian(np.diff(pred_time[cadmask*self.lc.in_trans['all']])) if pred_all else np.nanmedian(np.diff(pred_time[cadmask*self.model_in_trans]))
 
                     #print(self.lc['tele_index'][mask,0].astype(bool),len(self.lc['tele_index'][mask,0]),cadmask[mask],len(cadmask[mask]))
                     miss=cad.lower().split('_')[0]
@@ -2258,9 +2332,14 @@ class monoModel():
                         ################################################
 
                         for n in range(self.n_margs[pl]):
-                            resids[pl][n] = self.model_flux.astype(floattype) - \
-                                     (light_curves[pl][:,n] + tt.sum([ilc for ilc in stacked_marg_lc],axis=1) + \
-                                      phot_mean.dimshuffle('x'))
+                            if self.local_spline:
+                                resids[pl][n] = self.model_flux.astype(floattype) - self.spline_params['spline_model_'+pl] - \
+                                        (light_curves[pl][:,n] + tt.sum([ilc for ilc in stacked_marg_lc],axis=1) + \
+                                        phot_mean.dimshuffle('x'))
+                            else:
+                                resids[pl][n] = self.model_flux.astype(floattype) - \
+                                        (light_curves[pl][:,n] + tt.sum([ilc for ilc in stacked_marg_lc],axis=1) + \
+                                        phot_mean.dimshuffle('x'))
                             if self.debug:
                                 tt.printing.Print("rawflux_"+str(n))(tt._shared(self.model_flux))
                                 tt.printing.Print("models_"+str(n))(iter_models[pl]['lcs'][:,n])
@@ -2377,7 +2456,7 @@ class monoModel():
             #   Creating initial model optimisation menu:
             ################################################
             #Setting up optimization depending on what planet models we have:
-            step_initialise=False
+            step_initialise=True
             if step_initialise:
                 initvars1=[logs2]
                 initvars2=[logs2]#P,t0
@@ -2424,6 +2503,8 @@ class monoModel():
                     if self.periodic_kernel is not None:
                         initvars3+=[periodic_power, periodic_w0, periodic_logQ]
                 else:
+                    if self.local_spline:
+                        initvars3+=[self.spline_params['splines_'+pl+'_'+str(int(n))] for pl in self.planets for n in range(3) if 'splines_'+pl+'_'+str(int(n)) in self.spline_params]
                     initvars3+=[phot_mean]
                 initvars5=initvars2+initvars3+[logs2,Rs,Ms]
                 if np.any([c.split('_')[0]=='ts' for c in self.cads_long]):
@@ -2434,7 +2515,7 @@ class monoModel():
                     initvars5+=[u_star_corot]
                 if np.any([c.split('_')[0]=='ch' for c in self.cads_long]):
                     initvars5+=[u_star_cheops]
-
+                
                 ################################################
                 #                  Optimising:
                 ################################################
@@ -2449,7 +2530,7 @@ class monoModel():
                 #Doing everything except the marginalised periods:
                 map_soln = pmx.optimize(start=map_soln, vars=initvars5, verbose=self.debug)
                 map_soln = pmx.optimize(start=map_soln, verbose=self.debug)
-                map_soln = pmx.optimize(start=map_soln, vars=initvars1, verbose=self.debug)
+                #map_soln = pmx.optimize(start=map_soln, vars=initvars1, verbose=self.debug)
                 #map_soln = pmx.optimize(start=start, vars=[logs2], verbose=self.debug)
 
                 if self.debug: print("after",model.check_test_point())
@@ -2494,7 +2575,7 @@ class monoModel():
                 if self.debug: print(self.init_soln.keys())
                 if hasattr(self,'trace') and continue_sampling:
                     print("Using already-generated MCMC trace as start point for new trace")
-                    self.trace = pmx.sample(tune=n_burn_in, draws=n_draws, chains=n_chains, trace=self.trace, compute_convergence_checks=False)
+                    self.trace = pmx.sample(tune=n_burn_in, draws=n_draws, chains=n_chains, trace=self.trace, compute_convergence_checks=False, **kwargs)
                 else:
                     self.trace = pmx.sample(tune=n_burn_in, draws=n_draws, start=self.init_soln, chains=n_chains, compute_convergence_checks=False, **kwargs)
             #Saving both the class and a pandas dataframe of output data.
@@ -2582,7 +2663,7 @@ class monoModel():
                 for key in self.lc_regions['limits']:
                     #Only creating out-of-transit GP for the binned (e.g. 30min) data
                     cutBools = tools.cutLc(self.lc.time[self.lc_regions[key]['ix']],max_gp_len,
-                                           transit_mask=~self.lc.in_trans[self.lc_regions[key]['ix']])
+                                           transit_mask=~self.lc.in_trans['all'][self.lc_regions[key]['ix']])
 
                     limit_mask_bool[n]={}
                     for nc,c in enumerate(cutBools):
@@ -2640,7 +2721,7 @@ class monoModel():
                 for key in self.lc_regions:
                     #Need to break up the lightcurve even further to avoid GP burning memory:
                     cutBools = tools.cutLc(self.lc.time[self.lc_regions[key]['ix']],max_gp_len,
-                                        transit_mask=~self.lc.in_trans[self.lc_regions[key]['ix']])
+                                        transit_mask=~self.lc.in_trans['all'][self.lc_regions[key]['ix']])
                     i_kernel = theano_terms.SHOTerm(S0=self.meds['phot_S0'], w0=self.meds['phot_w0'], Q=1/np.sqrt(2))
                     i_gp = celerite2.theano.GaussianProcess(i_kernel, mean=self.meds['phot_mean'])
                     limit_mask_bool[n]={}
@@ -2659,13 +2740,13 @@ class monoModel():
                                         np.dot(self.lc.flux_err_index[limit_mask_bool[n][nc]], np.exp(sample['logs2']))))
                             marg_lc=np.tile(0.0,len(self.lc.time))
                             if hasattr(self,'pseudo_binlc') and len(self.trans_to_plot['all']['med'])==len(self.pseudo_binlc['time']):
-                                marg_lc[self.lc.near_trans]=sample['marg_all_lc_model'][self.pseudo_binlc['near_trans']]
+                                marg_lc[self.lc.near_trans['all']]=sample['marg_all_lc_model'][self.pseudo_binlc['near_trans']]
                             elif hasattr(self,'lc_near_trans') and len(self.trans_to_plot['all']['med'])==len(self.lc_near_trans['time']):
-                                marg_lc[self.lc.near_trans]=sample['marg_all_lc_model'][key1][key2]
+                                marg_lc[self.lc.near_trans['all']]=sample['marg_all_lc_model'][key1][key2]
                             elif len(self.trans_to_plot['all']['med'])==len(self.lc.time):
-                                marg_lc[self.lc.near_trans]=sample['marg_all_lc_model'][key1][key2][self.lc.near_trans]
+                                marg_lc[self.lc.near_trans['all']]=sample['marg_all_lc_model'][key1][key2][self.lc.near_trans['all']]
 
-                            #marg_lc[self.lc.near_trans]=sample['marg_all_lc_model'][self.lc.near_trans]
+                            #marg_lc[self.lc.near_trans['all']]=sample['marg_all_lc_model'][self.lc.near_trans['all']]
                             ii_gp_pred, ii_gp_var= i_gp.predict(self.lc.flux[limit_mask_bool[n][nc]] - marg_lc[limit_mask_bool[n][nc]],
                                                                 t=self.lc.time[self.lc_regions[key]['ix']][c].astype(floattype),
                                                                 return_var=True, return_cov=False, include_mean=False)
@@ -2742,7 +2823,7 @@ class monoModel():
             for key2 in self.trans_to_plot['model'][key1]:
                 if hasattr(self,'model_near_trans'):
                     self.trans_to_plot['all'][key1][key2]=np.zeros(len(self.lc.time))
-                    self.trans_to_plot['all'][key1][key2][self.lc.near_trans*self.lc.mask]=self.trans_to_plot['model'][key1][key2][self.model_near_trans]
+                    self.trans_to_plot['all'][key1][key2][self.lc.near_trans['all']*self.lc.mask]=self.trans_to_plot['model'][key1][key2][self.model_near_trans]
                 else:
                     self.trans_to_plot['all'][key1][key2]=np.zeros(len(self.lc.time))
                     self.trans_to_plot['all'][key1][key2][self.lc.mask]=self.trans_to_plot['model'][key1][key2][:]
@@ -2750,6 +2831,41 @@ class monoModel():
         if len(self.planets)==1 and list(self.planets.keys())[0] not in self.trans_to_plot['model']:
             self.trans_to_plot['model'][list(self.planets.keys())[0]] = self.trans_to_plot['model']['allpl']
             self.trans_to_plot['all'][list(self.planets.keys())[0]] = self.trans_to_plot['all']['allpl']
+    
+    def init_spline_to_plot(self,n_samp=None,**kwargs):
+        """Initialising the transit models to plot
+           
+        The result is the `trans_to_plot` array, which is a dictionary of predicted transit flux model percentiles computed for each point in the time series.
+
+        Args:
+            n_samp (int, optional): Number of samples to use from the MCMC trace to generate the models & percentiles. Defaults to None.
+        """
+        n_samp=len(self.trace['phot_mean']) if n_samp is None else n_samp
+        if not hasattr(self,'lc_regions'):
+            self.init_plot(plot_type='lc',**kwargs)
+        self.spline_to_plot={'model':{'allpl':{}},
+                             'all':{'allpl':{}},
+                             'n_samp':n_samp}
+        percentiles={'-2sig':2.2750132, '-1sig':15.8655254, 'med':50., '+1sig':84.1344746, '+2sig':97.7249868}
+
+        if hasattr(self,'trace'):
+            prcnt=np.percentile(np.sum(np.dstack([self.trace['spline_model_'+pl] for pl in self.monos+self.duos+self.trios]),axis=2),list(percentiles.values()),axis=0)
+            self.spline_to_plot['model']['allpl']={list(percentiles.keys())[n]:prcnt[n] for n in range(5)}
+        elif 'marg_all_lc_model' in self.init_soln:
+            self.spline_to_plot['model']['allpl']['med']=np.sum(np.vstack([self.init_soln['spline_model_'+pl] for pl in self.monos+self.duos+self.trios]),axis=0)
+        else:
+            print("spline models not in any optimised models")
+
+        #Adding zeros to other regions where we dont have transits (not in the out of transit mask):
+        for key1 in self.spline_to_plot['model']:
+            self.spline_to_plot['all'][key1]={}
+            for key2 in self.spline_to_plot['model'][key1]:
+                if hasattr(self,'model_near_trans'):
+                    self.spline_to_plot['all'][key1][key2]=np.zeros(len(self.lc.time))
+                    self.spline_to_plot['all'][key1][key2][self.lc.near_trans['all']*self.lc.mask]=self.spline_to_plot['model'][key1][key2][self.model_near_trans]
+                else:
+                    self.spline_to_plot['all'][key1][key2]=np.zeros(len(self.lc.time))
+                    self.spline_to_plot['all'][key1][key2][self.lc.mask]=self.spline_to_plot['model'][key1][key2][:]
 
     def init_rvs_to_plot(self, n_samp=300, plot_alias='all'):
         """Initialise RV models to plot.
@@ -2959,7 +3075,7 @@ class monoModel():
             else:
                 fx_lab='flux'
                 fx_bin_lab='bin_flux'
-            time_regions=tools.find_time_regions(self.lc.time[self.lc.mask],**kwargs)
+            time_regions=tools.find_time_regions(self.lc.time[self.lc.mask],split_gap_size=gap_thresh,**kwargs)
             self.lc_regions={}
             for nj in range(len(time_regions)):
                 self.lc_regions[nj]={'start':time_regions[nj][0],'end':time_regions[nj][1]}
@@ -3045,8 +3161,10 @@ class monoModel():
         all_pls_in_rvs=list(self.planets.keys())+list(self.rvplanets.keys())
 
         other_pls=self.multis+list(self.rvplanets.keys())
-
-        marg_pl=(self.monos+self.duos+self.trios)[nmargtoplot]
+        if len(self.monos+self.duos+self.trios)>0:
+            marg_pl=(self.monos+self.duos+self.trios)[nmargtoplot]
+        else:
+            marg_pl=self.multis[-1]
         #Here we'll choose the best RV curves to plot (in the case of mono/duos)
         nbests = self.n_margs[marg_pl] if plot_alias=='all' else nbest
         if hasattr(self,'trace'):
@@ -3464,8 +3582,8 @@ class monoModel():
         '''
 
 
-    def Plot(self, interactive=False, n_samp=None, overwrite=False, interp=True, newgp=False, return_fig=False, max_gp_len=20000, 
-             save=True, plot_loc=None, palette=None, plot_flat=False, pointcol="k", plottype='png',plot_rows=None, ylim=None, **kwargs):
+    def Plot(self, interactive=False, n_samp=None, overwrite=False, interp=True, newgp=False, return_fig=False, max_gp_len=20000, n_intrans_bins=15,
+             save=True, plot_loc=None, palette=None, plot_flat=False, pointcol="k", plottype='png',plot_rows=None, ylim=None, xlim=None, **kwargs):
         """Varied photometric plotting function for MonoTransit model
 
         Args:
@@ -3587,7 +3705,8 @@ class monoModel():
         #####################################
         if self.use_GP and (not hasattr(self, 'gp_to_plot') or 'gp_pred' not in self.gp_to_plot or overwrite):
             self.init_gp_to_plot(n_samp, max_gp_len, interp=interp, newgp=newgp)
-
+        if self.local_spline:
+            self.init_spline_to_plot(n_samp)
         '''
         assert hasattr(self,'trace')
         i_gp_pred=[]
@@ -3626,10 +3745,15 @@ class monoModel():
         #####################################
         if self.use_GP:
             resid_sd=np.nanstd(self.lc.flux[self.lc.mask] - self.gp_to_plot['gp_pred'][self.lc.mask] - self.trans_to_plot['all']['allpl']['med'][self.lc.mask])
+        elif self.fit_no_flatten:
+            resid_sd=np.nanstd(self.lc.flux[self.lc.mask] - self.trans_to_plot['all']['allpl']['med'][self.lc.mask])
         else:
             resid_sd=np.nanstd(self.lc.flux_flat[self.lc.mask] - self.trans_to_plot['all']['allpl']['med'][self.lc.mask])
 
-        for nkey,key in enumerate(self.lc_regions):
+        if not hasattr(self.lc,'bin_time'):
+            self.lc.bin()
+
+        for nkey,key in enumerate(self.lc_regions): 
             if self.use_GP:
                 if self.lc_regions[key]['cadence']<1/72:
                     bin_detrend=tools.bin_lc_segment(np.column_stack((self.lc.time[self.lc_regions[key]['ix']],
@@ -3927,21 +4051,41 @@ class monoModel():
                     f_alls[key].plot(self.lc.time[ix],
                                 self.gp_to_plot['gp_pred'][self.lc_regions[key]['ix']]+self.trans_to_plot['all']['allpl']['med'][ix],
                                 color="C0", label="GP + transit fit", linewidth=2.5,alpha=0.5,zorder=12, rasterized=raster)
-
-                elif not plot_flat and not self.use_GP:
+                elif not plot_flat and not self.use_GP and self.local_spline:
+                    spl=self.lc.flux_spline[ix] if not self.fit_no_flatten else np.zeros(len(self.lc.time[ix]))
                     if '-2sig' in self.trans_to_plot['all']['allpl']:
                         f_alls[key].fill_between(self.lc.time[ix],
-                                            self.lc.flux_spline[ix]+self.trans_to_plot['all']['allpl']['-2sig'][ix],
-                                            self.lc.flux_spline[ix]+self.trans_to_plot['all']['allpl']['+2sig'][ix],
+                                            spl+self.spline_to_plot['all']['allpl']['-2sig'][ix]+self.trans_to_plot['all']['allpl']['-2sig'][ix],
+                                            spl+self.spline_to_plot['all']['allpl']['+2sig'][ix]+self.trans_to_plot['all']['allpl']['+2sig'][ix],
                                             alpha=0.2, color="C0",zorder=10, rasterized=raster)
                         f_alls[key].fill_between(self.lc.time[ix],
-                                            self.lc.flux_spline[ix]+self.trans_to_plot['all']['allpl']['-1sig'][ix],
-                                            self.lc.flux_spline[ix]+self.trans_to_plot['all']['allpl']['+1sig'][ix],
+                                            spl+self.spline_to_plot['all']['allpl']['-1sig'][ix]+self.trans_to_plot['all']['allpl']['-1sig'][ix],
+                                            spl+self.spline_to_plot['all']['allpl']['-1sig'][ix]+self.trans_to_plot['all']['allpl']['+1sig'][ix],
                                             alpha=0.3, color="C0",zorder=11, rasterized=raster)
 
                     f_alls[key].plot(self.lc.time[ix],
-                                self.lc.flux_spline[ix]+self.trans_to_plot['all']['allpl']['med'][ix],
+                                spl+self.spline_to_plot['all']['allpl']['med'][ix]+self.trans_to_plot['all']['allpl']['med'][ix],
                                 color="C0", label="spline + transit fit", linewidth=2.5,alpha=0.5,zorder=12, rasterized=raster)
+
+                elif not plot_flat and not self.use_GP and not self.local_spline:
+                    spl=self.lc.flux_spline[ix] if not self.fit_no_flatten else np.zeros(len(self.lc.time[ix]))
+                    if '-2sig' in self.trans_to_plot['all']['allpl']:
+                        f_alls[key].fill_between(self.lc.time[ix],
+                                            spl+self.trans_to_plot['all']['allpl']['-2sig'][ix],
+                                            spl+self.trans_to_plot['all']['allpl']['+2sig'][ix],
+                                            alpha=0.2, color="C0",zorder=10, rasterized=raster)
+                        f_alls[key].fill_between(self.lc.time[ix],
+                                            spl+self.trans_to_plot['all']['allpl']['-1sig'][ix],
+                                            spl+self.trans_to_plot['all']['allpl']['+1sig'][ix],
+                                            alpha=0.3, color="C0",zorder=11, rasterized=raster)
+                    if not self.fit_no_flatten:
+                        f_alls[key].plot(self.lc.time[ix],
+                                    spl+self.trans_to_plot['all']['allpl']['med'][ix],
+                                    color="C0", label="transit fit", linewidth=2.5,alpha=0.5,zorder=12, rasterized=raster)
+                    else:
+                        f_alls[key].plot(self.lc.time[ix],
+                                    spl+self.trans_to_plot['all']['allpl']['med'][ix],
+                                    color="C0", label="spline + transit fit", linewidth=2.5,alpha=0.5,zorder=12, rasterized=raster)
 
                 #plt.setp(f_alls[key].get_xticklabels(), visible=False)
                 if self.lc_regions[key]['n_plot_col'][0]>0:
@@ -3991,6 +4135,10 @@ class monoModel():
                     per=np.max(np.nanmedian(self.trace['per_'+pl],axis=0))
                 elif pl in self.monos:
                     per=3e3
+                if 'tdur_'+pl in self.init_soln:
+                    binsize=np.nanmedian(self.trace['tdur_'+pl])/n_intrans_bins
+                elif 'tdur_'+pl+'[0]' in self.init_soln:
+                    binsize=np.nanmedian(self.trace['tdur_'+pl+'[0]'])/n_intrans_bins
             elif hasattr(self,'init_soln'):
                 t0=self.init_soln['t0_'+pl]
                 if pl in self.multis or pl in self.rvplanets:
@@ -3999,6 +4147,10 @@ class monoModel():
                     per=np.max(self.init_soln['per_'+pl])
                 elif pl in self.monos:
                     per=3e3
+                if 'tdur_'+pl in self.init_soln:
+                    binsize=self.init_soln['tdur_'+pl]/n_intrans_bins
+                elif 'tdur_'+pl+'[0]' in self.init_soln:
+                    binsize=self.init_soln['tdur_'+pl+'[0]']/n_intrans_bins
             self.lc.phase[pl]=(self.lc.time-t0-0.5*per)%per-0.5*per
 
             for nkey,key in enumerate(self.lc_regions):
@@ -4047,7 +4199,9 @@ class monoModel():
             else:
                 other_pls=np.zeros(len(self.lc.time))
 
-            dist_dur=1.5
+            
+
+            dist_dur=2.5
             phasebool=abs(self.lc.phase[pl])<dist_dur*maxdur
             if self.use_GP:
                 phaselc=np.column_stack((self.lc.phase[pl][self.lc.mask&phasebool],
@@ -4055,12 +4209,23 @@ class monoModel():
                                          self.gp_to_plot['gp_pred'][self.lc.mask&phasebool] - \
                                          other_pls[self.lc.mask&phasebool],
                                          self.lc.flux_err[self.lc.mask&phasebool]))
+            elif self.fit_no_flatten:
+                phaselc=np.column_stack((self.lc.phase[pl][self.lc.mask&phasebool],
+                                         self.lc.flux[self.lc.mask&phasebool] - \
+                                         other_pls[self.lc.mask&phasebool],
+                                         self.lc.flux_err[self.lc.mask&phasebool]))
+            elif self.local_spline:
+                phaselc=np.column_stack((self.lc.phase[pl][self.lc.mask&phasebool],
+                                         self.lc.flux_flat[self.lc.mask&phasebool] - \
+                                         self.spline_to_plot['all']['allpl']['med'][self.lc.mask&phasebool] - \
+                                         other_pls[self.lc.mask&phasebool],
+                                         self.lc.flux_err[self.lc.mask&phasebool]))
             else:
                 phaselc=np.column_stack((self.lc.phase[pl][self.lc.mask&phasebool],
                                          self.lc.flux_flat[self.lc.mask&phasebool] - \
                                          other_pls[self.lc.mask&phasebool],
                                          self.lc.flux_err[self.lc.mask&phasebool]))
-            bin_phase=tools.bin_lc_segment(phaselc[np.argsort(phaselc[:,0])],binsize=maxdur/15.0)
+            bin_phase=tools.bin_lc_segment(phaselc[np.argsort(phaselc[:,0])],binsize=binsize)
 
             if interactive:
                 sdbuffer=3
@@ -4111,7 +4276,9 @@ class monoModel():
                                         alpha=np.clip(0.15+6*(len(phaselc[:,0])**-0.5),0.1,0.9), color=pointcol, markersize=1.25, rasterized=raster)
                 bin_resids=tools.bin_lc_segment(np.column_stack((np.sort(phaselc[:,0]),
                                                                  (phaselc[:,1]-self.trans_to_plot['all'][pl]['med'][self.lc.mask&phasebool])[np.argsort(phaselc[:,0])],
-                                                                 phaselc[np.argsort(phaselc[:,0]),2])),0.03333)
+                                                                 phaselc[np.argsort(phaselc[:,0]),2])),binsize)
+                nrtrns_resid=np.nanstd(bin_resids[:,1])
+                print(nrtrns_resid)
                 f_trans_resids[pl].errorbar(bin_resids[:,0],bin_resids[:,1],yerr=bin_resids[:,2],fmt=".",color='C2',
                                          alpha=0.75, markersize=5, rasterized=raster)
 
@@ -4127,12 +4294,12 @@ class monoModel():
                 f_trans[pl].plot(np.sort(phaselc[:,0]),
                                 self.trans_to_plot['all'][pl]["med"][self.lc.mask&phasebool][np.argsort(phaselc[:,0])],
                                color=self.pal[4-n], label="transit fit", rasterized=raster,linewidth=2.5)
-                f_trans[pl].set_ylim(np.min(self.trans_to_plot['all'][pl]["med"])-2*resid_sd,2*resid_sd)
-                f_trans_resids[pl].set_ylim(-2.25*resid_sd,2.25*resid_sd)
+                f_trans[pl].set_ylim(np.min(self.trans_to_plot['all'][pl]["med"])-4*nrtrns_resid,4*nrtrns_resid)
+                f_trans_resids[pl].set_ylim(-5*nrtrns_resid,5*nrtrns_resid)
                 f_trans[pl].yaxis.tick_right()
                 f_trans_resids[pl].yaxis.tick_right()
 
-                f_trans[pl].text(0.0,0.0+resid_sd*1.9,pl,horizontalalignment='center',verticalalignment='top',fontsize=9)
+                f_trans[pl].text(0.0,0.0+nrtrns_resid*3,pl,horizontalalignment='center',verticalalignment='top',fontsize=9)
 
                 plt.setp(f_trans[pl].get_xticklabels(), visible=False)
                 if n<len(self.planets)-1:
@@ -4147,8 +4314,10 @@ class monoModel():
                     f_trans_resids[xaxiskey].set_xlabel("Time [d] from transit")
 
         if not interactive:
-            f_trans_resids[xaxiskey].set_xlim(-1*dist_dur*maxdur,dist_dur*maxdur)
-            
+            if xlim is None:
+                f_trans_resids[xaxiskey].set_xlim(-1*dist_dur*maxdur,dist_dur*maxdur)
+            else:
+                f_trans_resids[xaxiskey].set_xlim(xlim)
 
         if interactive:
             #Saving
@@ -4294,7 +4463,7 @@ class monoModel():
                     plt.xlabel("Period [d]")
                     plt.legend(title="Average prob")
 
-            if plot_loc is None:
+            if plot_loc  is None:
                 plt.savefig(self.savenames[0]+'_period_dists.pdf')
             else:
                 plt.savefig(plot_loc)
@@ -4566,6 +4735,10 @@ class monoModel():
         import fractions
 
         assert hasattr(self,'trace') #We need to have run Mcmc to have samples first.
+
+        if not hasattr(self.lc,'radec'):
+            #Getting the coordinate
+            self.lc.get_radec()
 
         #If not defined, we'll take the date today:
         if time_start is None:
@@ -4841,7 +5014,7 @@ class monoModel():
             
             prio_1_prob_threshold = np.ceil(np.sum(allprobs>observe_threshold)*prio_1_threshold)
             prio_3_prob_threshold = np.ceil(np.sum(allprobs>observe_threshold)*(1-prio_3_threshold))
-            #print(allprobs,observe_threshold,allpers[allprobs>observe_threshold])
+            print(allprobs,observe_threshold,allpers[allprobs>observe_threshold])
             for nper in allpers:
                 #print(allpers,nper,allprobs[nper],observe_threshold)
                 if allprobs[nper]>observe_threshold:
