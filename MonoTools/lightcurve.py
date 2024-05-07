@@ -277,8 +277,10 @@ class lc():
                 self.flux_mask=self.flux_mask&(np.sum(np.vstack([self.quality.astype(int) & 2 ** (q - 1) for q in qs]),axis=0)==0)
             if in_transit is not None:
                 out_of_trans=~in_transit
-            elif hasattr(self, 'in_trans'):
+            elif hasattr(self, 'in_trans') and type(self.in_trans)==np.ndarray:
                 out_of_trans=~self.in_trans
+            elif hasattr(self, 'in_trans') and type(self.in_trans)==dict and 'all' in self.in_trans:
+                out_of_trans=~self.in_trans['all']
             else:
                 out_of_trans=np.tile(True, len(self.flux_mask))
 
@@ -385,8 +387,13 @@ class lc():
             transit_mask=~self.in_trans
 
         if flattype=='bspline':
-            if transit_mask is None and hasattr(self,'in_trans') and np.sum(self.in_trans)>0 and type(transit_mask)!=np.ndarray:
-                transit_mask = ~self.in_trans[:]
+            if transit_mask is None and hasattr(self,'in_trans') and ((type(self.in_trans) is dict and np.sum(self.in_trans['all'])>0) or (type(self.in_trans) is np.ndarray and np.sum(self.in_trans)>0)) and type(transit_mask)!=np.ndarray:
+                if type(self.in_trans) is dict:
+                    transit_mask = ~self.in_trans['all']
+                else:
+                    transit_mask = ~self.in_trans[:]
+            elif transit_mask is None:
+                transit_mask = np.tile(True,len(self.time))
             for its in timeseries:
                 timearr=self.bin_time[:] if 'bin_' in its else self.time[:]
 
@@ -527,7 +534,7 @@ class lc():
             self.sort_timeseries()
 
         if np.any(['_flat' in its and its not in self.timeseries for its in timeseries]):
-            self.flatten(timeseries=timeseries)
+            self.flatten(timeseries=list(np.unique([t.replace('_flat','') for t in timeseries])))
             
         #setattr(self, 'bin_cadence',binlc['flux'][:,0])
 
@@ -960,7 +967,7 @@ class multilc(lc):
                 if df is not None and len(df)>0:
                     self.all_ids['corot']={'id':df['ID'].values[0], 'search':df}
 
-    def get_all_lightcurves(self,all_pipelines=False,extralc=None,**kwargs):
+    def get_all_lightcurves(self,all_pipelines=False,extralc=None,save=True,**kwargs):
         """
         Download all available space photometry for a target. This uses the info stored in `all_ids`
 
@@ -1002,7 +1009,8 @@ class multilc(lc):
         assert hasattr(self,'flux') and hasattr(self,'cadence'), "No lightcurves found!"
         self.make_mask()
         #hasattr(self,'mask'),self.mask,self.mask.shape,np.sum(self.mask))
-        self.save()
+        if save:
+            self.save()
     
     def get_K2_campaigns(self,id=None):
         """See which K2 campaigns observed a given target?
@@ -1140,7 +1148,7 @@ class multilc(lc):
                 df=df.loc[df["ID"]==self.all_ids["corot"]]
             return df
     
-    def get_tess_lc(self,sector,search=['all'],use_fast=False,use_eleanor=False,**kwargs):
+    def get_tess_lc(self,sector,search=['all'],use_fast=True,use_eleanor=False,**kwargs):
         """Access TESS lightcurve for given sector
 
         Args:
@@ -1153,7 +1161,7 @@ class multilc(lc):
         Returns:
             lightcurve.lc: TESS lightcurve
         """
-
+        print(sector,search)
         #['all','spoc_20','spoc_120','spoc_1800','qlp_1800','eleanor_1800']
         #use_ppt=True, coords=None, use_qlp=None, use_eleanor=None, data_loc=None, search_fast=False, **kwargs):
 
@@ -1163,11 +1171,11 @@ class multilc(lc):
         strtid=str(int(self.all_ids['tess']['id'])).zfill(16)
         epoch=pd.read_csv(tools.MonoData_tablepath+"/tess_lc_locations.csv",index_col=0)
         if ('all' in search or 'spoc_20' in search) and use_fast:
-            searched+=['te_120_spoc_'+str(sector)]
+            searched+=['te_20_spoc_'+str(sector)]
             type='fast-lc'
             fitsloc="https://archive.stsci.edu/missions/tess/tid/s"+str(sector).zfill(4)+"/"+strtid[:4]+"/"+strtid[4:8] + \
-                    "/"+strtid[-8:-4]+"/"+strtid[-4:]+"/tess"+str(epoch.loc[sector,'date'])+"-s"+str(sector).zfill(4)+"-" + \
-                    strtid+"-"+str(epoch.loc[sector,'runid']).zfill(4)+"-a_"+type+".fits"
+                    "/"+strtid[-8:-4]+"/"+strtid[-4:]+"/tess"+str(int(epoch.loc[sector,'date']))+"-s"+str(int(sector)).zfill(4)+"-" + \
+                    strtid+"-"+str(int(epoch.loc[sector,'runid'])).zfill(4)+"-a_"+type+".fits"
             resp = h.request(fitsloc, 'HEAD')
             if int(resp[0]['status']) < 400:
                 with fits.open(fitsloc,show_progress=False) as hdus:
@@ -1175,15 +1183,15 @@ class multilc(lc):
         if ('all' in search or 'spoc_120' in search):
             type='lc'
             fitsloc="https://archive.stsci.edu/missions/tess/tid/s"+str(sector).zfill(4)+"/"+strtid[:4]+"/"+strtid[4:8] + \
-                    "/"+strtid[-8:-4]+"/"+strtid[-4:]+"/tess"+str(epoch.loc[sector,'date'])+"-s"+str(sector).zfill(4)+"-" + \
-                    strtid+"-"+str(epoch.loc[sector,'runid']).zfill(4)+"-s_"+type+".fits"
+                    "/"+strtid[-8:-4]+"/"+strtid[-4:]+"/tess"+str(int(epoch.loc[sector,'date']))+"-s"+str(int(sector)).zfill(4)+"-" + \
+                    strtid+"-"+str(int(epoch.loc[sector,'runid'])).zfill(4)+"-s_"+type+".fits"
             searched+=['te_120_spoc_'+str(sector)]
             resp = h.request(fitsloc, 'HEAD')
             if int(resp[0]['status']) < 400:
                 with fits.open(fitsloc,show_progress=False) as hdus:
                     return self.read_from_file(hdus,fitsloc,mission='tess',sect=str(sector),src='spoc',**kwargs)
         cad='1800' if sector<=26 else '600'
-        if ('all' in search or 'spoc_1800' in search or 'spoc_600' in search):
+        if ('all' in search or 'spoc_1800' in search or 'spoc_600' in search or 'spoc_200' in search):
             #Getting spoc 30min data:
             fitsloc='https://mast.stsci.edu/api/v0.1/Download/file?uri=mast:HLSP/tess-spoc/s'+str(int(sector)).zfill(4) + \
                     "/target/"+strtid[:4]+"/"+strtid[4:8]+"/"+strtid[8:12]+"/"+strtid[12:] + \
@@ -1195,7 +1203,7 @@ class multilc(lc):
                 with fits.open(fitsloc,show_progress=False) as hdus:
                     return self.read_from_file(hdus,fitsloc,mission='tess',sect=str(sector),src='spoc',**kwargs)
 
-        if ('all' in search or 'qlp_1800' in search or 'qlp_600' in search):
+        if ('all' in search or 'qlp_1800' in search or 'qlp_600' in search or 'qlp_200' in search):
             #QLP orbit files stored in folder:
             orbits=[7+sector*2,8+sector*2]
             qlpfiles=['/'.join(self.savefileloc.split('/')[:-1])+"/orbit-"+str(int(orbits[n]))+"_qlplc.h5" for n in range(2)]
@@ -1430,7 +1438,6 @@ class multilc(lc):
             
             return self.read_from_file(fits.open(urlfilename1,show_progress=False),urlfilename1,mission='kepler',src='pdc',sect=camp,**kwargs)
 
-    
     def make_cadmask(self):
         """
         #Masking any cadences we don't want:
@@ -1730,8 +1737,6 @@ class multilc(lc):
         # Step 1 - count total time. Divide by plot_rows, or estimate ideal plot_rows given data duration
         # Step 2 - Loop through cadences and round/cut into 3. 
         # Step 3 - calculate gaps between cadences, cut up plot to hide gaps.
-
-        from iteround import saferound
         
         self.init_plot_info={}
         if use_masked:
@@ -1755,7 +1760,7 @@ class multilc(lc):
                 self.init_plot_info['fine_cuts'][cad]['total_dur']=np.sum(self.cadence==cad)*self.init_plot_info['fine_cuts'][cad]['cadence']
                 self.init_plot_info['fine_cuts'][cad]['start_end_dur']=self.init_plot_info['fine_cuts'][cad]['end']-self.init_plot_info['fine_cuts'][cad]['start']
                 self.init_plot_info['fine_cuts'][cad]['mad']=1.06*np.nanmedian(abs(np.diff(self.flux[ix])))
-                self.init_plot_info['fine_cuts'][cad]['minmax']=np.sort(self.flux[ix])[np.array([7,-7])] #Taking Nth highest and -Nth highest flux points to get min+max without outliers
+                self.init_plot_info['fine_cuts'][cad]['minmax']=np.sort(self.flux[ix&np.isfinite(self.flux)])[np.array([7,-7])] #Taking Nth highest and -Nth highest flux points to get min+max without outliers
                 self.init_plot_info['total_time']+=self.init_plot_info['fine_cuts'][cad]['start_end_dur']
                 self.init_plot_info['ordered_cadences']+=[cad]
         self.init_plot_info['ordered_cadences']=np.array(self.init_plot_info['ordered_cadences'])
@@ -1782,7 +1787,7 @@ class multilc(lc):
             assert np.sum(subplots_ix==irow)>0
             plots_in_this_row = np.array(list(self.init_plot_info['fine_cuts'].keys()))[subplots_ix==irow]
             durs = [self.init_plot_info['fine_cuts'][cad2]['start_end_dur'] for cad2 in plots_in_this_row]
-            plot_cols = np.hstack((0,np.cumsum(saferound(24*np.array(durs)/np.sum(durs), places=0))))
+            plot_cols = np.hstack((0,np.cumsum(tools.saferound2(24*np.array(durs)/np.sum(durs))))) #Custom func to 
             for icol,key in enumerate(plots_in_this_row):
                 self.init_plot_info['fine_cuts'][key]['n_plot_row']=irow
                 self.init_plot_info['fine_cuts'][key]['n_plot_col']=(int(plot_cols[icol]),int(plot_cols[icol+1]))
