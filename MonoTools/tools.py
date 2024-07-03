@@ -762,9 +762,9 @@ def observed(tic,radec=None,maxsect=84):
     # Using either "webtess" page or Chris Burke's tesspoint to check if TESS object was observed:
     # Returns dictionary of each sector and whether it was observed or not
     
-    tess_stars2px = importlib.import_module("tess-point.tess_stars2px_function_entry")
+    tess_stars2px = importlib.import_module("tess-point.tess_stars2px")
     #from tesspoint import tess_stars2px_function_entry as tess_stars2px
-    result = tess_stars2px(tic, radec.ra.deg, radec.dec.deg)
+    result = tess_stars2px.tess_stars2px_function_entry(tic, radec.ra.deg, radec.dec.deg)
     sectors = result[3]
     out_dic={s:True if s in sectors else False for s in np.arange(maxsect)}
     #print(out_dic)
