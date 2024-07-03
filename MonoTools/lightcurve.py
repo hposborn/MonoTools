@@ -754,7 +754,7 @@ class multilc(lc):
         """
         if priorities is None:
             #Here we can list the priorities for Kepler/K2 and TESS:
-            priorities=["k1_120_pdc","k1_1800_pdc","k2_120_ev","k2_120_vand","k2_120_pdc","k2_1800_ev","k2_1800_vand","k2_1800_pdc","ts_20_pdc","ts_120_pdc","ts_600_pdc","ts_1800_pdc","ts_600_tica","ts_600_qlp","ts_1800_qlp","ts_1800_tica","ts_600_el","ts_1800_el"]
+            priorities=["k1_120_pdc","k1_1800_pdc","k2_120_ev","k2_120_vand","k2_120_pdc","k2_1800_ev","k2_1800_vand","k2_1800_pdc","ts_20_pdc","ts_120_pdc","ts_200_pdc","ts_600_pdc","ts_1800_pdc","ts_200_tica","ts_600_tica","ts_200_qlp","ts_600_qlp","ts_1800_qlp","ts_1800_tica","ts_600_el","ts_1800_el"]
         #
         # Tidying up before stacking:
         if newlcs is not None and len(newlcs)>0:
@@ -1578,12 +1578,14 @@ class multilc(lc):
                     return None
             elif f[0][0].header['TELESCOP'].lower()=='tess':
                 if 'ORIGIN' in f[0][0].header and f[0][0].header['ORIGIN']=='MIT/QLP':
+                    print([type(fi[1].columns) for fi in f])
+                    fs='elec' if int(sect)<56 else 'norm1'
                     ilc.load_lc(np.hstack([fi[1].data['TIME'] for fi in f]), 
                                 fluxes={'flux':np.hstack([fi[1].data['SAP_FLUX'] for fi in f]),
-                                        'xl_ap_flux':np.hstack([fi[1].data['KSPSAP_FLUX_LAG'] for fi in f]),
-                                        'xs_ap_flux':np.hstack([fi[1].data['KSPSAP_FLUX_SML'] for fi in f])},
-                                flux_errs={'flux_err':np.hstack([fi[1].data['KSPSAP_FLUX_ERR'] for fi in f])},
-                                src='qlp',mission='tess', jd_base=2457000, flx_system='elec', sect=sect, 
+                                        'xl_ap_flux':np.hstack([fi[1].data['KSPSAP_FLUX_LAG'] if 'KSPSAP_FLUX_LAG' in fi[1].columns.names else fi[1].data['DET_FLUX_LAG'] for fi in f]),
+                                        'xs_ap_flux':np.hstack([fi[1].data['KSPSAP_FLUX_SML'] if 'KSPSAP_FLUX_SML' in fi[1].columns.names else fi[1].data['DET_FLUX_SML'] for fi in f])},
+                                flux_errs={'flux_err':np.hstack([fi[1].data['KSPSAP_FLUX_ERR'] if 'KSPSAP_FLUX_ERR' in fi[1].columns.names else fi[1].data['DET_FLUX_ERR']  for fi in f])},
+                                src='qlp', mission='tess', jd_base=2457000, flx_system=fs, sect=sect, 
                                 cent1=np.hstack([fi[1].data['SAP_X'] for fi in f]), cent2=np.hstack([fi[1].data['SAP_Y'] for fi in f]))
                     return ilc
 

@@ -237,7 +237,7 @@ class monoModel():
         n_bytes = 2**31
         max_bytes = 2**31-1
 
-        bytes_out = pickle.dumps(self.__dict__)
+        bytes_out = pickle.dumps({d:self.__dict__[d] for d in self.__dict__ if type(self.__dict__[d]) not in [pm.Model,xo.orbits.KeplerianOrbit]})
         #bytes_out = pickle.dumps(self)
         with open(savefile, 'wb') as f_out:
             for idx in range(0, len(bytes_out), max_bytes):
@@ -616,7 +616,7 @@ class monoModel():
             else:
                 #Here we need to add up the cadences in transit (and not simply count the points) to check coverage:
                 days_in_tr=np.sum([float(self.lc.cadence[ncad].split('_')[1])/86400 for ncad in np.arange(len(self.lc.cadence))[self.lc.mask][intr]])
-                #print(days_in_tr,(1.0+coverage_thresh),np.sum(days_in_known_transits))
+                print(per,days_in_tr,(1.0+coverage_thresh),np.sum(days_in_known_transits))
                 check_pers_ix+=[days_in_tr<(1.0+coverage_thresh)*np.sum(days_in_known_transits)]
                 #Less than 15% of another eclipse is covered
                 #print(per,"OK",np.sum(intr),days_in_known_transits,np.sum(days_in_known_transits),days_in_tr)
@@ -643,11 +643,14 @@ class monoModel():
         check_pers_ints = np.arange(1,np.ceil(pl_dic['period']/10),1.0)
         if 'tcen_3' in pl_dic:
             #Also need to check that the implied periods match the third period
+            print("Checking three tcens for allowed periods")
+            print(pl_dic['period']/check_pers_ints,pl_dic['tdur'],pl_dic['tcen'],pl_dic['tcen_2'],pl_dic['tcen_3'])
             check_pers_ix = self.CheckPeriodsHaveGaps(pl_dic['period']/check_pers_ints,pl_dic['tdur'],pl_dic['tcen'],tcen_2=pl_dic['tcen_2'],tcen_3=pl_dic['tcen_3'],**kwargs)
         else:
-            
+            print("Checking two tcens for allowed periods")
+            print(pl_dic['period']/check_pers_ints,pl_dic['tdur'],pl_dic['tcen'],pl_dic['tcen_2'])
             check_pers_ix = self.CheckPeriodsHaveGaps(pl_dic['period']/check_pers_ints,pl_dic['tdur'],pl_dic['tcen'],tcen_2=pl_dic['tcen_2'],**kwargs)
-
+        print(check_pers_ix)
         pl_dic['period_int_aliases']=check_pers_ints[check_pers_ix]
         if pl_dic['period_int_aliases']==[]:
             print("problem in computing Duotransit aliases")
@@ -1191,8 +1194,8 @@ class monoModel():
             #####################################################
             #     Training GP kernel on out-of-transit data
             #####################################################
-            phot_mean=pm.Normal("phot_mean",mu=np.median(self.lc.flux[mask]),
-                                  sd=np.std(self.lc.flux[mask]))
+            phot_mean=pm.Normal("phot_mean",mu=np.nanmedian(self.lc.flux[mask]),
+                                  sd=np.nanstd(self.lc.flux[mask]))
 
             self.log_flux_std=np.array([np.log(np.nanmedian(abs(np.diff(self.lc.flux[self.lc.mask*self.lc.cadence_index[:,n]])))) for n in range(len(self.cads_short))]).ravel().astype(floattype)
             if self.debug: print(self.log_flux_std)
@@ -2460,7 +2463,7 @@ class monoModel():
             self.model = model
             self.init_soln = map_soln
 
-    def SampleModel(self, n_draws=500, n_burn_in=None, overwrite=False, continue_sampling=False, n_chains=4, **kwargs):
+    def SampleModel(self, n_draws=500, n_burn_in=None, overwrite=False, continue_sampling=False, n_chains=4, save=True, **kwargs):
         """Run PyMC3 sampler
 
         Args:
@@ -2498,8 +2501,9 @@ class monoModel():
                 else:
                     self.trace = pmx.sample(tune=n_burn_in, draws=n_draws, start=self.init_soln, chains=n_chains, compute_convergence_checks=False, **kwargs)
             #Saving both the class and a pandas dataframe of output data.
-            self.SaveModelToFile()
-            _=self.MakeTable(save=True)
+            if save:
+                self.SaveModelToFile()
+                _=self.MakeTable(save=True)
         elif not (hasattr(self,'trace') or hasattr(self,'trace_df')):
             print("Trace or trace df exists...")
 
@@ -4566,6 +4570,10 @@ class monoModel():
         import fractions
 
         assert hasattr(self,'trace') #We need to have run Mcmc to have samples first.
+
+        if not hasattr(self.lc,'radec'):
+            #Getting the coordinate
+            self.lc.get_radec()
 
         #If not defined, we'll take the date today:
         if time_start is None:

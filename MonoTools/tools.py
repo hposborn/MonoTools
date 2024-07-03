@@ -34,6 +34,7 @@ from datetime import datetime
 import requests
 import httplib2
 from lxml import html
+import importlib
 
 import glob
 
@@ -254,7 +255,7 @@ def openFits(f,fname,mission,cut_all_anom_lim=4.0,use_ppt=True,force_raw_flux=Fa
 
     return lc
 
-def find_time_regions(time,split_gap_size=1.5):
+def find_time_regions(time,split_gap_size=1.5,**kwargs):
     if np.nanmax(np.diff(np.sort(time)))>split_gap_size:
         #We have gaps in the lightcurve, so we'll find the bins by looping through those gaps
         time_starts = np.hstack((np.nanmin(time),np.sort(time)[1+np.where(np.diff(np.sort(time))>split_gap_size)[0]]))
@@ -264,7 +265,7 @@ def find_time_regions(time,split_gap_size=1.5):
         return [(np.nanmin(time),np.nanmax(time))]
 
 def maskLc(lc,fhead,cut_all_anom_lim=5.0,use_ppt=False,end_of_orbit=True,mask=None,
-           use_binned=False,use_flat=False,mask_islands=True,input_mask=None):
+           use_binned=False,use_flat=False,mask_islands=True,input_mask=None,**kwargs):
     # Mask bad data (nans, infs and negatives)
 
     prefix= 'bin_' if use_binned else ''
@@ -757,24 +758,15 @@ def CutAnomDiff(flux,thresh=4.2):
                      abs(flux[-1]-np.median(flux[-3:-1]))<(np.median(abs(diffarr[0,:]))*thresh*5)))
     return anoms
 
-def observed(tic,radec=None,maxsect=69):
+def observed(tic,radec,maxsect=83):
     # Using either "webtess" page or Chris Burke's tesspoint to check if TESS object was observed:
     # Returns dictionary of each sector and whether it was observed or not
-    if radec is None and type(tic)!=SkyCoord:
-        if type(tic) in [np.int64,np.float64,int,float]:
-            page = requests.get('https://heasarc.gsfc.nasa.gov/cgi-bin/tess/webtess/wtv.py?Entry='+str(int(tic)))
-        else:
-            print(type(tic),"- unrecognised")
-        #print('https://heasarc.gsfc.nasa.gov/cgi-bin/tess/webtess/wtv.py?Entry='+str(tic))
-        tree = html.fromstring(page.content)
-        Lamp = tree.xpath('//pre/text()') #stores class of //pre html element in list Lamp
-        tab=tree.xpath('//pre/text()')[0].split('\n')[2:-1]
-        out_dic={int(t[7:9]): True if t.split(':')[1][1]=='o' else False for t in tab}
-    else:
-        from tess_stars2px import tess_stars2px_function_entry as tess_stars2px
-        result = tess_stars2px(tic, radec.ra.deg, radec.dec.deg)
-        sectors = result[3]
-        out_dic={s:True if s in sectors else False for s in np.arange(maxsect)}
+    
+    tess_stars2px = importlib.import_module("tess-point.tess_stars2px_function_entry")
+    #from tesspoint import tess_stars2px_function_entry as tess_stars2px
+    result = tess_stars2px(tic, radec.ra.deg, radec.dec.deg)
+    sectors = result[3]
+    out_dic={s:True if s in sectors else False for s in np.arange(maxsect)}
     #print(out_dic)
     return out_dic
 
@@ -945,7 +937,7 @@ def update_lc_locs(epoch,most_recent_sect):
         resp, content = h.request(fitsloc)
         if int(resp['status']) < 400:
             filename=content.split(b'\n')[1].decode().split(' ')[-2].split('-')
-            epoch=epoch.append(pd.Series({'date':int(filename[0][4:]),'runid':int(filename[3])},name=sect))
+            epoch.loc[sect]=pd.Series({'date':int(filename[0][4:]),'runid':int(filename[3])})
         else:
             print("Sector "+str(sect)+" not (yet) found on MAST | RESPONCE:"+resp['status'])
     epoch.to_csv(MonoData_tablepath+"/tess_lc_locations.csv")
