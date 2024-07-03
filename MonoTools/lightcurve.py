@@ -96,7 +96,7 @@ class lc():
         self.flx_unit   = self.flx_unit_dic[flx_system][0] if flx_system!='elec' else 1/np.nanmedian(fluxes['flux'])
 
         #Adding timeseries:
-        finitetimemask=np.isfinite(time)
+        finitetimemask=[np.isfinite(time)]
         self.time = time[finitetimemask]
         self.timeseries+=['time']
         self.cadence = np.tile(cadence_str,np.sum(finitetimemask))
@@ -277,10 +277,8 @@ class lc():
                 self.flux_mask=self.flux_mask&(np.sum(np.vstack([self.quality.astype(int) & 2 ** (q - 1) for q in qs]),axis=0)==0)
             if in_transit is not None:
                 out_of_trans=~in_transit
-            elif hasattr(self, 'in_trans') and type(self.in_trans)==np.ndarray:
+            elif hasattr(self, 'in_trans'):
                 out_of_trans=~self.in_trans
-            elif hasattr(self, 'in_trans') and type(self.in_trans)==dict and 'all' in self.in_trans:
-                out_of_trans=~self.in_trans['all']
             else:
                 out_of_trans=np.tile(True, len(self.flux_mask))
 
@@ -303,7 +301,7 @@ class lc():
 
             if mask_islands:
                 #Masking islands of data which are <12hrs long and >12hrs from other data
-                time_regions=tools.find_time_regions(self.time,**kwargs)
+                time_regions=tools.find_time_regions(self.time)
                 xmask=np.tile(True,np.sum(self.flux_mask))
                 for j in range(len(time_regions)):
                     jump_before = 100 if j==0 else time_regions[j][0]-time_regions[j-1][1]
@@ -387,13 +385,8 @@ class lc():
             transit_mask=~self.in_trans
 
         if flattype=='bspline':
-            if transit_mask is None and hasattr(self,'in_trans') and ((type(self.in_trans) is dict and np.sum(self.in_trans['all'])>0) or (type(self.in_trans) is np.ndarray and np.sum(self.in_trans)>0)) and type(transit_mask)!=np.ndarray:
-                if type(self.in_trans) is dict:
-                    transit_mask = ~self.in_trans['all']
-                else:
-                    transit_mask = ~self.in_trans[:]
-            elif transit_mask is None:
-                transit_mask = np.tile(True,len(self.time))
+            if transit_mask is None and hasattr(self,'in_trans') and np.sum(self.in_trans)>0 and type(transit_mask)!=np.ndarray:
+                transit_mask = ~self.in_trans[:]
             for its in timeseries:
                 timearr=self.bin_time[:] if 'bin_' in its else self.time[:]
 
@@ -500,12 +493,8 @@ class lc():
         ootlcdict['ootbin_near_trans']=np.hstack((np.tile(False,np.sum(np.isfinite(getattr(self,"bin_"+flux_name)))),
                                                   np.tile(True,np.sum(near_transit_mask*self.mask)) ))
         assert hasattr(self,'in_trans')
-        if type(self.in_trans)==dict:
-            ootlcdict['ootbin_in_trans']=np.hstack((np.tile(False,np.sum(np.isfinite(getattr(self,"bin_"+flux_name)))),
-                                                self.in_trans['all'][near_transit_mask*self.mask] ))
-        else:
-            ootlcdict['ootbin_in_trans']=np.hstack((np.tile(False,np.sum(np.isfinite(getattr(self,"bin_"+flux_name)))),
-                                                self.in_trans[near_transit_mask*self.mask] ))
+        ootlcdict['ootbin_in_trans']=np.hstack((np.tile(False,np.sum(np.isfinite(getattr(self,"bin_"+flux_name)))),
+                                        self.in_trans[near_transit_mask*self.mask] ))
 
         #Sorting these timeseries by the stacked time
         for key in ["ootbin_"+flux_name,'ootbin_flux_err','ootbin_cadence','ootbin_near_trans','ootbin_in_trans']:
@@ -534,7 +523,7 @@ class lc():
             self.sort_timeseries()
 
         if np.any(['_flat' in its and its not in self.timeseries for its in timeseries]):
-            self.flatten(timeseries=list(np.unique([t.replace('_flat','') for t in timeseries])))
+            self.flatten(timeseries=timeseries)
             
         #setattr(self, 'bin_cadence',binlc['flux'][:,0])
 
@@ -557,7 +546,7 @@ class lc():
         #Found lightcurve gaps - making shorter blocks to loop through.
         if np.nanmax(np.diff(np.sort(self.time)))>split_gap_size:
             #We have gaps in the lightcurve, so we'll find the bins by looping through those gaps
-            time_regions=tools.find_time_regions(self.time,**kwargs)
+            time_regions=tools.find_time_regions(self.time)
             for j in range(len(time_regions)):
                 time_bools[mask*(self.time>=time_regions[j][0])*(self.time<=time_regions[j][1])]=int(j+1)
                 cad=np.nanmedian(np.diff(self.time[time_bools==j+1]))
@@ -618,7 +607,7 @@ class lc():
         self.timeseries=list(np.unique(self.timeseries))
    
     def plot(self, plot_rows=1, timeseries=['flux'], jump_thresh=10, ylim=None, xlim=None, bin_only=False,
-             yoffset=0, savepng=False, savepdf=False,savefileloc=None,plot_ephem=None, plot_masked=True,**kwargs):
+             yoffset=0, savepng=False, savepdf=False,savefileloc=None,plot_ephem=None, plot_masked=True):
         """Plot the lightcurve using Matplotlib.
 
         In the default case, either data that is extremely long (i.e Kepler), or data that has a large gap (i.e. TESS Y1/3) will be split into two rows.
@@ -644,7 +633,7 @@ class lc():
             self.make_mask()
 
         minmax_global = (np.min(self.flux[self.mask]),np.max(self.flux[self.mask]))
-        total_time=self.time[self.mask][-1]-self.time[self.mask][0]
+        total_time=self.time[-1]-self.time[0]
         import seaborn as sns
         sns.set_palette('viridis')
         if 'flux_flat' in timeseries and not hasattr(self,'flux_flat'):
@@ -763,10 +752,9 @@ class multilc(lc):
             priorities (list, optional): Which lightcurve sources take priority in the case that they overlap in timing?
                                          This is required in the case that lightcurves are overlapping... Defaults to None.
         """
-        print(priorities)
         if priorities is None:
             #Here we can list the priorities for Kepler/K2 and TESS:
-            priorities=["k1_120_pdc","k1_1800_pdc","k2_120_ev","k2_120_vand","k2_120_pdc","k2_1800_ev","k2_1800_vand","k2_1800_pdc","ts_20_pdc","ts_120_pdc","ts_200_pdc","ts_600_pdc","ts_1800_pdc","ts_200_tica","ts_600_tica","ts_200_qlp","ts_600_qlp","ts_1800_qlp","ts_1800_tica","ts_600_el","ts_1800_el"]
+            priorities=["k1_120_pdc","k1_1800_pdc","k2_120_ev","k2_120_vand","k2_120_pdc","k2_1800_ev","k2_1800_vand","k2_1800_pdc","ts_20_pdc","ts_120_pdc","ts_200_pdc","ts_200_pdc","ts_600_pdc","ts_1800_pdc","ts_200_tica","ts_200_tica","ts_600_tica","ts_200_qlp","ts_200_qlp","ts_600_qlp","ts_1800_qlp","ts_1800_tica","ts_600_el","ts_1800_el"]
         #
         # Tidying up before stacking:
         if newlcs is not None and len(newlcs)>0:
