@@ -928,6 +928,20 @@ def update_tce_timeseres(maxsect=None,overwrite=False):
     newertcefile=newertcefile.set_index(newertcefile['TJD']).loc[:,['TCE_fraction']]
     newertcefile.to_csv(MonoData_tablepath+"/tess_tce_fractions.csv.gz",compression="gzip")
 
+def saferound2(durations,n_plot=24):
+    """Custom function to round the plot durations such that all values are always equal to or greater than 1."""
+    from iteround import saferound
+    from copy import deepcopy
+    minroundedsize=0
+    durs=deepcopy(durations[:])
+    while minroundedsize<1:
+        sizes=saferound(n_plot*np.array(durs)/np.sum(durs),places=0)
+        minroundedsize=np.min(sizes)
+        if minroundedsize==0:
+            durs[np.argmin(sizes)]*=1.5
+            #Going again with larger sizes
+    return sizes
+
 def update_lc_locs(epoch,most_recent_sect):
     #Updating the table of lightcurve locations using the scripts on the MAST/TESS "Bulk Downloads" page.
     all_sects=np.arange(np.max(epoch.index.values),most_recent_sect).astype(int)+1
@@ -937,7 +951,11 @@ def update_lc_locs(epoch,most_recent_sect):
         resp, content = h.request(fitsloc)
         if int(resp['status']) < 400:
             filename=content.split(b'\n')[1].decode().split(' ')[-2].split('-')
+<<<<<<< HEAD
             epoch.loc[sect]=pd.Series({'date':int(filename[0][4:]),'runid':int(filename[3])})
+=======
+            epoch.loc[sect, ['date', 'runid']] = [int(filename[0][4:]), int(filename[3])]
+>>>>>>> 1e01c6c5895b45d57b6eb4ae5b87d885c98225b0
         else:
             print("Sector "+str(sect)+" not (yet) found on MAST | RESPONCE:"+resp['status'])
     epoch.to_csv(MonoData_tablepath+"/tess_lc_locations.csv")
