@@ -678,8 +678,7 @@ class monoModel():
             print(pl_dic['period']/check_pers_ints,pl_dic['tdur'],pl_dic['tcen'],pl_dic['tcen_2'],pl_dic['tcen_3'])
             check_pers_ix = self.CheckPeriodsHaveGaps(pl_dic['period']/check_pers_ints,pl_dic['tdur'],pl_dic['tcen'],tcen_2=pl_dic['tcen_2'],tcen_3=pl_dic['tcen_3'],**kwargs)
         else:
-            print("Checking two tcens for allowed periods")
-            print(pl_dic['period']/check_pers_ints,pl_dic['tdur'],pl_dic['tcen'],pl_dic['tcen_2'])
+            
             check_pers_ix = self.CheckPeriodsHaveGaps(pl_dic['period']/check_pers_ints,pl_dic['tdur'],pl_dic['tcen'],tcen_2=pl_dic['tcen_2'],**kwargs)
         print(check_pers_ix)
         pl_dic['period_int_aliases']=check_pers_ints[check_pers_ix]
