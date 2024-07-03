@@ -1161,7 +1161,6 @@ class multilc(lc):
         Returns:
             lightcurve.lc: TESS lightcurve
         """
-        print(sector,search)
         #['all','spoc_20','spoc_120','spoc_1800','qlp_1800','eleanor_1800']
         #use_ppt=True, coords=None, use_qlp=None, use_eleanor=None, data_loc=None, search_fast=False, **kwargs):
 
