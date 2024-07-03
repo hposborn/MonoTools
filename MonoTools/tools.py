@@ -52,7 +52,6 @@ lc_dic={'tess':'ts','kepler':'k1','k2':'k2','corot':'co','cheops':'ch'}
 
 #goto='/Users/hosborn' if 'Users' in os.path.dirname(os.path.realpath(__file__)).split('/') else '/home/hosborn'
 
-
 def openFits(f,fname,mission,cut_all_anom_lim=4.0,use_ppt=True,force_raw_flux=False,end_of_orbit=False,mask=None,**kwargs):
     """opens and processes all lightcurve files (especially, but not only, fits files).
 
@@ -937,6 +936,20 @@ def update_tce_timeseres(maxsect=None,overwrite=False):
     newertcefile=newertcefile.set_index(newertcefile['TJD']).loc[:,['TCE_fraction']]
     newertcefile.to_csv(MonoData_tablepath+"/tess_tce_fractions.csv.gz",compression="gzip")
 
+def saferound2(durations,n_plot=24):
+    """Custom function to round the plot durations such that all values are always equal to or greater than 1."""
+    from iteround import saferound
+    from copy import deepcopy
+    minroundedsize=0
+    durs=deepcopy(durations[:])
+    while minroundedsize<1:
+        sizes=saferound(n_plot*np.array(durs)/np.sum(durs),places=0)
+        minroundedsize=np.min(sizes)
+        if minroundedsize==0:
+            durs[np.argmin(sizes)]*=1.5
+            #Going again with larger sizes
+    return sizes
+
 def update_lc_locs(epoch,most_recent_sect):
     #Updating the table of lightcurve locations using the scripts on the MAST/TESS "Bulk Downloads" page.
     all_sects=np.arange(np.max(epoch.index.values),most_recent_sect).astype(int)+1
@@ -946,7 +959,7 @@ def update_lc_locs(epoch,most_recent_sect):
         resp, content = h.request(fitsloc)
         if int(resp['status']) < 400:
             filename=content.split(b'\n')[1].decode().split(' ')[-2].split('-')
-            epoch=epoch.append(pd.Series({'date':int(filename[0][4:]),'runid':int(filename[3])},name=sect))
+            epoch.loc[sect,:]=pd.Series({'date':int(filename[0][4:]),'runid':int(filename[3])})
         else:
             print("Sector "+str(sect)+" not (yet) found on MAST | RESPONCE:"+resp['status'])
     epoch.to_csv(MonoData_tablepath+"/tess_lc_locations.csv")
@@ -1337,7 +1350,7 @@ def lcBin(lc,binsize=1/48,split_gap_size=0.8,use_flat=True,use_masked=True, use_
         ret_lc['bin_cadence']=binlc['bin_cadence'].ravel()
         return ret_lc
 
-def bin_lc_given_new_x(lc_segment, new_x):
+def old_bin_lc_given_new_x(lc_segment, new_x):
     binsize=np.nanmedian(np.diff(new_x))
     #Making bin divisions half way between each defined x point here
     new_bins=np.hstack((new_x[0]-0.5*binsize,0.5*(new_x[:-1]+new_x[1:]),new_x[-1]+0.5*binsize))
@@ -1348,7 +1361,10 @@ def bin_lc_given_new_x(lc_segment, new_x):
     binlc=np.column_stack((new_x,fluxes))
     return binlc
 
-def bin_lc_segment(lc_segment, binsize,return_digi=False):
+def bin_lc_given_new_x(lc_segment, new_x):
+    return np.column_stack((bin_light_curve(time=lc_segment[:,0],flux=lc_segment[:,1],flux_err=lc_segment[:,2],bin_time=binsize,return_bin_indices=return_digi,new_time_bins=new_x)))
+
+def old_bin_lc_segment(lc_segment, binsize,return_digi=False):
     if len(lc_segment)>0:
         digi=np.digitize(lc_segment[:,0],np.arange(np.min(lc_segment[:,0])-0.5*binsize,np.max(lc_segment[:,0])+0.5*binsize,binsize))
         binlc=np.vstack([[[np.nanmedian(lc_segment[digi==d,0])]+\
@@ -1359,6 +1375,99 @@ def bin_lc_segment(lc_segment, binsize,return_digi=False):
             return binlc
     else:
         return lc_segment
+
+def bin_lc_segment(lc_segment, binsize, return_digi=False):
+    return np.column_stack((bin_light_curve(time=lc_segment[:,0],flux=lc_segment[:,1],flux_err=lc_segment[:,2],bin_time=binsize,return_bin_indices=return_digi)))
+
+def bin_light_curve(time, flux, flux_err= None,
+    bin_time= 1 / 24, return_std=True, return_bin_indices= False,new_time_bins = None,
+):
+    """Bins a light curve into time intervals and calculates the weighted mean
+    and optionally the standard deviation of the flux in each bin.
+
+    Parameters
+    ----------
+    time : np.ndarray
+        The 1D array containing the time points of the light curve.
+    flux : np.ndarray
+        The 1D array containing the flux values of the light curve at the
+        corresponding time points.
+    flux_err : Optional[np.ndarray], optional
+        The 1D array containing the error (uncertainty) on the flux values.
+        If not provided, a weight of 1 is used for each data point.
+    bin_time : float, optional
+        The width of the bins in units of time. Defaults to 1/24 (days).
+    return_std : bool, optional
+        If True (default), calculate and return the weighted standard deviation
+        of the flux in each bin. If False, only the bin centers and weighted
+        mean flux are returned.
+    return_bin_indices : bool, optional
+        If True (default), return the indexes for each bin derived by `np.digitize`.
+    new_time_bins : Optional[np.ndarray], optional
+        An array of potential new times to bin into.
+
+    Returns
+    -------
+    Union[Tuple[np.ndarray, np.ndarray, np.ndarray], Tuple[np.ndarray, np.ndarray]]
+        A tuple containing the bin centers and the weighted mean flux in each bin.
+        If `return_std` is True, the tuple also includes the weighted standard
+        deviation of the flux in each bin.
+
+    Notes
+    -----
+    This function removes any NaN values from the input arrays before binning.
+    For bins with only one data point, the standard deviation is set to zero.
+
+    See Also
+    --------
+    bin_light_curve_slow
+    """
+    if np.any(np.isnan(time)):
+        mask = ~np.isnan(time)
+        time = time[mask]
+        flux = flux[mask]
+        if flux_err is not None:
+            flux_err = flux_err[mask]
+
+    if new_time_bins is None:
+        # Create bins based on the specified bin_time
+        bins = np.arange(np.nanmin(time), np.nanmax(time) + 2 * bin_time, bin_time)
+    else:
+        avbinsize=np.nanmedian(np.diff(new_x))
+        #Making bin divisions half way between each defined x point here
+        bins=np.hstack((new_x[0]-0.5*avbinsize,0.5*(new_x[:-1]+new_x[1:]),new_x[-1]+0.5*avbinsize))
+
+    # Digitize the time array into the created bins
+    bin_indices = np.digitize(time, bins) - 1
+
+    # Find non-empty bins
+    points_per_bin = np.bincount(bin_indices)
+    non_empty_bins = np.where(points_per_bin > 0)
+    bin_centers = bins[non_empty_bins] + bin_time / 2
+
+    weights = 1.0 if flux_err is None else 1 / flux_err**2
+    weighted_sum = np.bincount(bin_indices, weights=flux * weights)[non_empty_bins]
+    sum_of_weights = np.bincount(bin_indices, weights=None if flux_err is None else weights)[
+        non_empty_bins
+    ]
+    weighted_mean = weighted_sum / sum_of_weights
+
+    if return_std:
+        mean_repeated = np.repeat(weighted_mean, points_per_bin[non_empty_bins])
+        variance = (
+            np.bincount(bin_indices, weights=(flux - mean_repeated) ** 2 * weights)[non_empty_bins]
+            / sum_of_weights
+        )
+        weighted_std = np.where(points_per_bin[non_empty_bins] == 1, 0, np.sqrt(variance))
+        if return_bin_indices:
+            return bin_centers, weighted_mean, weighted_std/np.sqrt(points_per_bin), bin_indices
+        else:
+            return bin_centers, weighted_mean, weighted_std/np.sqrt(points_per_bin)
+    else:
+        if return_bin_indices:
+            return bin_centers, weighted_mean, bin_indices
+        else:
+            return bin_centers, weighted_mean
 
 def create_transit_mask(t,tcens,tdurs,maskdist=1.1):
     in_trans=np.zeros_like(t).astype(bool)
@@ -2147,3 +2256,62 @@ def GapCull(t0,t,dat,std_thresh=10,boolean=None,time_jump_thresh=0.4):
             elif jump_time > t0:
                 boolean*=(t<jump_time)
     return boolean
+
+def update_period_w_tls(time,flux,per,N_search_pers=200,per_range_search=0.01,oversampling=5):
+    """
+    Args:
+        time (ndarray) - numpy array of times
+        flux (ndarray) - numpy array of fluxes in ppm (normalised to zero)
+        per (float) - period to test/update
+        N_search_pers (int,optional) - Minimum number of periods to search. Must be greater than 50 or TLS fails
+        per_range_search (float,optional) - Range, in days, to search for true period."""
+    from transitleastsquares import transitleastsquares as tls
+    tlsmodel=tls(t=np.sort(time), 
+                 y=1+flux[np.argsort(time)]*1e-3)
+    #Backed out the period timestep from TLS to ensure >100 points (otherwise it defaults to searching the whole period range)
+    span=np.max(time)-np.min(time)
+    deltaP=per**(4/3)/(13.23*oversampling*span)
+    #print("TLS period update. period_min=",per-0.5*N_search_pers*deltaP,"period_max=",per+0.5*N_search_pers*deltaP)
+    outtls=tlsmodel.power(period_min=per-0.5*np.max([N_search_pers*deltaP,per_range_search]),period_max=per+0.5*np.max([N_search_pers*deltaP,per_range_search]),
+                          use_threads=4, duration_grid_step=1.2,
+                           oversampling_factor=oversampling,transit_depth_min=100e-6)
+    return outtls.period
+
+def iteratively_determine_GP_params(pmmodel,time,flux,flux_err,tdurs,debug=False):
+    """Iteratively determining best start parameter arrays for SHO GP kernel w0 and power."""
+    with pmmodel:
+        av_dur = np.nanmean(tdurs)
+        #freqs bounded from 2pi/10 to 2pi/2, but seauentially increasing these bounds until the estimate_inverse_gamma_parameters works
+        success=False
+        minw0=(2*np.pi)/10
+        maxw0=(2*np.pi)/1.5
+        while not success and maxw0<((2*np.pi)/(av_dur*0.33)):
+            try:
+                w0_alpha_beta = pmx.estimate_inverse_gamma_parameters(lower=minw0,upper=maxw0)
+                w0_mode = (w0_alpha_beta['beta']/(1+w0_alpha_beta['alpha']))
+                if debug: print(maxw0,(2*np.pi)/(av_dur*0.33),minw0,w0_alpha_beta,w0_mode)
+                phot_w0 = pm.InverseGamma("phot_w0",testval=(2*np.pi)/10, **w0_alpha_beta)
+                success=True
+            except:
+                minw0/=1.2
+                maxw0*=1.1
+                success=False
+        if debug: print(success, w0_mode,minw0,maxw0)
+
+        #We want the power to be somewhere between the point-to-point MAD, and the STD of the lightcurve binned at the w0 timescales:
+        power_est = np.nanstd(tools.bin_lc_segment(np.column_stack((time,flux,flux_err)),binsize=2*np.pi/w0_mode)[:,1])
+        maxpower = power_est
+        minpower = np.nanmedian(abs(np.diff(flux)))
+        success=False
+        while not success and maxpower<5*power_est:
+            try:
+                if debug: print(maxpower,power_est,minpower)
+                phot_power = pm.InverseGamma("phot_power",testval=minpower*5,
+                                        **pmx.estimate_inverse_gamma_parameters(lower=minpower, upper=maxpower))
+                success=True
+            except:
+                maxpower*=1.1
+                minpower/=1.2
+                success=False
+        if debug: print(success, minpower,maxpower)
+    return phot_w0, phot_power
