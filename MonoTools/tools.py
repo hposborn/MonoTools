@@ -15,8 +15,7 @@ from scipy.interpolate import LSQUnivariateSpline, BSpline,splev,splrep
 
 import h5py
 
-import pymc3 as pm
-import theano.tensor as tt
+import pymc as pm
 import astropy.units as u
 from astropy.units import cds
 from astropy import constants as c
@@ -762,9 +761,9 @@ def observed(tic,radec=None,maxsect=84):
     # Using either "webtess" page or Chris Burke's tesspoint to check if TESS object was observed:
     # Returns dictionary of each sector and whether it was observed or not
     
-    tess_stars2px = importlib.import_module("tess-point.tess_stars2px_function_entry")
+    tess_stars2px = importlib.import_module("tess-point.tess_stars2px")
     #from tesspoint import tess_stars2px_function_entry as tess_stars2px
-    result = tess_stars2px(tic, radec.ra.deg, radec.dec.deg)
+    result = tess_stars2px.tess_stars2px_function_entry(tic, radec.ra.deg, radec.dec.deg)
     sectors = result[3]
     out_dic={s:True if s in sectors else False for s in np.arange(maxsect)}
     #print(out_dic)
@@ -1997,7 +1996,7 @@ def kepler_spline(time, flux, flux_mask = None, transit_mask = None, bk_space=1.
         ispline = None
 
         # Mask indicating the points used to fit the spline.
-        imask = np.ones_like(time[ix], dtype=np.bool)
+        imask = np.ones_like(time[ix]).astype(bool)
         imask = imask*flux_mask[ix] if flux_mask is not None else imask
         imask = imask*transit_mask[ix] if transit_mask is not None else imask
 
@@ -2271,39 +2270,89 @@ def update_period_w_tls(time,flux,per,N_search_pers=200,per_range_search=0.01,ov
 
 def iteratively_determine_GP_params(pmmodel,time,flux,flux_err,tdurs,debug=False):
     """Iteratively determining best start parameter arrays for SHO GP kernel w0 and power."""
-    with pmmodel:
-        av_dur = np.nanmean(tdurs)
-        #freqs bounded from 2pi/10 to 2pi/2, but seauentially increasing these bounds until the estimate_inverse_gamma_parameters works
-        success=False
-        minw0=(2*np.pi)/10
-        maxw0=(2*np.pi)/1.5
-        while not success and maxw0<((2*np.pi)/(av_dur*0.33)):
-            try:
-                w0_alpha_beta = pmx.estimate_inverse_gamma_parameters(lower=minw0,upper=maxw0)
-                w0_mode = (w0_alpha_beta['beta']/(1+w0_alpha_beta['alpha']))
-                if debug: print(maxw0,(2*np.pi)/(av_dur*0.33),minw0,w0_alpha_beta,w0_mode)
-                phot_w0 = pm.InverseGamma("phot_w0",testval=(2*np.pi)/10, **w0_alpha_beta)
-                success=True
-            except:
-                minw0/=1.2
-                maxw0*=1.1
-                success=False
-        if debug: print(success, w0_mode,minw0,maxw0)
+    lcrange=27
+    av_dur = np.average(tdurs)
+    exps=np.array([np.log((2*np.pi)/(av_dur)), np.log((2*np.pi)/(0.1*lcrange))])
+    #Max power as half the 1->99th percentile in flux
+    maxpowers=0.5*np.ptp(np.percentile(flux,[2,98]))
+    logmaxpowers=np.log(0.5*np.ptp(np.percentile(flux,[1,99])))
+    #([np.nanstd(self.lc_fit[scope].loc[~self.lc_fit[scope]['in_trans_all'],'flux'].values) for scope in self.lcs]))
+    
+    #Min power as 2x the average point-to-point displacement
+    logminpowers=np.log(2*abs(np.diff(flux)))
+    minpowers=0.5*abs(np.diff(flux))
+    span=abs(np.min(logmaxpowers)-np.max(logminpowers))
 
-        #We want the power to be somewhere between the point-to-point MAD, and the STD of the lightcurve binned at the w0 timescales:
-        power_est = np.nanstd(tools.bin_lc_segment(np.column_stack((time,flux,flux_err)),binsize=2*np.pi/w0_mode)[:,1])
-        maxpower = power_est
-        minpower = np.nanmedian(abs(np.diff(flux)))
-        success=False
-        while not success and maxpower<5*power_est:
-            try:
-                if debug: print(maxpower,power_est,minpower)
-                phot_power = pm.InverseGamma("phot_power",testval=minpower*5,
-                                        **pmx.estimate_inverse_gamma_parameters(lower=minpower, upper=maxpower))
-                success=True
-            except:
-                maxpower*=1.1
-                minpower/=1.2
-                success=False
-        if debug: print(success, minpower,maxpower)
-    return phot_w0, phot_power
+    import pymc_ext as pmx
+    target=0.01
+    success=np.array([False,False]);target=0.01
+    try:
+        while np.any(~success) and target<0.2:
+            if not success[0]:
+                try:
+                    low=(2*np.pi)/(abs(np.random.normal(3,1)))
+                    #itarg=abs(np.random.normal(target,0.5*target))
+                    w0vals = pmx.utils.estimate_inverse_gamma_parameters(lower=low,
+                                                                                        upper=(2*np.pi)/(av_dur*((0.03/target)**0.5)),
+                                                                                        target=0.01)
+                    success[0]=True
+                except:
+                    success[0]=False
+                    
+            if not success[1]:
+                try:
+                    sigmavals = pmx.utils.estimate_inverse_gamma_parameters(lower=np.min(minpowers),
+                                                                                upper=np.min(maxpowers)*np.sqrt(target/0.1),
+                                                                                target=0.01)
+                    success[1]=True
+                except:
+                    success[1]=False
+            target*=1.15
+        assert np.all(success), "InverseGamma estimation of "+"&".join(list(np.array(["w0","sigma"])[~success]))+" failed"
+        with pmmodel:
+            w0=pm.InverseGamma("w0",**w0vals)
+            sigma=pm.InverseGamma("sigma",**sigmavals)
+        return w0, sigma
+    except:
+        with pmmodel:
+            log_w0 = pm.Normal("log_w0", mu=exps[1]+0.3*np.ptp(exps), sigma=0.05*np.ptp(exps), initval=exps[1]+0.15*np.ptp(exps))
+            w0 = pm.Deterministic("w0", pm.math.exp(log_w0))
+            log_sigma = pm.Normal("log_sigma", mu=(np.min(logmaxpowers)+np.max(logminpowers))/2, sigma=0.2*abs(np.min(logmaxpowers)-np.max(logminpowers)),initval=np.min(logmaxpowers)-0.1)
+            sigma = pm.Deterministic("sigma", pm.math.exp(log_sigma))
+        return w0, sigma
+
+        # av_dur = np.nanmean(tdurs)
+        # #freqs bounded from 2pi/10 to 2pi/2, but seauentially increasing these bounds until the estimate_inverse_gamma_parameters works
+        # success=False
+        # minw0=(2*np.pi)/10
+        # maxw0=(2*np.pi)/1.5
+        # while not success and maxw0<((2*np.pi)/(av_dur*0.33)):
+        #     try:
+        #         w0_alpha_beta = pmx.estimate_inverse_gamma_parameters(lower=minw0,upper=maxw0)
+        #         w0_mode = (w0_alpha_beta['beta']/(1+w0_alpha_beta['alpha']))
+        #         if debug: print(maxw0,(2*np.pi)/(av_dur*0.33),minw0,w0_alpha_beta,w0_mode)
+        #         phot_w0 = pm.InverseGamma("phot_w0",testval=(2*np.pi)/10, **w0_alpha_beta)
+        #         success=True
+        #     except:
+        #         minw0/=1.2
+        #         maxw0*=1.1
+        #         success=False
+        # if debug: print(success, w0_mode,minw0,maxw0)
+
+        # #We want the power to be somewhere between the point-to-point MAD, and the STD of the lightcurve binned at the w0 timescales:
+        # power_est = np.nanstd(bin_lc_segment(np.column_stack((time,flux,flux_err)),binsize=2*np.pi/w0_mode)[:,1])
+        # maxpower = power_est
+        # minpower = np.nanmedian(abs(np.diff(flux)))
+        # success=False
+        # while not success and maxpower<5*power_est:
+        #     try:
+        #         if debug: print(maxpower,power_est,minpower)
+        #         phot_sigma = pm.InverseGamma("phot_sigma",testval=minpower*5,
+        #                                 **pmx.estimate_inverse_gamma_parameters(lower=minpower, upper=maxpower))
+        #         success=True
+        #     except:
+        #         maxpower*=1.1
+        #         minpower/=1.2
+        #         success=False
+        # if debug: print(success, minpower,maxpower)
+    

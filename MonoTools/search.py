@@ -67,12 +67,8 @@ for key in theano_pars:
     if key not in os.environ["THEANO_FLAGS"]:
         os.environ["THEANO_FLAGS"] = os.environ["THEANO_FLAGS"]+','+key+"="+theano_pars[key]
 
-import theano.tensor as tt
-import pymc3 as pm
-import pymc3_ext as pmx
-import theano
-theano.config.print_test_value = True
-theano.config.exception_verbosity='high'
+import pymc as pm
+import pymc_ext as pmx
 
 from . import tools
 from . import fit
@@ -1242,7 +1238,7 @@ class target():
             # Parameters for the stellar properties
             if fit_poly:
                 trend = pm.Normal("trend", mu=0, sd=np.exp(np.arange(1-polyorder,1,1.0)), shape=polyorder, testval=init_poly)
-                flux_trend = pm.Deterministic("flux_trend", tt.dot(np.vander(x-self.detns[planet]['tcen'], polyorder), trend))
+                flux_trend = pm.Deterministic("flux_trend", pm.math.dot(np.vander(x-self.detns[planet]['tcen'], polyorder), trend))
                 #trend = pm.Uniform("trend", upper=np.tile(1,polyorder+1), shape=polyorder+1,
                 #                  lower=np.tile(-1,polyorder+1), testval=init_poly)
                 #trend = pm.Normal("trend", mu=np.zeros(polyorder+1), sd=5*(10.0 ** -np.arange(polyorder+1)[::-1]), 
@@ -1262,12 +1258,12 @@ class target():
             #log_per = pm.Uniform("log_per", lower=np.log(dur*5),upper=np.log(1000),
             #                    testval=np.clip(np.log(init_per),np.log(dur*6),np.log(1000))
             #                    )
-            #per = pm.Deterministic("per",tt.exp(log_per))
+            #per = pm.Deterministic("per",pm.math.exp(log_per))
 
 
             # Orbital parameters for the planets
             log_ror = pm.Uniform("log_ror",lower=-6,upper=-0.5,testval=np.clip(0.5*np.log(dep),-6,-0.5))
-            ror = pm.Deterministic("ror", tt.exp(log_ror))
+            ror = pm.Deterministic("ror", pm.math.exp(log_ror))
             b = xo.distributions.ImpactParameter("b", ror=ror, testval=0.41)
 
             tcen = pm.Bound(pm.Normal, lower=self.detns[planet]['tcen']-0.7*dur, upper=self.detns[planet]['tcen']+0.7*dur)("tcen", mu=self.detns[planet]['tcen'], sd=0.25*dur, testval=np.random.normal(self.detns[planet]['tcen'],0.1*dur))
@@ -1278,28 +1274,28 @@ class target():
             if not self.detns[planet]['orbit_flag']=='multi':
                 if tdur_prior=='loguniform':
                     log_tdur = pm.Uniform("log_tdur", lower=np.log(5*cad), upper=np.log(2))
-                    tdur = pm.Deterministic("tdur",tt.exp(log_tdur))
+                    tdur = pm.Deterministic("tdur",pm.math.exp(log_tdur))
                 elif tdur_prior=='lognormal':
                     log_tdur = pm.Bound(pm.Normal, lower=np.log(5*cad), upper=np.log(2))("log_tdur", mu=np.log(dur), sd=0.33, testval=np.log(dur))
-                    tdur = pm.Deterministic("tdur",tt.exp(log_tdur))
+                    tdur = pm.Deterministic("tdur",pm.math.exp(log_tdur))
                 elif tdur_prior=='uniform':
                     tdur = pm.Uniform("tdur", lower=5*cad, upper=2, testval=dur)
                 elif tdur_prior=='normal':
                     tdur = pm.Bound(pm.Normal, lower=5*cad, upper=2)("tdur", mu=dur, sd=0.33*dur, testval=dur)                
 
             if self.detns[planet]['orbit_flag']!='multi':
-                circ_per = pm.Deterministic("circ_per",(np.pi**2*6.67e-11*rhostar*1409.78)*((tdur*86400)/tt.sqrt((1+ror)**2 - b**2))**3/(3*86400))
+                circ_per = pm.Deterministic("circ_per",(np.pi**2*6.67e-11*rhostar*1409.78)*((tdur*86400)/pm.math.sqrt((1+ror)**2 - b**2))**3/(3*86400))
 
             #ror, b = xo.distributions.get_joint_radius_impact(min_radius=0.0075, max_radius=0.25,
             #                                                  testval_r=np.sqrt(dep), testval_b=0.41)
-            #logror = pm.Deterministic("logror",tt.log(ror))
+            #logror = pm.Deterministic("logror",pm.math.log(ror))
             
             
             #pm.Potential("ror_prior", -logror) #Prior towards larger logror
 
             r_pl = pm.Deterministic("r_pl", ror*self.Rstar['val']*109.1)
 
-            #period = pm.Deterministic("period", tt.exp(log_per))
+            #period = pm.Deterministic("period", pm.math.exp(log_per))
 
             # Orbit model
             if self.detns[planet]['orbit_flag']!='multi':
@@ -1310,44 +1306,44 @@ class target():
                                                  period=period, t0=tcen, b=b)
                 #Deriving transit duration:
                 vels=orbit.get_relative_velocity(tcen)
-                tdur = pm.Deterministic("tdur",(2*self.Rstar['val']*tt.sqrt( (1+ror)**2 - b**2))/tt.sqrt(vels[0]**2+vels[1]**2))
+                tdur = pm.Deterministic("tdur",(2*self.Rstar['val']*pm.math.sqrt( (1+ror)**2 - b**2))/pm.math.sqrt(vels[0]**2+vels[1]**2))
 
             #vx, vy, _ = orbit.get_relative_velocity(tcen)
-            #vrel=pm.Deterministic("vrel",tt.sqrt(vx**2 + vy**2)/self.Rstar['val'])
+            #vrel=pm.Deterministic("vrel",pm.math.sqrt(vx**2 + vy**2)/self.Rstar['val'])
             
-            #tdur=pm.Deterministic("tdur",(2*tt.sqrt(1-b**2))/vrel)
+            #tdur=pm.Deterministic("tdur",(2*pm.math.sqrt(1-b**2))/vrel)
             #correcting for grazing transits by multiplying b by 1-rp/rs
-            #tdur=pm.Deterministic("tdur",(2*tt.sqrt((1+ror)**2-b**2))/vrel)
+            #tdur=pm.Deterministic("tdur",(2*pm.math.sqrt((1+ror)**2-b**2))/vrel)
             
             #if force_tdur:
             #    Adding a potential to force our transit towards the observed transit duration:
-            #    pm.Potential("tdur_prior", -0.05*len(x)*abs(tt.log(tdur/dur)))        
+            #    pm.Potential("tdur_prior", -0.05*len(x)*abs(pm.math.log(tdur/dur)))        
             
             # The 2nd light (not third light as companion light is not modelled) 
             # This quantity is in delta-mag
             if useL2:
                 deltamag_contam = pm.Uniform("deltamag_contam", lower=-20.0, upper=20.0)
-                third_light = pm.Deterministic("third_light", tt.power(2.511,-1*deltamag_contam)) #Factor to multiply normalised lightcurve by
+                third_light = pm.Deterministic("third_light", pm.math.power(2.511,-1*deltamag_contam)) #Factor to multiply normalised lightcurve by
             else:
                 third_light = 0.0
 
             # Compute the model light curve using starry
             if self.detns[planet]['orbit_flag']=='duo':
                 #Doing lightcurves for both transits and then summing:
-                light_curves = tt.sum(tt.stack([xo.LimbDarkLightCurve(u_star).get_light_curve(
+                light_curves = pm.math.sum(pm.math.stack([xo.LimbDarkLightCurve(u_star).get_light_curve(
                                                         orbit=orbit, r=r_pl/109.1, t=x, texp=cad),
                                                 xo.LimbDarkLightCurve(u_star).get_light_curve(
                                                         orbit=orbit, r=r_pl/109.1, t=x-tcen2, texp=cad)]),axis=-1)*(1+third_light)
-                tt.printing.Print("duo light_curves")(light_curves)
+                pm.math.printing.Print("duo light_curves")(light_curves)
             else:
-                light_curves = tt.sum(xo.LimbDarkLightCurve(u_star).get_light_curve(
+                light_curves = pm.math.sum(xo.LimbDarkLightCurve(u_star).get_light_curve(
                         orbit=orbit, r=r_pl/109.1, t=x, texp=cad),axis=-1)*(1+third_light)
             #transit_light_curve = pm.math.sum(light_curves, axis=-1)
-            depth_lc = pm.Deterministic("depth_lc",tt.min(light_curves))
+            depth_lc = pm.Deterministic("depth_lc",pm.math.min(light_curves))
             
             light_curve = pm.Deterministic("light_curve", light_curves + flux_trend)
-            tt.printing.Print("lc")(light_curves)
-            tt.printing.Print("trend")(flux_trend)
+            pm.math.printing.Print("lc")(light_curves)
+            pm.math.printing.Print("trend")(flux_trend)
             pm.Normal("obs", mu=light_curve, sd=yerr, observed=y)
             print(model.check_test_point())
             if fit_poly:
@@ -1368,7 +1364,7 @@ class target():
         
         if sample_model:
             with model:
-                trace = pmx.sample(tune=1200, draws=500, chains=3, cores=1, regularization_steps=20,
+                trace = pm.sample(tune=1200, draws=500, chains=3, cores=1, regularization_steps=20,
                                    start=map_soln, target_accept=0.9)
             
             for col in trace.varnames:

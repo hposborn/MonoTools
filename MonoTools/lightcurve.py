@@ -1599,7 +1599,6 @@ class multilc(lc):
                                         'xs_ap_flux':np.hstack([fi[1].data['KSPSAP_FLUX_SML'] for fi in f])},
                                 flux_errs={'flux_err':np.hstack([fi[1].data['KSPSAP_FLUX_ERR'] for fi in f])},
                                 src='qlp',mission='tess', jd_base=2457000, flx_system='elec', sect=sect, 
->>>>>>> 1e01c6c5895b45d57b6eb4ae5b87d885c98225b0
                                 cent1=np.hstack([fi[1].data['SAP_X'] for fi in f]), cent2=np.hstack([fi[1].data['SAP_Y'] for fi in f]))
                     return ilc
 
