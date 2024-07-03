@@ -959,7 +959,7 @@ def update_lc_locs(epoch,most_recent_sect):
         resp, content = h.request(fitsloc)
         if int(resp['status']) < 400:
             filename=content.split(b'\n')[1].decode().split(' ')[-2].split('-')
-            epoch.loc[sect,:]=pd.Series({'date':int(filename[0][4:]),'runid':int(filename[3])})
+            epoch.loc[sect, ['date', 'runid']] = [int(filename[0][4:]), int(filename[3])]
         else:
             print("Sector "+str(sect)+" not (yet) found on MAST | RESPONCE:"+resp['status'])
     epoch.to_csv(MonoData_tablepath+"/tess_lc_locations.csv")
