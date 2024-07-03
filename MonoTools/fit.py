@@ -609,22 +609,28 @@ class monoModel():
         Returns:
             array: Boolean array specifying which of the input period list is observed.
         """
-        #
-        trans=abs(self.lc.time[self.lc.mask]-tcen)<0.45*tdur
+        if not hasattr(self.lc,'bin_lc'):
+            self.lc.bin_lc()
+            av_cad=np.nanmedian(np.diff(self.lc.bin_time))
+
+        trans=abs(self.lc.bin_time-tcen)<0.45*tdur
         if np.sum(trans)==0:
-            trans=abs(self.lc.time[self.lc.mask]-tcen)<0.5*tdur
+            trans=abs(self.lc.bin_time-tcen)<0.5*tdur
+        trans_mask=abs(self.lc.bin_time-tcen)<0.55*tdur
         if self.debug: print(np.sum(trans),"points in transit")
+        
         #Adding up in-transit cadences to give days in transit:
-        days_in_known_transits = [np.sum(np.array([cad.split('_')[1] for cad in self.lc.cadence[self.lc.mask][trans]]).astype(float))/86400]
+        days_in_known_transits = [np.sum(trans)*av_cad]
         if tcen_2 is not None:
-            trans2=abs(self.lc.time[self.lc.mask]-tcen_2)<0.45*tdur
-            days_in_known_transits += [np.sum(np.array([cad.split('_')[1] for cad in self.lc.cadence[self.lc.mask][trans2]]).astype(float))/86400]
+            trans2=abs(self.lc.bin_time-tcen_2)<0.45*tdur
+            trans_mask+=abs(self.lc.bin_time-tcen_2)<0.55*tdur
+            days_in_known_transits += [np.sum(trans2)*av_cad]
             coverage_thresh*=0.5 #Two transits already in number count, so to compensate we must decrease the thresh
         if tcen_3 is not None:
-            assert tcen_2 is not None, "Must have both tcen_2 and tcen_3 if speciffying tcen_3"
-            trans3=abs(self.lc.time[self.lc.mask]-tcen_3)<0.45*tdur
-            
-            days_in_known_transits += [np.sum(np.array([cad.split('_')[1] for cad in self.lc.cadence[self.lc.mask][trans3]]).astype(float))/86400]
+            assert tcen_2 is not None, "Must have both tcen_2 and tcen_3 if specifying tcen_3"
+            trans3=abs(self.lc.bin_time-tcen_3)<0.45*tdur
+            days_in_known_transits += [np.sum(trans3)*av_cad]
+            trans_mask+=abs(self.lc.bin_time-tcen_3)<0.55*tdur
             coverage_thresh*=0.66 #Three transits in n_pts count, so to compensate we must decrease the thresh
 
         check_pers_ix=[]
@@ -641,17 +647,55 @@ class monoModel():
                 # and (np.sum(trans2&intr)<0.75*days_in_known_transits[1] or np.sum(trans3&intr)<0.75*days_in_known_transits[2]):
                 #Either second or third transit does not match with this period... Adding zero to list.
                 #check_pers_ix+=[False]#
-                days_in_tr=np.sum([float(self.lc.cadence[ncad].split('_')[1])/86400 for ncad in np.arange(len(self.lc.cadence))[self.lc.mask][intr]])
+                days_in_tr=np.sum(intr)*av_cad
                 check_pers_ix+=[days_in_tr<(1.0+coverage_thresh)*np.sum(days_in_known_transits)]
                 #print(per,"NO",abs((tcen_2-tcen-per*0.5)%per-per*0.5),match_trans_thresh*tdur,abs((tcen_3-tcen-per*0.5)%per-per*0.5),match_trans_thresh*tdur)
             else:
                 #Here we need to add up the cadences in transit (and not simply count the points) to check coverage:
-                days_in_tr=np.sum([float(self.lc.cadence[ncad].split('_')[1])/86400 for ncad in np.arange(len(self.lc.cadence))[self.lc.mask][intr]])
-                print(per,days_in_tr,(1.0+coverage_thresh),np.sum(days_in_known_transits))
+                days_in_tr=np.sum(intr)*av_cad
+                print(per,days_in_tr,(1.0+coverage_thresh),np.sum(days_in_known_transits),"in_trans way:",np.sum(phase[~trans_mask]<0.45))
                 check_pers_ix+=[days_in_tr<(1.0+coverage_thresh)*np.sum(days_in_known_transits)]
                 #Less than 15% of another eclipse is covered
                 #print(per,"OK",np.sum(intr),days_in_known_transits,np.sum(days_in_known_transits),days_in_tr)
         return np.array(check_pers_ix)
+        # #Adding up in-transit cadences to give days in transit:
+        # days_in_known_transits = [np.sum(np.array([cad.split('_')[1] for cad in self.lc.cadence[self.lc.mask][trans]]).astype(float))/86400]
+        # if tcen_2 is not None:
+        #     trans2=abs(self.lc.time[self.lc.mask]-tcen_2)<0.45*tdur
+        #     days_in_known_transits += [np.sum(np.array([cad.split('_')[1] for cad in self.lc.cadence[self.lc.mask][trans2]]).astype(float))/86400]
+        #     coverage_thresh*=0.5 #Two transits already in number count, so to compensate we must decrease the thresh
+        # if tcen_3 is not None:
+        #     assert tcen_2 is not None, "Must have both tcen_2 and tcen_3 if speciffying tcen_3"
+        #     trans3=abs(self.lc.time[self.lc.mask]-tcen_3)<0.45*tdur
+            
+        #     days_in_known_transits += [np.sum(np.array([cad.split('_')[1] for cad in self.lc.cadence[self.lc.mask][trans3]]).astype(float))/86400]
+        #     coverage_thresh*=0.66 #Three transits in n_pts count, so to compensate we must decrease the thresh
+
+        # check_pers_ix=[]
+        # #Looping through periods
+        
+        # for per in pers:
+        #     #WE NEED A WAY TO MAKE THIS FOLLOW POTENTIAL CHANGES IN P FROM T0 TO T1 to T2... POLYNOMIAL?
+        #     #print(tcen,tcen_2,tcen_3,per,(tcen_2-tcen-per*0.5)%per-per*0.5,(tcen_3-tcen-per*0.5)%per-per*0.5,0.75*tdur)
+        #     phase=self.make_phase(self.lc.time[self.lc.mask],[tcen,tcen_2,tcen_3],per)
+        #     intr=abs(phase)<0.45*tdur
+        #     #We first need to check whether it matches with all known transits
+        #     #print(np.sum(trans2&intr),np.sum(trans3&intr))
+        #     if tcen_3 is not None and abs((tcen_2-tcen-per*0.5)%per-per*0.5)>match_trans_thresh*tdur and abs((tcen_3-tcen-per*0.5)%per-per*0.5)>match_trans_thresh*tdur:
+        #         # and (np.sum(trans2&intr)<0.75*days_in_known_transits[1] or np.sum(trans3&intr)<0.75*days_in_known_transits[2]):
+        #         #Either second or third transit does not match with this period... Adding zero to list.
+        #         #check_pers_ix+=[False]#
+        #         days_in_tr=np.sum([float(self.lc.cadence[ncad].split('_')[1])/86400 for ncad in np.arange(len(self.lc.cadence))[self.lc.mask][intr]])
+        #         check_pers_ix+=[days_in_tr<(1.0+coverage_thresh)*np.sum(days_in_known_transits)]
+        #         #print(per,"NO",abs((tcen_2-tcen-per*0.5)%per-per*0.5),match_trans_thresh*tdur,abs((tcen_3-tcen-per*0.5)%per-per*0.5),match_trans_thresh*tdur)
+        #     else:
+        #         #Here we need to add up the cadences in transit (and not simply count the points) to check coverage:
+        #         days_in_tr=np.sum([float(self.lc.cadence[ncad].split('_')[1])/86400 for ncad in np.arange(len(self.lc.cadence))[self.lc.mask][intr]])
+        #         print(per,days_in_tr,(1.0+coverage_thresh),np.sum(days_in_known_transits))
+        #         check_pers_ix+=[days_in_tr<(1.0+coverage_thresh)*np.sum(days_in_known_transits)]
+        #         #Less than 15% of another eclipse is covered
+        #         #print(per,"OK",np.sum(intr),days_in_known_transits,np.sum(days_in_known_transits),days_in_tr)
+        # return np.array(check_pers_ix)
 
     def compute_period_aliases(self,pl_dic,dur=0.5,**kwargs):
         """Calculating Duotransit period aliases
