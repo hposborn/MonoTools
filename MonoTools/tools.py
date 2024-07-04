@@ -1451,9 +1451,9 @@ def bin_light_curve(time, flux, flux_err= None,
         )
         weighted_std = np.where(points_per_bin[non_empty_bins] == 1, 0, np.sqrt(variance))
         if return_bin_indices:
-            return bin_centers, weighted_mean, weighted_std/np.sqrt(points_per_bin), bin_indices
+            return bin_centers, weighted_mean, weighted_std/np.sqrt(points_per_bin[non_empty_bins]), bin_indices
         else:
-            return bin_centers, weighted_mean, weighted_std/np.sqrt(points_per_bin)
+            return bin_centers, weighted_mean, weighted_std/np.sqrt(points_per_bin[non_empty_bins])
     else:
         if return_bin_indices:
             return bin_centers, weighted_mean, bin_indices
@@ -2274,13 +2274,14 @@ def iteratively_determine_GP_params(pmmodel,time,flux,flux_err,tdurs,debug=False
     av_dur = np.average(tdurs)
     exps=np.array([np.log((2*np.pi)/(av_dur)), np.log((2*np.pi)/(0.1*lcrange))])
     #Max power as half the 1->99th percentile in flux
-    maxpowers=0.5*np.ptp(np.percentile(flux,[2,98]))
-    logmaxpowers=np.log(0.5*np.ptp(np.percentile(flux,[1,99])))
+    print(flux)
+    maxpowers=0.5*np.ptp(np.nanpercentile(flux,[2,98]))
+    logmaxpowers=np.log(0.5*np.ptp(np.nanpercentile(flux,[1,99])))
     #([np.nanstd(self.lc_fit[scope].loc[~self.lc_fit[scope]['in_trans_all'],'flux'].values) for scope in self.lcs]))
     
     #Min power as 2x the average point-to-point displacement
-    logminpowers=np.log(2*abs(np.diff(flux)))
-    minpowers=0.5*abs(np.diff(flux))
+    logminpowers=np.log(2*np.nanmedian(abs(np.diff(flux))))
+    minpowers=0.5*np.nanmedian(abs(np.diff(flux)))
     span=abs(np.min(logmaxpowers)-np.max(logminpowers))
 
     import pymc_ext as pmx
@@ -2290,20 +2291,19 @@ def iteratively_determine_GP_params(pmmodel,time,flux,flux_err,tdurs,debug=False
         while np.any(~success) and target<0.2:
             if not success[0]:
                 try:
-                    low=(2*np.pi)/(abs(np.random.normal(3,1)))
+                    low=(2*np.pi)/(abs(np.random.normal(3*(0.03/target)**0.25,1)))#Targetting ~3 days at max (start 3.5d, end 2.0d)
+                    up=np.clip((2*np.pi)/(av_dur*(0.1/target)),2*low,10000) #And ~2.5x average transit duration at min (start 8x, end 0.5x)
                     #itarg=abs(np.random.normal(target,0.5*target))
-                    w0vals = pmx.utils.estimate_inverse_gamma_parameters(lower=low,
-                                                                                        upper=(2*np.pi)/(av_dur*((0.03/target)**0.5)),
-                                                                                        target=0.01)
+                    print(low,up,(2*np.pi)/av_dur,(2*np.pi)/(av_dur*(0.1/target)),2*low)
+                    w0vals = pmx.utils.estimate_inverse_gamma_parameters(lower=low, upper=up, target=target)
                     success[0]=True
                 except:
                     success[0]=False
                     
             if not success[1]:
                 try:
-                    sigmavals = pmx.utils.estimate_inverse_gamma_parameters(lower=np.min(minpowers),
-                                                                                upper=np.min(maxpowers)*np.sqrt(target/0.1),
-                                                                                target=0.01)
+                    sigmavals = pmx.utils.estimate_inverse_gamma_parameters(lower=abs(np.random.normal(np.min(minpowers),0.4*np.min(minpowers))), upper=np.min(maxpowers)*np.sqrt(target/0.1),
+                                                                            target=target)
                     success[1]=True
                 except:
                     success[1]=False
@@ -2315,7 +2315,7 @@ def iteratively_determine_GP_params(pmmodel,time,flux,flux_err,tdurs,debug=False
         return w0, sigma
     except:
         with pmmodel:
-            log_w0 = pm.Normal("log_w0", mu=exps[1]+0.3*np.ptp(exps), sigma=0.05*np.ptp(exps), initval=exps[1]+0.15*np.ptp(exps))
+            log_w0 = pm.TruncatedNormal("log_w0", mu=exps[1]+0.2*np.ptp(exps), sigma=0.01*np.ptp(exps), initval=exps[1]+0.15*np.ptp(exps),lower=exps[1],upper=exps[0])
             w0 = pm.Deterministic("w0", pm.math.exp(log_w0))
             log_sigma = pm.Normal("log_sigma", mu=(np.min(logmaxpowers)+np.max(logminpowers))/2, sigma=0.2*abs(np.min(logmaxpowers)-np.max(logminpowers)),initval=np.min(logmaxpowers)-0.1)
             sigma = pm.Deterministic("sigma", pm.math.exp(log_sigma))

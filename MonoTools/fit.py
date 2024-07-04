@@ -19,6 +19,7 @@ from astropy import units
 from astropy.coordinates.sky_coordinate import SkyCoord
 
 import pickle
+import cloudpickle
 import os.path
 from datetime import datetime
 
@@ -173,13 +174,22 @@ class monoModel():
             self.GetSavename(how='load')
             loadfile=self.savenames[0]+'_model.pickle'
             if self.debug: print(self.savenames)
-        if os.path.exists(loadfile):
-            #Loading from pickled dictionary
+
+        if os.path.exists(loadfile.replace('_model.pickle','_trace.nc')):
+            #New version using cloudpickle
+            pick=cloudpickle.load(open(loadfile,'rb'))
+            for key in pick:
+                setattr(self,key,pick[key])
+            del pick
+            setattr(self,'trace',az.InferenceData.from_netcdf(loadfile.replace('_model.pickle','_trace.nc')))
+        elif os.path.exists(loadfile):
+            #Loading old version using pickle from pickled dictionary
             pick=pickle.load(open(loadfile,'rb'))
             assert not isinstance(pick, monoModel)
             #print(In this case, unpickle your object separately)
             for key in pick:
                 setattr(self,key,pick[key])
+            del pick
             return True
         else:
             return False
@@ -195,31 +205,35 @@ class monoModel():
             if not hasattr(self,'savenames'):
                 self.GetSavename(how='save')
             savefile=self.savenames[0]+'_model.pickle'
+        if hasattr(self,'trace'):
+            self.trace.to_netcdf(self.savenames[0]+'_trace.nc')
+        excl_types=[az.InferenceData]
+        cloudpickle.dumps({attr:getattr(self,attr) for attr in self.__dict__},open(savefile,'wb'))
 
-        #Loading from pickled dictionary
-        saving={}
-        if limit_size and hasattr(self,'trace'):
-            #We cannot afford to store full arrays of GP predictions and transit models
-            # But first we need to turn the predicted arrays into percentiles now for plotting:
-            if self.use_GP:
-                self.init_gp_to_plot()
-            self.init_trans_to_plot()
+        # #Loading from pickled dictionary
+        # saving={}
+        # if limit_size and hasattr(self,'trace'):
+        #     #We cannot afford to store full arrays of GP predictions and transit models
+        #     # But first we need to turn the predicted arrays into percentiles now for plotting:
+        #     if self.use_GP:
+        #         self.init_gp_to_plot()
+        #     self.init_trans_to_plot()
 
-            #And let's clip gp and lightcurves and pseudo-variables from the trace:
-            remvars=[var for var in self.trace.varnames if (('gp_' in var or '_gp' in var or 'light_curve' in var) and np.product(self.trace[var].shape)>6*len(self.trace['Rs'])) or '__' in var]
-            for key in remvars:
-                #Permanently deleting these values from the trace.
-                self.trace.remove_values(key)
-            #medvars=[var for var in self.trace.varnames if 'gp_' not in var and '_gp' not in var and 'light_curve' not in var]
-        n_bytes = 2**31
-        max_bytes = 2**31-1
+        #     #And let's clip gp and lightcurves and pseudo-variables from the trace:
+        #     remvars=[var for var in self.trace if (('gp_' in var or '_gp' in var or 'light_curve' in var) and np.product(self.trace[var].shape)>6*len(self.trace['Rs'])) or '__' in var]
+        #     for key in remvars:
+        #         #Permanently deleting these values from the trace.
+        #         self.trace.remove_values(key)
+        #     #medvars=[var for var in self.trace if 'gp_' not in var and '_gp' not in var and 'light_curve' not in var]
+        # n_bytes = 2**31
+        # max_bytes = 2**31-1
 
-        bytes_out = pickle.dumps(self.__dict__)
-        #bytes_out = pickle.dumps(self)
-        with open(savefile, 'wb') as f_out:
-            for idx in range(0, len(bytes_out), max_bytes):
-                f_out.write(bytes_out[idx:idx+max_bytes])
-        del saving
+        # bytes_out = pickle.dumps(self.__dict__)
+        # #bytes_out = pickle.dumps(self)
+        # with open(savefile, 'wb') as f_out:
+        #     for idx in range(0, len(bytes_out), max_bytes):
+        #         f_out.write(bytes_out[idx:idx+max_bytes])
+        # del saving
         #pick=pickle.dump(self.__dict__,open(loadfile,'wb'))
 
     def drop_planet(self, name):
@@ -1226,7 +1240,21 @@ class monoModel():
         print("initialising the GP")
 
         prefix='bin_' if use_binned else ''
-        mask=(~self.lc.in_trans['all'])&self.lc.mask
+        mask=(~self.lc.in_trans['all'])&self.lc.mask&np.isfinite(self.lc.flux)
+
+        #Also cutting exceptionally steep/sharp bins based on differences
+        maxcad=np.max([float(cad.split("_")[1])/86400 for cad in self.lc.cadence_list])
+        thresh=1.75
+        for binsize in np.geomspace(3*maxcad,0.5,7)[::-1]:
+            #1 Find steps where the implied gradient is much larger than the typical error for a run of binsizes, starting at the largests
+            self.lc.bin(binsize=binsize,overwrite=True)
+            large_grads=np.where(np.diff(self.lc.bin_flux)/np.diff(self.lc.bin_time)>thresh*np.nanmedian(self.lc.bin_flux_err)/maxcad)[0]
+            #print("extra points masked due to "+str(thresh)+"-sig bin differences at binsize:",binsize,"=",len(large_grads))
+            if len(large_grads)>0:
+                for nclip in large_grads:
+                    mask*=(self.lc.time<self.lc.bin_time[nclip]-binsize)|(self.lc.time>self.lc.bin_time[1+nclip]+binsize)
+
+        self.lc.bin()
         
         if len(self.lc.time[(~self.lc.in_trans['all'])&self.lc.mask])>max_len_lc:
             mask[mask]*=np.arange(0,np.sum(mask),1)<max_len_lc
@@ -1243,8 +1271,9 @@ class monoModel():
             if self.debug: print(self.cads_long)
             if self.debug: print(self.cads_long,np.unique(self.lc.cadence),self.log_flux_std,np.sum(mask))
             
-            logs2 = pm.Normal("logs2", mu = self.log_flux_std,
-                              sigma = np.tile(2.0,len(self.log_flux_std)), shape=len(self.log_flux_std))
+            logs2 = pm.Normal("logs2", mu = 1.5+self.log_flux_std,
+                              sigma = np.tile(1.0,len(self.log_flux_std)), initval=3+self.log_flux_std,
+                              shape=len(self.log_flux_std))
 
             if hasattr(self,'periodic_kernel') and self.periodic_kernel is not None:
                 #Building a periodic kernel with amplitude modified by a third kernel term (i.e. allowing amplitude to vary with time)
@@ -1259,7 +1288,7 @@ class monoModel():
                 periodic_kernel = pymc_terms.SHOTerm(S0=pm.math.exp(periodic_power)/(periodic_w0**4), w0=periodic_w0, Q=pm.math.exp(periodic_logQ))
                 
                 phot_w0, phot_sigma = tools.iteratively_determine_GP_params(gp_train_model,time=self.lc.time[mask],flux=self.lc.flux[mask], flux_err=self.lc.flux_err[mask],
-                                                                    tdurs=[self.planets[pl]['tdur'] for pl in self.planets], debug=self.debug)
+                                                                            tdurs=[self.planets[pl]['tdur'] for pl in self.planets], debug=self.debug)
                 optvars=[logs2, phot_sigma, phot_w0, phot_mean,periodic_w0,periodic_power,ampl_mult_logc,ampl_mult_loga]
                 kernel = pymc_terms.SHOTerm(sigma=phot_sigma, w0=phot_w0, Q=1/np.sqrt(2))
                 self.gp['train'] = celerite2.pymc.GaussianProcess(kernel+ampl_mult_kernel*periodic_kernel,self.lc.time[mask].astype(floattype),
@@ -1283,25 +1312,30 @@ class monoModel():
                 rotational_kernel = pymc_terms.RotationTerm(sigma=pm.math.exp(rotation_logamp), period=rotation_period, 
                                                                 Q0=pm.math.exp(rotation_logQ0), dQ=pm.math.exp(rotation_logdeltaQ), f=rotation_mix)
 
-                self.gp['train'] = celerite2.pymc.GaussianProcess(rotational_kernel,self.lc.time[mask].astype(floattype),
-                                                            diag=self.lc.flux_err[mask].astype(floattype)**2 + \
-                                     pm.math.dot(self.lc.cadence_index[mask,:].astype(floattype),pm.math.exp(logs2)), quiet=True)
+                self.gp['train'] = celerite2.pymc.GaussianProcess(rotational_kernel,self.lc.time[mask].astype(floattype))
+                                    #                         diag=self.lc.flux_err[mask].astype(floattype)**2 + \
+                                    #  pm.math.dot(self.lc.cadence_index[mask,:].astype(floattype),pm.math.exp(logs2)), quiet=True)
             else:
                 phot_w0, phot_sigma = tools.iteratively_determine_GP_params(gp_train_model,time=self.lc.time[mask],flux=self.lc.flux[mask], flux_err=self.lc.flux_err[mask],
                                                                         tdurs=[self.planets[pl]['tdur'] for pl in self.planets], debug=self.debug)
 
                 kernel = pymc_terms.SHOTerm(sigma=phot_sigma, w0=phot_w0, Q=1/np.sqrt(2))
                 optvars=[logs2, phot_sigma, phot_w0, phot_mean]
-                self.gp['train'] = celerite2.pymc.GaussianProcess(kernel,self.lc.time[mask].astype(floattype),
-                                                            diag=self.lc.flux_err[mask].astype(floattype)**2 + \
-                                     pm.math.dot(self.lc.cadence_index[mask,:].astype(floattype),pm.math.exp(logs2)), quiet=True)
+                self.gp['train'] = celerite2.pymc.GaussianProcess(kernel,self.lc.time[mask].astype(floattype))
+                                    #                         diag=self.lc.flux_err[mask].astype(floattype)**2 + \
+                                    #  pm.math.dot(self.lc.cadence_index[mask,:].astype(floattype),pm.math.exp(logs2)), quiet=True)
             #logs2 = pm.Normal("logs2", mu=np.log(np.var(y[m])), sigma=10)
             #max_cad = np.nanmax([np.nanmedian(np.diff(self.lc.time[mask&(self.lc.cadence_index[mask,n])])) for n in range(len(self.cads_short))])
-            self.gp['train'].log_likelihood(self.lc.flux[mask].astype(floattype) - phot_mean)
+            
+            #self.gp['train'].log_likelihood(self.lc.flux[mask].astype(floattype) - phot_mean)
+            self.gp['train'].compute(self.lc.time[mask].astype(floattype), 
+                                     yerr=np.sqrt(self.lc.flux_err[mask].astype(floattype) ** 2 + pm.math.exp(logs2)**2), quiet=True)
+
+            loglik=self.gp['train'].marginal("loglik",observed=self.lc.flux[mask].astype(floattype))
 
             self.gp_init_soln = pmx.optimize(start=None, vars=optvars)
             if self.debug: print("sampling init GP", int(n_draws*0.66),"times with",len(self.lc.flux[mask]),"-point lightcurve")
-            self.gp_init_trace = az.extract(pm.sample(tune=int(n_draws*0.66), draws=n_draws, start=self.gp_init_soln, chains=2))
+            self.gp_init_trace = az.extract(pm.sample(tune=int(n_draws*0.66), draws=n_draws, start=self.gp_init_soln, chains=4))
 
     def init_interpolated_Mp_prior(self):
         """Initialise a 2D interpolated prior for the mass of a planet given the radius
@@ -2635,6 +2669,7 @@ class monoModel():
                     self.trace = pm.sample(tune=n_burn_in, draws=n_draws, chains=n_chains, trace=self.trace, compute_convergence_checks=False, **kwargs)
                 else:
                     self.trace = pm.sample(tune=n_burn_in, draws=n_draws, start=self.init_soln, chains=n_chains, compute_convergence_checks=False, **kwargs)
+                self.trace=az.extract(self.trace)
             #Saving both the class and a pandas dataframe of output data.
             self.SaveModelToFile()
             _=self.MakeTable(save=True)
@@ -2686,13 +2721,13 @@ class monoModel():
         self.gp_to_plot={'n_samp':n_samp}
         if hasattr(self,'trace'):
             #Using the output of the model trace
-            medvars=[var for var in self.trace.posterior if 'gp_' not in var and '_gp' not in var and 'light_curve' not in var]
+            medvars=[var for var in self.trace if 'gp_' not in var and '_gp' not in var and 'light_curve' not in var]
             self.meds={}
             for mv in medvars:
-                if len(self.trace.posterior[mv].shape)>1:
-                    self.meds[mv]=np.median(self.trace.posterior[mv],axis=0)
-                elif len(self.trace.posterior[mv].shape)==1:
-                    self.meds[mv]=np.median(self.trace.posterior[mv])
+                if len(self.trace[mv].shape)>1:
+                    self.meds[mv]=np.median(self.trace[mv],axis=0)
+                elif len(self.trace[mv].shape)==1:
+                    self.meds[mv]=np.median(self.trace[mv])
         else:
             self.meds=self.init_soln
 
@@ -2769,8 +2804,8 @@ class monoModel():
                 stacktime=np.hstack((self.lc.time[0]-1,self.model_time,self.lc.time[-1]+1))
                 preds=[]
                 for i in np.random.choice(len(self.trace['phot_mean']),int(np.clip(10*n_samp,1,len(self.trace['phot_mean']))),replace=False):
-                    smooth_func=interpolate.interp1d(stacktime, np.hstack((0,self.trace['gp_pred'][i],0)), kind='slinear')
-                    preds+=[smooth_func(self.lc.time)+self.trace['phot_mean'][i]]
+                    smooth_func=interpolate.interp1d(stacktime, np.hstack((0,self.trace['gp_pred'][:,i],0)), kind='slinear')
+                    preds+=[smooth_func(self.lc.time)+self.trace['phot_mean'].values[i]]
                 prcnts=np.nanpercentile(np.column_stack(preds),[15.8655254, 50., 84.1344746],axis=1)
                 self.gp_to_plot['gp_pred']=prcnts[1]
                 self.gp_to_plot['gp_sd']=0.5*(prcnts[2]-prcnts[0])
@@ -2836,23 +2871,23 @@ class monoModel():
                             'n_samp':n_samp}
         percentiles={'-2sig':2.2750132, '-1sig':15.8655254, 'med':50., '+1sig':84.1344746, '+2sig':97.7249868}
 
-        if hasattr(self,'trace') and 'marg_all_lc_model' in self.trace.varnames:
-            prcnt=np.percentile(self.trace['marg_all_lc_model'],list(percentiles.values()),axis=0)
+        if hasattr(self,'trace') and 'marg_all_lc_model' in self.trace:
+            prcnt=np.percentile(self.trace['marg_all_lc_model'],list(percentiles.values()),axis=1)
             self.trans_to_plot['model']['allpl']={list(percentiles.keys())[n]:prcnt[n] for n in range(5)}
         elif 'marg_all_lc_model' in self.init_soln:
             self.trans_to_plot['model']['allpl']['med']=self.init_soln['marg_all_lc_model']
         else:
             print("marg_all_lc_model not in any optimised models")
         for pl in self.planets:
-            if hasattr(self,'trace') and pl+"_light_curves" in self.trace.varnames:
-                prcnt = np.percentile(self.trace[pl+"_light_curves"], list(percentiles.values()), axis=0)
+            if hasattr(self,'trace') and pl+"_light_curves" in self.trace:
+                prcnt = np.percentile(self.trace[pl+"_light_curves"], list(percentiles.values()), axis=1)
                 self.trans_to_plot['model'][pl] = {list(percentiles.keys())[n]:prcnt[n] for n in range(5)}
             elif hasattr(self,'init_soln') and pl+"_light_curves" in self.init_soln:
                 self.trans_to_plot['model'][pl] = {'med':self.init_soln[pl+"_light_curves"]}
         '''
             self.trans_to_plot_i[pl]={}
             if pl in self.multis or self.interpolate_v_prior:
-                if hasattr(self,'trace') and 'light_curve_'+pl in self.trace.varnames:
+                if hasattr(self,'trace') and 'light_curve_'+pl in self.trace:
                     if len(self.trace['mask_light_curves'].shape)>2:
                         prcnt = np.percentile(self.trace['multi_mask_light_curves'][:,:,self.multis.index(pl)],
                                                   (5,16,50,84,95),axis=0)
@@ -2867,7 +2902,7 @@ class monoModel():
                 else:
                     print('multi_mask_light_curves not in any optimised models')
             elif pl in self.duos or self.monos and not self.interpolate_v_prior:
-                if hasattr(self,'trace') and 'marg_light_curve_'+pl in self.trace.varnames:
+                if hasattr(self,'trace') and 'marg_light_curve_'+pl in self.trace:
                     prcnt=np.percentile(self.trace['marg_light_curve_'+pl],(5,16,50,84,95),axis=0)
                     nms=['-2sig','-1sig','med','+1sig','+2sig']
                     self.trans_to_plot_i[pl] = {nms[n]:prcnt[n] for n in range(5)}
@@ -3484,7 +3519,7 @@ class monoModel():
                         f_phase[pl][n].set_ylabel("RV [m/s]")
                         f_phase[pl][n].yaxis.set_label_position("right")
                         f_phase[pl][n].set_xlim(0.0,1)
-                        #f_phase[n].text(0.0,0.0+resid_sd*1.9,pl,horizontalalignment='center',verticalalignment='top',fontsize=9)
+                        #f_phase[n].text(0.0,0.0+resid_sigma*1.9,pl,horizontalalignment='center',verticalalignment='top',fontsize=9)
                         #plt.setp(f_phase[n].get_xticklabels(), visible=False)
 
                     if n==len(all_pls_in_rvs)-1:
@@ -4172,13 +4207,13 @@ class monoModel():
             '''
             sdbuffer=3
             if self.use_GP:
-                f_alls[0].y_range=Range1d(-1*min_trans - sdbuffer*resid_sd,
-                                          raw_plot_offset + np.max(self.gp_to_plot['gp_pred']) + sdbuffer*resid_sd)
+                f_alls[0].y_range=Range1d(-1*min_trans - sdbuffer*resid_sigma,
+                                          raw_plot_offset + np.max(self.gp_to_plot['gp_pred']) + sdbuffer*resid_sigma)
             else:
-                f_alls[0].y_range=Range1d(-1*min_trans - sdbuffer*resid_sd,
-                                          raw_plot_offset + np.max(self.lc.bin_flux) + sdbuffer*resid_sd)
+                f_alls[0].y_range=Range1d(-1*min_trans - sdbuffer*resid_sigma,
+                                          raw_plot_offset + np.max(self.lc.bin_flux) + sdbuffer*resid_sigma)
 
-            f_all_resids[0].y_range=Range1d(-1*sdbuffer*resid_sd, sdbuffer*resid_sd)
+            f_all_resids[0].y_range=Range1d(-1*sdbuffer*resid_sigma, sdbuffer*resid_sigma)
             '''
 
         #####################################
@@ -4220,37 +4255,37 @@ class monoModel():
                     #Adding ticks for the position of each planet below the data:
                     trans_range=np.arange(n_p_sta_end[0],n_p_sta_end[1],1.0)
                     if interactive:
-                            f_alls[key].scatter(np.min(t0s)+trans_range*per,np.tile(self.lc_regions[key]['minmax_global'][0]+0.2*resid_sd+(0.5*resid_sd*n/len(self.planets)),
+                            f_alls[key].scatter(np.min(t0s)+trans_range*per,np.tile(self.lc_regions[key]['minmax_global'][0]+0.2*resid_sigma+(0.5*resid_sigma*n/len(self.planets)),
                                                 int(len(trans_range))), marker="triangle", s=12.5, fill_color=self.pal[4-n], alpha=0.85)
                     else:
                         f_alls[key].scatter(np.min(t0s)+trans_range*per,
-                                        np.tile(self.lc_regions[key]['minmax_global'][0]+0.2*resid_sd+(resid_sd*n/len(self.planets)),
+                                        np.tile(self.lc_regions[key]['minmax_global'][0]+0.2*resid_sigma+(resid_sigma*n/len(self.planets)),
                                                 int(len(trans_range))),
                                         marker="^", s=12.5, color=self.pal[4-n], alpha=0.85)
 
                 elif pl in self.monos:
                     if (t0s[0]>self.lc_regions[key]['start'])&(t0s[0]<self.lc_regions[key]['end']):
                         if interactive:
-                            f_alls[key].scatter(t0s,[-1*self.min_trans-0.8*resid_sd-(resid_sd*n/len(self.planets))],
+                            f_alls[key].scatter(t0s,[-1*self.min_trans-0.8*resid_sigma-(resid_sigma*n/len(self.planets))],
                                                marker="triangle", s=12.5, fill_color=self.pal[4-n], alpha=0.85)
                         else:
-                            f_alls[key].scatter(t0s,[-1*self.min_trans-0.8*resid_sd-(resid_sd*n/len(self.planets))],
+                            f_alls[key].scatter(t0s,[-1*self.min_trans-0.8*resid_sigma-(resid_sigma*n/len(self.planets))],
                                                marker="^", s=12.5, color=self.pal[4-n], alpha=0.85, rasterized=raster)
                 '''elif pl in self.duos:
                     if (t0>self.lc_regions[key]['start'])&(t0<self.lc_regions[key]['end']):
                         if interactive:
-                            f_alls[key].scatter([t0],[-1*self.min_trans-0.8*resid_sd-(resid_sd*n/len(self.planets))],
+                            f_alls[key].scatter([t0],[-1*self.min_trans-0.8*resid_sigma-(resid_sigma*n/len(self.planets))],
                                            marker="triangle", s=12.5, fill_color=self.pal[4-n], alpha=0.85)
                         else:
-                            f_alls[key].scatter([t0],[-1*self.min_trans-0.8*resid_sd-(resid_sd*n/len(self.planets))],
+                            f_alls[key].scatter([t0],[-1*self.min_trans-0.8*resid_sigma-(resid_sigma*n/len(self.planets))],
                                            marker="^", s=12.5, color=self.pal[4-n], alpha=0.85, rasterized=raster)
 
                     if (t0_2>self.lc_regions[key]['start'])&(t0_2<self.lc_regions[key]['end']):
                         if interactive:
-                            f_alls[key].scatter([t0_2],[-1*self.min_trans-0.8*resid_sd-(resid_sd*n/len(self.planets))],
+                            f_alls[key].scatter([t0_2],[-1*self.min_trans-0.8*resid_sigma-(resid_sigma*n/len(self.planets))],
                                            marker="triangle", s=12.5, fill_color=self.pal[4-n], alpha=0.85)
                         else:
-                            f_alls[key].scatter([t0_2],[-1*self.min_trans-0.8*resid_sd-(resid_sd*n/len(self.planets))],
+                            f_alls[key].scatter([t0_2],[-1*self.min_trans-0.8*resid_sigma-(resid_sigma*n/len(self.planets))],
                                            marker="^", s=12.5, color=self.pal[4-n], alpha=0.85, rasterized=raster)
                 '''
             #Computing
@@ -4295,7 +4330,7 @@ class monoModel():
                                   color='black', alpha=0.4, size=0.75)
 
                 f_trans[pl].circle(phaselc[:,0],
-                                  phaselc[:,1] - self.trans_to_plot[pl]['med'][self.lc.mask&phasebool] - self.min_trans-sdbuffer*resid_sd,
+                                  phaselc[:,1] - self.trans_to_plot[pl]['med'][self.lc.mask&phasebool] - self.min_trans-sdbuffer*resid_sigma,
                                   color='black', alpha=0.2, size=0.75)
                 errors = ColumnDataSource(data=dict(base=bin_phase[:,0],
                                         lower=bin_phase[:,1] - bin_phase[:,2],
@@ -4319,7 +4354,7 @@ class monoModel():
                 f_trans[pl].line(np.sort(phaselc[:,0]),
                                 self.trans_to_plot[pl]["med"][self.lc.mask&phasebool][np.argsort(phaselc[:,0])],
                                 color=self.pal[2+n])
-                f_trans[pl].y_range=Range1d(-1*self.min_trans-2*sdbuffer*resid_sd,sdbuffer*resid_sd)
+                f_trans[pl].y_range=Range1d(-1*self.min_trans-2*sdbuffer*resid_sigma,sdbuffer*resid_sigma)
 
                 if n<len(self.planets)-1:
                     f_trans[pl].xaxis.major_tick_line_color = None  # turn off x-axis major ticks
@@ -4397,7 +4432,7 @@ class monoModel():
         else:
             if save:
                 if plot_loc is None and plottype=='png':
-                    plt.savefig(self.savenames[0]+'_model_plot.png',dpi=350,transparent=True)
+                    plt.savefig(self.savenames[0]+'_model_plot.png',dpi=350)#,transparent=True)
                     #plt.savefig(self.savenames[0]+'_model_plot.pdf')
                 elif plot_loc is None and plottype=='pdf':
                     plt.savefig(self.savenames[0]+'_model_plot.pdf')
@@ -4495,7 +4530,7 @@ class monoModel():
                     plt.xlabel("Period [d]")
                     plt.xlim(pmin,pmax+1)
                 elif pl in self.monos:
-                    #if 'logprob_marg_sum_'+pl in self.trace.varnames:
+                    #if 'logprob_marg_sum_'+pl in self.trace:
                     #    total_prob=logsumexp((self.trace['logprob_marg_'+pl]+self.trace['logprob_marg_sum_'+pl]).ravel())
                     #else:
                     total_prob=logsumexp(self.trace['logprob_marg_'+pl].ravel())
@@ -4569,13 +4604,13 @@ class monoModel():
 
             for pl in self.planets:
                 for var in self.fit_params:
-                    if var+'_'+pl in self.trace.varnames:
+                    if var+'_'+pl in self.trace:
                         corner_vars+=[var+'_'+pl]
                 if pl in self.duos+self.trios:
                     corner_vars+=['t0_2_'+pl]
                 if use_marg:
                     for var in self.marginal_params:
-                        if var+'_marg_'+pl in self.trace.varnames:
+                        if var+'_marg_'+pl in self.trace:
                             corner_vars+=[var+'_marg_'+pl]
 
         print("variables for Corner:",corner_vars)
@@ -4677,7 +4712,7 @@ class monoModel():
                 cols_to_remove+=['mono_uniform_index','logliks','_priors','logprob_marg','logrho_S']
                 for col in self.marginal_params:
                     cols_to_remove+=['mono_'+col+'s','duo_'+col+'s']
-            medvars=[var for var in self.trace.varnames if not np.any([icol in var for icol in cols_to_remove])]
+            medvars=[var for var in self.trace if not np.any([icol in var for icol in cols_to_remove])]
             #print(cols_to_remove, medvars)
             df = pm.summary(self.trace,var_names=medvars,stat_funcs={"5%": lambda x: np.percentile(x, 5),
                                                                      "-$1\sigma$": lambda x: np.percentile(x, 15.87),
@@ -5351,7 +5386,7 @@ class monoModel():
         if self.tracemask is None:
             self.tracemask=np.tile(True,len(self.trace['Rs']))
         if varnames is None or varnames == 'all':
-            varnames=[var for var in self.trace.varnames if var[-2:]!='__' and var not in ['gp_pred','light_curves']]
+            varnames=[var for var in self.trace if var[-2:]!='__' and var not in ['gp_pred','light_curves']]
 
         self.samples = pm.trace_to_dataframe(self.trace, varnames=varnames)
         self.samples = self.samples.loc[self.tracemask]
