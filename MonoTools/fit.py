@@ -2667,9 +2667,9 @@ class monoModel():
                 if self.debug: print(self.init_soln.keys())
                 if hasattr(self,'trace') and continue_sampling:
                     print("Using already-generated MCMC trace as start point for new trace")
-                    self.trace = pm.sample(tune=n_burn_in, draws=n_draws, chains=n_chains, trace=self.trace, compute_convergence_checks=False, **kwargs)
+                    self.trace = pm.sample(tune=n_burn_in, draws=n_draws, chains=n_chains, trace=self.trace, compute_convergence_checks=False)#, **kwargs)
                 else:
-                    self.trace = pm.sample(tune=n_burn_in, draws=n_draws, start=self.init_soln, chains=n_chains, compute_convergence_checks=False, **kwargs)
+                    self.trace = pm.sample(tune=n_burn_in, draws=n_draws, start=self.init_soln, chains=n_chains, compute_convergence_checks=False)#, **kwargs)
                 self.trace=az.extract(self.trace)
             #Saving both the class and a pandas dataframe of output data.
             self.SaveModelToFile()
