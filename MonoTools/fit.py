@@ -1496,7 +1496,7 @@ class monoModel():
                                                     upper=self.planets[pl]['tcen']+self.planets[pl]['tdur']*0.5,
                                                     lower=self.planets[pl]['tcen']-self.planets[pl]['tdur']*0.5,
                                                     initval=self.planets[pl]['tcen'])
-                    pers[pl]=pm.Deterministic("per_"+pl, tensor.basic.tile(pm.math.abs_(t0s[pl] - t0_2s[pl]),self.n_margs[pl])/self.planets[pl]['period_int_aliases'])
+                    pers[pl]=pm.Deterministic("per_"+pl, tensor.basic.tile(pm.math.abs(t0s[pl] - t0_2s[pl]),self.n_margs[pl])/self.planets[pl]['period_int_aliases'])
                 elif pl in self.trios:
                     t0s[pl] = pm.TruncatedNormal("t0_"+pl,mu=self.planets[pl]['tcen_3'],
                                             sigma=self.planets[pl]['tdur']*self.timing_sigma*self.planets[pl]['tdur'],
@@ -1530,11 +1530,11 @@ class monoModel():
                         # tile=np.tile(weighted_av,mod.n_margs[pl])
                         # aliases=tile/mod.planets[pl]['period_int_aliases']
                         #Setting the most recent transit as golden, and then using an average of the two observed transits weighted by distance to fit a period.
-                        pers[pl]=pm.Deterministic("per_"+pl, tensor.basic.tile(pm.math.abs_((self.planets[pl]['p_ratio_32'][0]/self.planets[pl]['p_ratio_21'][1])*(t0s[pl] - t0_2s[pl])/self.planets[pl]['p_ratio_32'][0] + \
+                        pers[pl]=pm.Deterministic("per_"+pl, tensor.basic.tile(pm.math.abs((self.planets[pl]['p_ratio_32'][0]/self.planets[pl]['p_ratio_21'][1])*(t0s[pl] - t0_2s[pl])/self.planets[pl]['p_ratio_32'][0] + \
                                                                              (self.planets[pl]['p_ratio_21'][0]/self.planets[pl]['p_ratio_32'][1])*(t0_2s[pl] - t0_3s[pl])/self.planets[pl]['p_ratio_21'][0]),self.n_margs[pl])/self.planets[pl]['period_int_aliases'])
                     else:
                         t0_2s[pl] = pm.Deterministic("t0_2_"+pl,t0s[pl]-(t0s[pl] - t0_3s[pl])*self.planets[pl]['p_ratio_32'][0]/self.planets[pl]['p_ratio_32'][1])
-                        pers[pl] = pm.Deterministic("per_"+pl, tensor.basic.tile(pm.math.abs_(t0s[pl] - t0_3s[pl])/np.min([self.planets[pl]['p_ratio_32'][0],self.planets[pl]['p_ratio_32'][0]])/self.planets[pl]['p_ratio_32'][1],self.n_margs[pl])/self.planets[pl]['period_int_aliases'])
+                        pers[pl] = pm.Deterministic("per_"+pl, tensor.basic.tile(pm.math.abs(t0s[pl] - t0_3s[pl])/np.min([self.planets[pl]['p_ratio_32'][0],self.planets[pl]['p_ratio_32'][0]])/self.planets[pl]['p_ratio_32'][1],self.n_margs[pl])/self.planets[pl]['period_int_aliases'])
 
                 elif pl in self.multis:
                     self.n_margs[pl]=1
@@ -1633,8 +1633,8 @@ class monoModel():
                     logvels[pl]= pm.Deterministic("logvel_"+pl, pm.math.log(vels[pl]))
 
                     #Minimum eccentricity (and the associated omega) are then derived from vel, but are one of a range of values
-                    min_eccs[pl] = pm.Deterministic("min_ecc_"+pl,pm.math.clip(pm.math.abs_(2/(1 + vels[pl]**2) - 1), 1e-4, 1.0-1e-4))
-                    omegas[pl] = pm.Deterministic("omega_"+pl,np.pi-0.5*np.pi*(logvels[pl]/pm.math.abs_(logvels[pl])) )
+                    min_eccs[pl] = pm.Deterministic("min_ecc_"+pl,pm.math.clip(pm.math.abs(2/(1 + vels[pl]**2) - 1), 1e-4, 1.0-1e-4))
+                    omegas[pl] = pm.Deterministic("omega_"+pl,np.pi-0.5*np.pi*(logvels[pl]/pm.math.abs(logvels[pl])) )
 
                 ######################################
                 #         Initialising RVs
