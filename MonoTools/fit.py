@@ -1607,7 +1607,7 @@ class monoModel():
                     tdursigma=0.25*self.planets[pl]['tdur'] if 'tdur_err' not in self.planets[pl] else self.planets[pl]['tdur_err']
                     tdurs[pl] = pm.TruncatedNormal("tdur_"+pl,
                                                    mu=self.planets[pl]['tdur'],
-                                                   sigma=tdursd,
+                                                   sigma=tdursigma,
                                                    lower=0.33*self.planets[pl]['tdur'],
                                                    upper=3*self.planets[pl]['tdur'],
                                                    initval=self.planets[pl]['tdur'])
