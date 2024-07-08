@@ -2153,8 +2153,8 @@ class monoModel():
                 elif self.interpolate_v_prior and pl in self.trios+self.duos+self.monos:
                     #  We only need to create one orbit if we're not marginalising over N periods
                     #      (i.e. when we only have the lightcurve and we're interpolating a velocity prior)
-                    orbits[pl] = create_orbit(pl, Rs, rho_S, pers[pl][pm.math.argmin(min_eccs[pl])], t0s[pl], bs[pl], n_marg=1,
-                                              omegas=omegas[pl][pm.math.argmin(min_eccs[pl])], eccs=pm.math.min(min_eccs[pl]))
+                    orbits[pl] = create_orbit(pl, Rs, rho_S, pers[pl][tensor.math.argmin(min_eccs[pl])], t0s[pl], bs[pl], n_marg=1,
+                                              omegas=omegas[pl][tensor.math.argmin(min_eccs[pl])], eccs=pm.math.min(min_eccs[pl]))
                     light_curves[pl] = gen_lc(orbits[pl], rpls[pl]/109.2, 1, mask=None,
                                               prefix=pl+'_', make_deterministic=True)
                 else:
