@@ -57,6 +57,7 @@ import pymc_ext as pmx
 from celerite2.pymc import terms as pymc_terms
 import celerite2.pymc
 import arviz as az
+from pytensor import tensor
 
 class monoModel():
     """The core MonoTools model class
@@ -1495,7 +1496,7 @@ class monoModel():
                                                     upper=self.planets[pl]['tcen']+self.planets[pl]['tdur']*0.5,
                                                     lower=self.planets[pl]['tcen']-self.planets[pl]['tdur']*0.5,
                                                     initval=self.planets[pl]['tcen'])
-                    pers[pl]=pm.Deterministic("per_"+pl, pm.math.tile(pm.math.abs_(t0s[pl] - t0_2s[pl]),self.n_margs[pl])/self.planets[pl]['period_int_aliases'])
+                    pers[pl]=pm.Deterministic("per_"+pl, tensor.basic.tile(pm.math.abs_(t0s[pl] - t0_2s[pl]),self.n_margs[pl])/self.planets[pl]['period_int_aliases'])
                 elif pl in self.trios:
                     t0s[pl] = pm.TruncatedNormal("t0_"+pl,mu=self.planets[pl]['tcen_3'],
                                             sigma=self.planets[pl]['tdur']*self.timing_sigma*self.planets[pl]['tdur'],
@@ -1529,11 +1530,11 @@ class monoModel():
                         # tile=np.tile(weighted_av,mod.n_margs[pl])
                         # aliases=tile/mod.planets[pl]['period_int_aliases']
                         #Setting the most recent transit as golden, and then using an average of the two observed transits weighted by distance to fit a period.
-                        pers[pl]=pm.Deterministic("per_"+pl, pm.math.tile(pm.math.abs_((self.planets[pl]['p_ratio_32'][0]/self.planets[pl]['p_ratio_21'][1])*(t0s[pl] - t0_2s[pl])/self.planets[pl]['p_ratio_32'][0] + \
+                        pers[pl]=pm.Deterministic("per_"+pl, tensor.basic.tile(pm.math.abs_((self.planets[pl]['p_ratio_32'][0]/self.planets[pl]['p_ratio_21'][1])*(t0s[pl] - t0_2s[pl])/self.planets[pl]['p_ratio_32'][0] + \
                                                                              (self.planets[pl]['p_ratio_21'][0]/self.planets[pl]['p_ratio_32'][1])*(t0_2s[pl] - t0_3s[pl])/self.planets[pl]['p_ratio_21'][0]),self.n_margs[pl])/self.planets[pl]['period_int_aliases'])
                     else:
                         t0_2s[pl] = pm.Deterministic("t0_2_"+pl,t0s[pl]-(t0s[pl] - t0_3s[pl])*self.planets[pl]['p_ratio_32'][0]/self.planets[pl]['p_ratio_32'][1])
-                        pers[pl] = pm.Deterministic("per_"+pl, pm.math.tile(pm.math.abs_(t0s[pl] - t0_3s[pl])/np.min([self.planets[pl]['p_ratio_32'][0],self.planets[pl]['p_ratio_32'][0]])/self.planets[pl]['p_ratio_32'][1],self.n_margs[pl])/self.planets[pl]['period_int_aliases'])
+                        pers[pl] = pm.Deterministic("per_"+pl, tensor.basic.tile(pm.math.abs_(t0s[pl] - t0_3s[pl])/np.min([self.planets[pl]['p_ratio_32'][0],self.planets[pl]['p_ratio_32'][0]])/self.planets[pl]['p_ratio_32'][1],self.n_margs[pl])/self.planets[pl]['period_int_aliases'])
 
                 elif pl in self.multis:
                     self.n_margs[pl]=1
@@ -1685,7 +1686,7 @@ class monoModel():
                     #    #Using minimum eccentricity as this is most likely.
                     #    #37768.355 = Me*Msun^-2/3
                     #    Ks[pl]=pm.Deterministic("K_"+pl,((2*np.pi*6.67e-11)/(86400*pers[pl]))**(1/3) * \
-                    #                            pm.math.tile(5.972e24*Mps[pl]*(1.9884e30*Ms)**(-2/3),self.n_margs[pl]) * \
+                    #                            tensor.basic.tile(5.972e24*Mps[pl]*(1.9884e30*Ms)**(-2/3),self.n_margs[pl]) * \
                     #                            sin_incls[pl]*(1-min_eccs[pl]**2)**-0.5)
                     #    pm.math.printing.Print("Ks")(Ks[pl])
                     #elif not self.assume_circ:
@@ -2029,7 +2030,7 @@ class monoModel():
                 cad_index=[]
 
                 if n_pl>1:
-                    r=pm.math.tile(i_rpl,n_pl)
+                    r=tensor.basic.tile(i_rpl,n_pl)
                 else:
                     r=i_rpl
 
@@ -2112,12 +2113,12 @@ class monoModel():
                         i_eccs=eccs;i_omegas=omegas
                 else:
                     #Multiple orbits expected
-                    i_t0s=pm.math.tile(t0s,n_marg)
-                    i_pers=pm.math.tile(pers,n_marg)
-                    i_bs=pm.math.tile(bs,n_marg) if 'b' not in self.marginal_params else bs
+                    i_t0s=tensor.basic.tile(t0s,n_marg)
+                    i_pers=tensor.basic.tile(pers,n_marg)
+                    i_bs=tensor.basic.tile(bs,n_marg) if 'b' not in self.marginal_params else bs
                     if not self.assume_circ:
-                        i_eccs=pm.math.tile(eccs,n_marg) if 'ecc' not in self.marginal_params else eccs
-                        i_omegas=pm.math.tile(omegas,n_marg) if 'omega' not in self.marginal_params else omegas
+                        i_eccs=tensor.basic.tile(eccs,n_marg) if 'ecc' not in self.marginal_params else eccs
+                        i_omegas=tensor.basic.tile(omegas,n_marg) if 'omega' not in self.marginal_params else omegas
                 if self.assume_circ:
                     return xo.orbits.KeplerianOrbit(r_star=Rs, rho_star=rho_S*1.40978, period=i_pers,t0=i_t0s,b=i_bs)
                 else:
@@ -2213,7 +2214,7 @@ class monoModel():
                 if hasattr(self,'rvs'):
                     #new_rverr = ((1+pm.math.exp(rv_logs2))*self.rvs['rv_err'].astype(floattype))
                     sum_log_rverr = pm.math.sum(-len(self.rvs['rv'])/2 * pm.math.log(2*np.pi*((1+pm.math.exp(rv_logs2))*self.rvs['rv_err'].astype(floattype))**2))
-                    #model_rvs[pl] = pm.Deterministic('model_rv_'+pl, pm.math.tile(Ks[pl].dimshuffle('x',0),(len(self.rvs['time']),1)))
+                    #model_rvs[pl] = pm.Deterministic('model_rv_'+pl, tensor.basic.tile(Ks[pl].dimshuffle('x',0),(len(self.rvs['time']),1)))
                     if pl in self.trios+self.duos+self.monos and not hasattr(model,'nonmarg_rvs') and self.derive_K:
                         #Deriving the best-fit K from the data:
                         sinf, cosf = rvorbits[pl]._get_true_anomaly(self.rvs['time'])
@@ -2246,9 +2247,9 @@ class monoModel():
                         if self.debug:
                             pm.math.printing.Print("nonmarg_rvs")(nonmarg_rvs)
                             pm.math.printing.Print("self.rvs['rv'] - nonmarg_rvs")(self.rvs['rv'] - nonmarg_rvs)
-                            pm.math.printing.Print("pm.math.tile(self.rvs['rv'] - nonmarg_rvs,(self.n_margs[pl],1))")(pm.math.tile(self.rvs['rv'] - nonmarg_rvs,(self.n_margs[pl],1)))
+                            pm.math.printing.Print("tensor.basic.tile(self.rvs['rv'] - nonmarg_rvs,(self.n_margs[pl],1))")(tensor.basic.tile(self.rvs['rv'] - nonmarg_rvs,(self.n_margs[pl],1)))
                             pm.math.printing.Print("normalised_rv_models[pl].T")(normalised_rv_models[pl].T)
-                        Ks[pl] = pm.Deterministic("K_"+pl, pm.math.clip(pm.math.batched_tensordot(pm.math.tile(self.rvs['rv'] - nonmarg_rvs,(self.n_margs[pl],1)), normalised_rv_models[pl].T, axes=1) / pm.math.sum(normalised_rv_models[pl]**2,axis=0),0.05,1e5))
+                        Ks[pl] = pm.Deterministic("K_"+pl, pm.math.clip(pm.math.batched_tensordot(tensor.basic.tile(self.rvs['rv'] - nonmarg_rvs,(self.n_margs[pl],1)), normalised_rv_models[pl].T, axes=1) / pm.math.sum(normalised_rv_models[pl]**2,axis=0),0.05,1e5))
                         pm.math.printing.Print("pers")(pers[pl])
                         pm.math.printing.Print("Ks")(Ks[pl])
 
@@ -2273,7 +2274,7 @@ class monoModel():
                         model_rvs[pl] = pm.Deterministic('model_rv_'+pl, rvorbits[pl].get_radial_velocity(self.rvs['time'],
                                                                                                       K=pm.math.exp(logKs[pl])))
                         #else:
-                        #    model_rvs[pl] = pm.Deterministic('model_rv_'+pl, rvorbits[pl].get_radial_velocity(self.rvs['time'],pm.math.tile(Ks[pl].dimshuffle('x',0),(len(self.rvs['time']),1))))
+                        #    model_rvs[pl] = pm.Deterministic('model_rv_'+pl, rvorbits[pl].get_radial_velocity(self.rvs['time'],tensor.basic.tile(Ks[pl].dimshuffle('x',0),(len(self.rvs['time']),1))))
 
 
                 if pl in self.trios+self.duos+self.monos:
@@ -2340,7 +2341,7 @@ class monoModel():
                     if hasattr(self,'rvs') and self.derive_K:
                         Krv_priors[pl] = pm.Deterministic("Krv_prior_"+pl, 0.25*pm.math.log(Ks[pl]))
                     elif hasattr(self,'rvs') and not self.derive_K:
-                        Krv_priors[pl] = pm.Deterministic("Krv_prior_"+pl, 0.25*pm.math.tile(pm.math.log(Ks[pl]),self.n_margs[pl]) )
+                        Krv_priors[pl] = pm.Deterministic("Krv_prior_"+pl, 0.25*tensor.basic.tile(pm.math.log(Ks[pl]),self.n_margs[pl]) )
                     else:
                         Krv_priors[pl] = pm.math.zeros(self.n_margs[pl])
                     '''
@@ -2378,7 +2379,7 @@ class monoModel():
                         rv_logliks = (self.rvs['rv'][:,None] - (nonmarg_rvs.dimshuffle(0,'x') + model_rvs[pl]))**2/self.rvs['rv_err'].astype(floattype)[:,None]**2
                         #rvjitters[pl]=pm.Deterministic("rv_jitters_"+pl,pm.math.clip(pm.math.sqrt(pm.math.mean(rv_logliks,axis=0))-np.average(self.rvs['rv_err'].astype(floattype)),self.rvs['jitter_min'],1e4))
                         logmass_sigma = pm.Deterministic("logmass_sd_"+pl, (rpls[pl]<=8)*(0.07904372*rpls[pl]+0.24318296) + (rpls[pl]>8)*(0-0.02313261*rpls[pl]+1.06765343))
-                        rvlogliks[pl]=pm.Deterministic("rv_loglik_"+pl, pm.math.tile(sum_log_rverr,self.n_margs[pl]) - \
+                        rvlogliks[pl]=pm.Deterministic("rv_loglik_"+pl, tensor.basic.tile(sum_log_rverr,self.n_margs[pl]) - \
                                                                         (pm.math.log(Mps[pl])-logmassests[pl])**2/((self.rvs['jitter_min']/Ks[pl])**2 + logmass_sd**2) - \
                                                                         pm.math.sum((self.rvs['rv'][:,None] - (nonmarg_rvs.dimshuffle(0,'x') + model_rvs[pl]))**2/(self.rvs['jitter_min']**2 + self.rvs['rv_err'][:,None].astype(floattype)**2),axis=0))
                                                                         #-(pm.math.log(rvjitters[pl])-self.rvs['logjitter_mean'])**2/self.rvs['logjitter_sd']**2 - \
@@ -3025,25 +3026,25 @@ class monoModel():
                             rvs = xo.orbits.KeplerianOrbit(r_star=sample['Rs'],
                                                     rho_star=sample['rho_S']*1.40978,
                                                     period=sample['per_'+pl],
-                                                    t0=pm.math.tile(sample['t0_'+pl],self.n_margs[pl]),
-                                                    b=pm.math.tile(sample['b_'+pl],self.n_margs[pl]),
+                                                    t0=tensor.basic.tile(sample['t0_'+pl],self.n_margs[pl]),
+                                                    b=tensor.basic.tile(sample['b_'+pl],self.n_margs[pl]),
                                                     ecc=sample['min_ecc_'+pl],omega=sample['omega_'+pl]
                                               ).get_radial_velocity(self.rvs_to_plot['t']['time'],sample['K_'+pl]).eval()
                         elif not self.assume_circ:
                             rvs = xo.orbits.KeplerianOrbit(r_star=sample['Rs'],
                                                     rho_star=sample['rho_S']*1.40978,
                                                     period=sample['per_'+pl],
-                                                    t0=pm.math.tile(sample['t0_'+pl],self.n_margs[pl]),
-                                                    b=pm.math.tile(sample['b_'+pl],self.n_margs[pl]),
-                                                    ecc=pm.math.tile(sample['ecc_'+pl],self.n_margs[pl]),
-                                                    omega=pm.math.tile(sample['omega_'+pl],self.n_margs[pl])
+                                                    t0=tensor.basic.tile(sample['t0_'+pl],self.n_margs[pl]),
+                                                    b=tensor.basic.tile(sample['b_'+pl],self.n_margs[pl]),
+                                                    ecc=tensor.basic.tile(sample['ecc_'+pl],self.n_margs[pl]),
+                                                    omega=tensor.basic.tile(sample['omega_'+pl],self.n_margs[pl])
                                              ).get_radial_velocity(self.rvs_to_plot['t']['time'],sample['K_'+pl]).eval()
                         elif self.assume_circ:
                             rvs = xo.orbits.KeplerianOrbit(r_star=sample['Rs'],
                                                     rho_star=sample['rho_S']*1.40978,
                                                     period=sample['per_'+pl],
-                                                    t0=pm.math.tile(sample['t0_'+pl],self.n_margs[pl]),
-                                                    b=pm.math.tile(sample['b_'+pl],self.n_margs[pl])
+                                                    t0=tensor.basic.tile(sample['t0_'+pl],self.n_margs[pl]),
+                                                    b=tensor.basic.tile(sample['b_'+pl],self.n_margs[pl])
                                               ).get_radial_velocity(self.rvs_to_plot['t']['time'],sample['K_'+pl]).eval()
                         all_rv_ts_i[pl]+=[rvs]
                         marg_rv_ts_i[pl]+=[np.sum(rvs*np.exp(sample['logprob_marg_'+pl]),axis=1)]
