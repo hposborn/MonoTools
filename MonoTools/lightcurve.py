@@ -259,7 +259,7 @@ class lc():
         #For corot cadences, we'll cut regions from the SAA
         for corotcad in [cad for cad in self.cadence_list if 'co_' in cad]:
             ix=np.in1d(self.cadence,corotcad)
-            self.flux_mask[ix] = tools.CutHighRegions(self.flux[ix],self.flux_mask[ix],std_thresh=4.5,n_pts=25,n_loops=2)
+            self.flux_mask[ix] = tools.cut_high_regions(self.flux[ix],self.flux_mask[ix],std_thresh=4.5,n_pts=25,n_loops=2)
 
         if np.sum(self.flux_mask)>0:
             # & (lc[prefix+'flux'+suffix]>0.0)
@@ -294,12 +294,12 @@ class lc():
                 stack_shitfed_flux=np.column_stack([getattr(self,flux_arr_name)[self.flux_mask][n:(-20+n)] for n in range(20)])
                 self.flux_mask[self.flux_mask][10:-10]=abs(getattr(self,flux_arr_name)[self.flux_mask][10:-10] - np.nanmedian(stack_shitfed_flux,axis=1))<cut_all_anom_lim*np.nanmedian(abs(np.diff(stack_shitfed_flux,axis=1)),axis=1)
                 #Now doing difference
-                self.flux_mask[self.flux_mask*out_of_trans]=tools.CutAnomDiff(getattr(self,flux_arr_name)[self.flux_mask*out_of_trans],cut_all_anom_lim)
+                self.flux_mask[self.flux_mask*out_of_trans]=tools.cut_anom_diff(getattr(self,flux_arr_name)[self.flux_mask*out_of_trans],cut_all_anom_lim)
                 '''
                 #Doing this a second time with more stringent limits to cut two-point outliers:
-                self.flux_mask[self.flux_mask]=CutAnomDiff(lc[prefix+'flux'+suffix][self.flux_mask],cut_all_anom_lim+3.5)
+                self.flux_mask[self.flux_mask]=cut_anom_diff(lc[prefix+'flux'+suffix][self.flux_mask],cut_all_anom_lim+3.5)
                 '''
-                #print(np.sum(~lc['mask']),"after before CutAnomDiff")
+                #print(np.sum(~lc['mask']),"after before cut_anom_diff")
 
             if mask_islands:
                 #Masking islands of data which are <12hrs long and >12hrs from other data
@@ -2108,15 +2108,15 @@ class multilc(lc):
                     rowlens+=[len(rows[i])]
                 if len(rowlens)>2:
                     if type(include_table)==str and include_table=='tic':
-                        tab = tools.MakeBokehTable(self.all_ids['tess']['data'],dftype='tic',width=160,height=int(plot_height/self.init_plot_info['plot_rows']),**kwargs)
+                        tab = tools.make_bokeh_table(self.all_ids['tess']['data'],dftype='tic',width=160,height=int(plot_height/self.init_plot_info['plot_rows']),**kwargs)
                     elif type(include_table) in [pd.Series,pd.DataFrame]:
-                        tab = tools.MakeBokehTable(include_table,dftype=None,width=160,height=int(plot_height/self.init_plot_info['plot_rows']),**kwargs)
+                        tab = tools.make_bokeh_table(include_table,dftype=None,width=160,height=int(plot_height/self.init_plot_info['plot_rows']),**kwargs)
                     rows[np.argmin(rowlens)]=[tab]+rows[np.argmin(rowlens)]
                 else:
                     if type(include_table)==str and include_table=='tic':
-                        tab = tools.MakeBokehTable(self.all_ids['tess']['data'],dftype='tic',width=plot_width, height=int(plot_height/self.init_plot_info['plot_rows']), **kwargs)
+                        tab = tools.make_bokeh_table(self.all_ids['tess']['data'],dftype='tic',width=plot_width, height=int(plot_height/self.init_plot_info['plot_rows']), **kwargs)
                     elif type(include_table) in [pd.Series,pd.DataFrame]:
-                        tab = tools.MakeBokehTable(include_table, width=plot_width, dftype=None, height=int(plot_height/self.init_plot_info['plot_rows']), **kwargs)
+                        tab = tools.make_bokeh_table(include_table, width=plot_width, dftype=None, height=int(plot_height/self.init_plot_info['plot_rows']), **kwargs)
                     rows=[[tab]]+rows
             p = layout(rows, sizing_mode='stretch_both')
             save(p)

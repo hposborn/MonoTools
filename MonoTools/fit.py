@@ -94,9 +94,9 @@ class monoModel():
                        'fit_no_flatten':False,  # fit_no_flatten - bool - If no GP, by default we spline-flatten the lightcurve. Use fit_no_flatten to turn this off
                        'constrain_LD':True,     # constrain_LD - bool - Use constrained LDs from model or unconstrained?
                        'ld_mult':3.,            # ld_mult - float - How much to multiply theoretical LD param uncertainties
-                       'useL2':False,           # useL2 - bool - Fit for "second light" (i.e. a binary or planet+blend)
+                       'use_L2':False,           # use_L2 - bool - Fit for "second light" (i.e. a binary or planet+blend)
                        'FeH':0.0,               # FeH - float - Stellar FeH
-                       'LoadFromFile':False,    # LoadFromFile - bool - Load previous model?
+                       'load_from_file':False,  # load_from_file - bool - Load previous model?
                        'cut_distance':3.75,     # cut_distance - float - cut out points further than cut_distance*Tdur. 0.0 means no cutting
                        'mask_distance': 0.666,       #Distance, in transit durations, from set transits, to "mask" as in-transit data when e.g. flattening.
                        'force_match_input':None,# force_match_input - Float/None add potential with this the sigma between the input and the output logror and logdur to force MCMC to match the input duration & maximise logror [e.g. 0.1 = match to 1-sigma=10%]
@@ -134,10 +134,10 @@ class monoModel():
         self.mission=mission
 
         #Initalising save locations
-        if self.LoadFromFile and not self.overwrite:
+        if self.load_from_file and not self.overwrite:
             #Catching the case where the file doesnt exist:
-            success = self.LoadModelFromFile(loadfile=savefileloc)
-            self.LoadFromFile = success
+            success = self.load_model_from_file(loadfile=savefileloc)
+            self.load_from_file = success
         
         if lc is None or type(lc) is not lightcurve.multilc:
             lc = lightcurve.multilc(ID,mission)
@@ -150,7 +150,7 @@ class monoModel():
         
         assert ID is not None and mission is not None and lc is not None
 
-        if not self.LoadFromFile:
+        if not self.load_from_file:
             if rvs is not None:
                 self.add_rvs(rvs)
             #If we don;t have a past model to load, we load the lightcurve and, if a "planets" dict was passes, initialise those:
@@ -162,17 +162,17 @@ class monoModel():
                     self.add_planet(self, planets[pl]['orbit_flag'], planets[pl], pl)
             self.savefileloc=savefileloc
 
-    def LoadModelFromFile(self, loadfile=None):
+    def load_model_from_file(self, loadfile=None):
         """Load a monoModel object direct from file.
 
         Args:
-            loadfile (str, optional): File to load from, otherwise it takes the default location using `GetSavename`. Defaults to None.
+            loadfile (str, optional): File to load from, otherwise it takes the default location using `get_savename`. Defaults to None.
 
         Returns:
             bool: Whether the load is successful
         """
         if loadfile is None:
-            self.GetSavename(how='load')
+            self.get_savename(how='load')
             loadfile=self.savenames[0]+'_model.pickle'
             if self.debug: print(self.savenames)
 
@@ -195,16 +195,16 @@ class monoModel():
         else:
             return False
 
-    def SaveModelToFile(self, savefile=None, limit_size=False):
+    def save_model_to_file(self, savefile=None, limit_size=False):
         """Save a monoModel object direct to file.
 
         Args:
-            savefile (str, optional): File location to save to, otherwise it takes the default location using `GetSavename`. Defaults to None.
+            savefile (str, optional): File location to save to, otherwise it takes the default location using `get_savename`. Defaults to None.
             limit_size (bool, optional): If we want to limit size this function can delete unuseful hyperparameters before saving. Defaults to False.
         """
         if savefile is None:
             if not hasattr(self,'savenames'):
-                self.GetSavename(how='save')
+                self.get_savename(how='save')
             savefile=self.savenames[0]+'_model.pickle'
         if hasattr(self,'trace'):
             self.trace.to_netcdf(self.savenames[0]+'_trace.nc')
@@ -558,7 +558,7 @@ class monoModel():
         if len(gaps)>0:
             #Looping from minimum distance from transit to gap, to maximum distance from transit to end-of-lc
             checkpers=np.arange(dist_from_t0[gaps[0]]-tdur,np.max(dist_from_t0)+tdur,tdur*0.166)
-            checkpers_ix=self.CheckPeriodsHaveGaps(checkpers,tdur,tcen,**kwargs).astype(int) #Seeing if each period has data coverage
+            checkpers_ix=self.check_periods_have_gaps(checkpers,tdur,tcen,**kwargs).astype(int) #Seeing if each period has data coverage
 
             #Creating an array of tuples which form start->end of specific gaps:
             starts=checkpers[:-1][np.diff(checkpers_ix)==1.0]
@@ -581,7 +581,7 @@ class monoModel():
             #print(ix,np.column_stack([(time-tc-per*0.5)%per-per*0.5 for tc in tcens])[ix,:])
             return np.hstack([(time-tcens-per*0.5)%per-per*0.5])
             
-    def CheckPeriodsHaveGaps(self,pers,tdur,tcen,tcen_2=None,tcen_3=None,match_trans_thresh=2.5,coverage_thresh=0.15,**kwargs):
+    def check_periods_have_gaps(self,pers,tdur,tcen,tcen_2=None,tcen_3=None,match_trans_thresh=2.5,coverage_thresh=0.15,**kwargs):
         """Checking a list of potential periods and seeing if period are observed by counting the number of points in-transit
 
         Args:
@@ -660,9 +660,9 @@ class monoModel():
         check_pers_ints = np.arange(1,np.ceil(pl_dic['period']/10),1.0)
         if 'tcen_3' in pl_dic:
             #Also need to check that the implied periods match the third period
-            check_pers_ix = self.CheckPeriodsHaveGaps(pl_dic['period']/check_pers_ints,pl_dic['tdur'],pl_dic['tcen'],tcen_2=pl_dic['tcen_2'],tcen_3=pl_dic['tcen_3'],**kwargs)
+            check_pers_ix = self.check_periods_have_gaps(pl_dic['period']/check_pers_ints,pl_dic['tdur'],pl_dic['tcen'],tcen_2=pl_dic['tcen_2'],tcen_3=pl_dic['tcen_3'],**kwargs)
         else:
-            check_pers_ix = self.CheckPeriodsHaveGaps(pl_dic['period']/check_pers_ints,pl_dic['tdur'],pl_dic['tcen'],tcen_2=pl_dic['tcen_2'],**kwargs)
+            check_pers_ix = self.check_periods_have_gaps(pl_dic['period']/check_pers_ints,pl_dic['tdur'],pl_dic['tcen'],tcen_2=pl_dic['tcen_2'],**kwargs)
 
         pl_dic['period_int_aliases']=check_pers_ints[check_pers_ix]
         if len(pl_dic['period_int_aliases'])==0:
@@ -916,7 +916,7 @@ class monoModel():
                 self.Mstar=rhostar[0]*self.Rstar[0]**3
 
 
-    def GetSavename(self, how='load',overwrite=None):
+    def get_savename(self, how='load',overwrite=None):
         """Adds unique savename prefixes to class (self.savenames) with two formats:
         '[savefileloc]/[T/K]IC[11-number ID]_[20YY-MM-DD]_[n]...'
         '[savefileloc]/[T/K]IC[11-number ID]_[n]...'
@@ -1157,9 +1157,9 @@ class monoModel():
             train_GP (bool, optional): Train the lightcurve GP on out-of-transit data before sampling? Defaults to True
             constrain_LD (bool, optional): Use constrained LDs from model or unconstrained? Defaults to True
             ld_mult (float, optional): How much to multiply theoretical LD param uncertainties. Defaults to 3.
-            useL2 (bool, optional): Fit for "second light" (i.e. a binary or planet+blend). Defaults to False
+            use_L2 (bool, optional): Fit for "second light" (i.e. a binary or planet+blend). Defaults to False
             FeH (float, optional): Stellar FeH. Defaults to 0.0
-            LoadFromFile (bool, optional): Load previous model? Defaults to False
+            load_from_file (bool, optional): Load previous model? Defaults to False
             cut_distance (float, optional): cut out points further than cut_distance*Tdur. 0.0 means no cutting. Defaults to 3.75
             mask_distance (float, optional): Distance, in transit durations, from set transits, to "mask" as in-transit data when e.g. flattening. 
                                         Defaults to 0.666
@@ -1415,7 +1415,7 @@ class monoModel():
             # The 2nd light (not third light as companion light is not modelled)
             # This quantity is in delta-mag
             unq_missions = np.unique([cad.split('_')[0] for cad in self.cads_short])
-            if self.useL2:
+            if self.use_L2:
                 deltamag_contam = {mis:pm.Uniform("deltamag_contam_"+mis, lower=-10.0, upper=10.0) for mis in unq_missions}
                 mult = {mis:pm.Deterministic("mult_"+mis,(1+pm.math.power(2.511,-1*deltamag_contam[mis]))) for mis in unq_missions} #Factor to multiply normalised lightcurve by
             else:
@@ -1551,12 +1551,12 @@ class monoModel():
                     logrors[pl]=pm.TruncatedNormal("logror_"+pl,
                                                     mu=np.tile(np.log(self.planets[pl]['ror']),self.n_margs[pl]),
                                                     sigma=np.tile(1.0,self.n_margs[pl]),
-                                                    lower=np.log(0.001), upper=np.log(0.25+int(self.useL2)),
+                                                    lower=np.log(0.001), upper=np.log(0.25+int(self.use_L2)),
                                                     initval=np.tile(np.log(self.planets[pl]['ror']),self.n_margs[pl]),
                                                     shape=self.n_margs[pl])
                 else:
                     logrors[pl]=pm.TruncatedNormal("logror_"+pl,mu=np.log(self.planets[pl]['ror']), sigma=0.75, 
-                                                    lower=np.log(0.001), upper=np.log(0.25+int(self.useL2)),
+                                                    lower=np.log(0.001), upper=np.log(0.25+int(self.use_L2)),
                                                     initval=np.log(self.planets[pl]['ror']))
                 rors[pl]=pm.Deterministic("ror_"+pl,pm.math.exp(logrors[pl]))
                 rpls[pl]=pm.Deterministic("rpl_"+pl,109.2*rors[pl]*Rs)
@@ -1737,7 +1737,7 @@ class monoModel():
 
             #Single mission
             if np.any([c[:2]=='ts' for c in self.cads_short]) and self.constrain_LD:
-                ld_dists=self.getLDs(n_samples=1200,mission='tess')
+                ld_dists=self.get_lds(n_samples=1200,mission='tess')
                 u_star_tess = pm.TruncatedNormal("u_star_tess",
                                                 mu=np.nanmedian(ld_dists,axis=0),
                                                 sigma=np.clip(ld_mult*np.nanstd(ld_dists,axis=0),0.1,1.0), shape=2, 
@@ -1745,7 +1745,7 @@ class monoModel():
             elif np.any([c[:2]=='ts' for c in self.cads_short]) and not self.constrain_LD:
                 u_star_tess = xo.distributions.QuadLimbDark("u_star_tess", initval=np.array([0.3, 0.2]))
             if np.any([(c[:2]=='k1')|(c[:2]=='k2') for c in self.cads_short]) and self.constrain_LD:
-                ld_dists=self.getLDs(n_samples=3000,mission='kepler')
+                ld_dists=self.get_lds(n_samples=3000,mission='kepler')
                 if self.debug: print("LDs",ld_dists)
                 u_star_kep = pm.TruncatedNormal("u_star_kep", mu=np.nanmedian(ld_dists,axis=0),
                                                 sigma=np.clip(ld_mult*np.nanstd(ld_dists,axis=0),0.1,1.0), 
@@ -1753,14 +1753,14 @@ class monoModel():
             elif np.any([(c[:2]=='k1')|(c[:2]=='k2') for c in self.cads_short]) and not self.constrain_LD:
                 u_star_kep = xo.distributions.QuadLimbDark("u_star_kep", initval=np.array([0.3, 0.2]))
             if np.any([c[:2]=='co' for c in self.cads_short]) and self.constrain_LD:
-                ld_dists=self.getLDs(n_samples=1200,mission='corot')
+                ld_dists=self.get_lds(n_samples=1200,mission='corot')
                 u_star_corot = pm.TruncatedNormal("u_star_corot", mu=np.nanmedian(ld_dists,axis=0),
                                                 sigma=np.clip(ld_mult*np.nanstd(ld_dists,axis=0),0.1,1.0), shape=2, 
                                                 lower=0.0, upper=1.0, initval=np.clip(np.nanmedian(ld_dists,axis=0),0,1))
             elif np.any([c[:2]=='co' for c in self.cads_short]) and not self.constrain_LD:
                 u_star_corot = xo.distributions.QuadLimbDark("u_star_corot", initval=np.array([0.3, 0.2]))
             if np.any([c[:2]=='ch' for c in self.cads_short]) and self.constrain_LD:
-                ld_dists=self.getLDs(n_samples=1200,mission='cheops')
+                ld_dists=self.get_lds(n_samples=1200,mission='cheops')
                 u_star_cheops = pm.TruncatedNormal("u_star_cheops",
                                                     mu=np.nanmedian(ld_dists,axis=0),
                                                     sigma=np.clip(ld_mult*np.nanstd(ld_dists,axis=0),0.1,1.0), shape=2, 
@@ -2633,7 +2633,7 @@ class monoModel():
             self.model = model
             self.init_soln = map_soln
 
-    def SampleModel(self, n_draws=500, n_burn_in=None, overwrite=False, continue_sampling=False, n_chains=4, **kwargs):
+    def sample_model(self, n_draws=500, n_burn_in=None, overwrite=False, continue_sampling=False, n_chains=4, **kwargs):
         """Run PyMC3 sampler
 
         Args:
@@ -2648,7 +2648,7 @@ class monoModel():
         #    self.init_lc()
 
         if not overwrite:
-            self.LoadPickle()
+            self.load_pickle()
             if hasattr(self,'trace') and self.debug:
                 print("LOADED MCMC")
 
@@ -2672,8 +2672,8 @@ class monoModel():
                     self.trace = pm.sample(tune=n_burn_in, draws=n_draws, start=self.init_soln, chains=n_chains, compute_convergence_checks=False)#, **kwargs)
                 self.trace=az.extract(self.trace)
             #Saving both the class and a pandas dataframe of output data.
-            self.SaveModelToFile()
-            _=self.MakeTable(save=True)
+            self.save_model_to_file()
+            _=self.make_table(save=True)
         elif not (hasattr(self,'trace') or hasattr(self,'trace_df')):
             print("Trace or trace df exists...")
 
@@ -2681,11 +2681,11 @@ class monoModel():
     def Table(self):
         """AI is creating summary for Table
         """
-        if LoadFromFile and not self.overwrite and os.path.exists(self.savenames[0]+'_results.txt'):
+        if load_from_file and not self.overwrite and os.path.exists(self.savenames[0]+'_results.txt'):
             with open(self.savenames[0]+'_results.txt', 'r', encoding='UTF-8') as file:
                 restable = file.read()
         else:
-            restable=self.ToLatexTable(trace, ID, mission=mission, varnames=None,order='columns',
+            restable=self.to_latex_table(trace, ID, mission=mission, varnames=None,order='columns',
                                        savename=self.savenames[0]+'_results.txt', overwrite=False,
                                        savefileloc=None, tracemask=tracemask)
         '''
@@ -2758,7 +2758,7 @@ class monoModel():
             elif newgp:
                 for key in self.lc_regions['limits']:
                     #Only creating out-of-transit GP for the binned (e.g. 30min) data
-                    cutBools = tools.cutLc(self.lc.time[self.lc_regions[key]['ix']],max_gp_len,
+                    cutBools = tools.cut_lc(self.lc.time[self.lc_regions[key]['ix']],max_gp_len,
                                            transit_mask=~self.lc.in_trans['all'][self.lc_regions[key]['ix']])
 
                     limit_mask_bool[n]={}
@@ -2816,7 +2816,7 @@ class monoModel():
                 #Doing multiple samples and making percentiles:
                 for key in self.lc_regions:
                     #Need to break up the lightcurve even further to avoid GP burning memory:
-                    cutBools = tools.cutLc(self.lc.time[self.lc_regions[key]['ix']],max_gp_len,
+                    cutBools = tools.cut_lc(self.lc.time[self.lc_regions[key]['ix']],max_gp_len,
                                         transit_mask=~self.lc.in_trans['all'][self.lc_regions[key]['ix']])
                     i_kernel = pymc_terms.SHOTerm(S0=self.meds['phot_S0'], w0=self.meds['phot_w0'], Q=1/np.sqrt(2))
                     i_gp = celerite2.pymc.GaussianProcess(i_kernel, mean=self.meds['phot_mean'])
@@ -3157,7 +3157,7 @@ class monoModel():
         plt.rcParams["axes.linewidth"]  = 0.75
 
         if not hasattr(self,'savenames'):
-            self.GetSavename(how='save')
+            self.get_savename(how='save')
         #Making sure lc is binned to 30mins
         if plottype=='lc':
             if plot_flat:
@@ -3216,7 +3216,7 @@ class monoModel():
         # #elif plottype=='rv':
 
 
-    def PlotRVs(self, interactive=False, plot_alias='best', nbest=4, n_samp=300, overwrite=False, return_fig=False, plot_resids=False,
+    def plot_RVs(self, interactive=False, plot_alias='best', nbest=4, n_samp=300, overwrite=False, return_fig=False, plot_resids=False,
                 plot_loc=None, palette=None, pointcol='k', plottype='png',raster=False, nmargtoplot=0, save=True,**kwargs):
         """Varied plotting function for RVs of MonoTransit model
 
@@ -3678,7 +3678,7 @@ class monoModel():
         '''
 
 
-    def Plot(self, interactive=False, n_samp=None, overwrite=False, interp=True, newgp=False, return_fig=False, max_gp_len=20000, n_intrans_bins=15,
+    def plot(self, interactive=False, n_samp=None, overwrite=False, interp=True, newgp=False, return_fig=False, max_gp_len=20000, n_intrans_bins=15,
              save=True, plot_loc=None, palette=None, plot_flat=False, pointcol="k", plottype='png',plot_rows=None, ylim=None, xlim=None, **kwargs):
         """Varied photometric plotting function for MonoTransit model
 
@@ -4442,7 +4442,7 @@ class monoModel():
             if return_fig:
                 return fig
 
-    def PlotPeriods(self, plot_loc=None, ylog=True, xlog=True, nbins=25, 
+    def plot_periods(self, plot_loc=None, ylog=True, xlog=True, nbins=25, 
                     pmax=None, pmin=None, ymin=None,ymax=None,extra_factor=1):
         """Plot Marginalised probabilities of the possible periods
 
@@ -4587,7 +4587,7 @@ class monoModel():
             else:
                 plt.savefig(plot_loc)
 
-    def PlotCorner(self,corner_vars=None,use_marg=True,truths=None):
+    def plot_corner(self,corner_vars=None,use_marg=True,truths=None):
         """Create Corner plot for MCMC samples
         
         Args:
@@ -4692,7 +4692,7 @@ class monoModel():
         fig.savefig(self.savenames[0]+'_corner.pdf')#,dpi=400,rasterized=True)
 
 
-    def MakeTable(self,short=True,save=True,cols=['all']):
+    def make_table(self,short=True,save=True,cols=['all']):
         """Make table from MCMC Samples
 
         Args:
@@ -4735,7 +4735,7 @@ class monoModel():
                 df.to_csv(self.savenames[0]+'_mcmc_output.csv')
         return df
 
-    def CheopsPlanetPropertiesTable(self,planet=None):
+    def cheops_planet_properties_table(self,planet=None):
         """Create output compatible with the Cheops "PlanetPropertiesTable". Not yet implemented
 
         Args:
@@ -4743,7 +4743,7 @@ class monoModel():
         """
         "target,gaia_id,planet_id,T0,e_T0,P,e_P,ecosw,e_ecosw,esinw,e_esinw,D,e_D,W,e_W,K,e_K"
 
-    def PlotTable(self,plot_loc=None,return_table=False):
+    def plot_table(self,plot_loc=None,return_table=False):
         """Plot table as PDF (i.e. to assemble PDF report)
 
         Args:
@@ -4751,10 +4751,10 @@ class monoModel():
             return_table (bool, optional): Return DF figure? Defaults to False.
 
         Returns:
-            pandas DataFrame: Dataframe of parameters and specific parameters (output from `MakeTable`)
+            pandas DataFrame: Dataframe of parameters and specific parameters (output from `make_table`)
         """
 
-        df = self.MakeTable(short=True)
+        df = self.make_table(short=True)
 
         # Making table a plot for PDF:
         fig=plt.figure(figsize=(11.69,8.27))
@@ -4783,7 +4783,7 @@ class monoModel():
 
 
 
-    def LoadPickle(self, loadname=None):
+    def load_pickle(self, loadname=None):
         """Load data from saved pickle
 
         Args:
@@ -4808,7 +4808,7 @@ class monoModel():
             else:
                 self.trace=loaded
         if not hasattr(self, 'savenames') or self.savenames is None:
-            self.GetSavename(how='load')
+            self.get_savename(how='load')
         #print(self.savenames, self.savenames is None)
         #[0]+'_mcmc.pickle',os.path.exists(self.savenames[0]+'_mcmc.pickle'))
         if os.path.exists(self.savenames[0]+'_mcmc.pickle'):
@@ -4829,7 +4829,7 @@ class monoModel():
             else:
                 self.trace=loaded
 
-    def PredictFutureTransits(self, time_start=None, time_end=None, time_dur=180, include_multis=True, 
+    def predict_future_transits(self, time_start=None, time_end=None, time_dur=180, include_multis=True, 
                               save=True, compute_solsys_dist=True, check_TESS=True):
         """Return a dataframe of potential transits of all Duo candidates between time_start & time_end dates.
 
@@ -4846,7 +4846,7 @@ class monoModel():
 
         Example:
             # e.g. after running model.RunMcmc():
-            df = model.PredictFutureTransits(Time('2021-06-01T00:00:00.000',format='isot'),Time('2021-10-01T00:00:00.000',format='isot'))
+            df = model.predict_future_transits(Time('2021-06-01T00:00:00.000',format='isot'),Time('2021-10-01T00:00:00.000',format='isot'))
         """
         
         from astropy.time import Time
@@ -4882,7 +4882,7 @@ class monoModel():
         
 
         if check_TESS:
-            sect_start_ends=self.CheckTESS()
+            sect_start_ends=self.check_TESS()
         
         all_trans_fin=pd.DataFrame()
         loopplanets = self.duos+self.trios+self.multis if include_multis else self.duos+self.trios
@@ -4982,7 +4982,7 @@ class monoModel():
             all_trans_fin.to_csv(self.savenames[0]+"_list_all_trans.csv")
         return all_trans_fin
 
-    def CheckTESS(self,**kwargs):
+    def check_TESS(self,**kwargs):
         """Returns time frames in the future when TESS is observing
         """
         import importlib
@@ -4996,14 +4996,14 @@ class monoModel():
         return np.column_stack((midtimes-0.5*sectdiffs[future_sect_ix]+0.2,midtimes+0.5*sectdiffs[future_sect_ix]-0.2))
         #Now we have sector start & end times, let's check which future transit will be TESS observed:
 
-    def CheopsRMS(self, Gmag, tdur):
+    def cheops_RMS(self, Gmag, tdur):
         #RMS polynomial fits for 3 hour durations:
         rms_brightfit = np.array([ 2.49847572, -6.41232409])
         rms_faintfit = np.array([  30.2599025 , -256.41381477])
         rms = np.max([np.polyval(rms_faintfit,Gmag),np.polyval(rms_brightfit,Gmag)])
         return rms/np.sqrt(tdur/0.125)
 
-    def MakeCheopsOR(self, DR2ID=None, pl=None, min_eff=45, oot_min_orbits=1.0, timing_sigma=3, t_start=None, t_end=None, Texp=None,
+    def make_cheops_OR(self, DR2ID=None, pl=None, min_eff=45, oot_min_orbits=1.0, timing_sigma=3, t_start=None, t_end=None, Texp=None,
                      max_orbits=14, min_pretrans_orbits=0.5, min_intrans_orbits=None, orbits_flex=1.4, observe_sigma=2, 
                      observe_threshold=None, max_ORs=None,prio_1_threshold=0.25, prio_3_threshold=0.0, targetnamestring=None,
                      min_orbits=4.0, outfilesuffix='_output_ORs.csv',avoid_TESS=True,pre_post_TESS="pre"):
@@ -5035,7 +5035,7 @@ class monoModel():
             pre_post_TESS (str, optional): If we are avoiding TESS, should we create the pre-TESS ORs, or the post-TESS ORs? Defaults to "pre"
 
         Returns:
-            df = model.PredictFutureTransits: panda DF to save as csv in location where one can run make_xml_files. e.g. `make_xml_files output.csv --auto-expose -f`
+            df = model.predict_future_transits: panda DF to save as csv in location where one can run make_xml_files. e.g. `make_xml_files output.csv --auto-expose -f`
         """
         #radec, SpTy, Vmag, e_Vmag,
 
@@ -5096,11 +5096,11 @@ class monoModel():
             t_end = next_vernal-(old_radec.ra.deg/360)*365.25+60
 
         #We always need an array of all possible transits/aliases also saved to file to check:
-        all_trans = self.PredictFutureTransits(t_start-self.lc.jd_base,t_end-self.lc.jd_base, check_TESS=avoid_TESS)
+        all_trans = self.predict_future_transits(t_start-self.lc.jd_base,t_end-self.lc.jd_base, check_TESS=avoid_TESS)
         all_trans.to_csv(self.savenames[0]+outfilesuffix.replace("_ORs","").replace(".csv","_list_all_trans.csv"))
 
         if not hasattr(self,'savenames'):
-            self.GetSavename(how='save')
+            self.get_savename(how='save')
 
         if avoid_TESS and np.any(all_trans['in_TESS']) and pre_post_TESS=="pre":
             t_end=2457000+np.min(all_trans.loc[all_trans['in_TESS'],"transit_mid_med"].values)-0.5
@@ -5140,8 +5140,8 @@ class monoModel():
                         observe_threshold=np.sort(allprobs)[::-1][max_ORs]
             
             depth=1e6*np.nanmedian(self.trace['ror_'+ipl])**2
-            print("SNR for whole transit is: ",depth/self.CheopsRMS(gaiainfo['phot_g_mean_mag'], np.nanmedian(self.trace['tdur_'+ipl])))
-            print("SNR for single orbit in/egress is: ",depth/self.CheopsRMS(gaiainfo['phot_g_mean_mag'], 0.5*98/1440))
+            print("SNR for whole transit is: ",depth/self.cheops_RMS(gaiainfo['phot_g_mean_mag'], np.nanmedian(self.trace['tdur_'+ipl])))
+            print("SNR for single orbit in/egress is: ",depth/self.cheops_RMS(gaiainfo['phot_g_mean_mag'], 0.5*98/1440))
 
             prio_1_prob_threshold = np.ceil(np.sum(allprobs>observe_threshold)*prio_1_threshold)
             prio_3_prob_threshold = np.ceil(np.sum(allprobs>observe_threshold)*(1-prio_3_threshold))
@@ -5255,7 +5255,7 @@ class monoModel():
         print("Run the following command in a terminal to generate ORs:\n\""+command+"\"")
         return out_tab
 
-    def getLDs(self,n_samples,mission='tess',how='2'):
+    def get_lds(self,n_samples,mission='tess',how='2'):
         """Gets theoretical quadratic Limb Darkening parameters for any specified mission.
             This is done by first interpolating the theoretical samples (e.g. Claret) onto Teff and logg axes. FeH is typically fixed to the closest value.
             Then, using stellar samples from normally-distributed Teff and logg, a distribution of values for each LD parameter are retrieved.
@@ -5370,7 +5370,7 @@ class monoModel():
         except:
             return " - "
 
-    def ToLatexTable(self,varnames='all',order='columns'):
+    def to_latex_table(self,varnames='all',order='columns'):
         """Creating a Latex table for specfic parameters
 
         Args:
@@ -5383,7 +5383,7 @@ class monoModel():
         #Plotting corner of the parameters to see correlations
         print("Making Latex Table")
         if not hasattr(self,'savenames'):
-            self.GetSavename(how='save')
+            self.get_savename(how='save')
         if self.tracemask is None:
             self.tracemask=np.tile(True,len(self.trace['Rs']))
         if varnames is None or varnames == 'all':

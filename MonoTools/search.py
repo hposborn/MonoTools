@@ -494,7 +494,7 @@ class target():
             self.detns[name].update({col:otherinfo[col] for col in otherinfo.index if col not in self.detns[name]})
         self.monos+=[name]
 
-        self.QuickMonoFit(name, ndurs=4.5, **kwargs)
+        self.quick_mono_fit(name, ndurs=4.5, **kwargs)
     
     def init_multi(self,tcen,tdur,depth,period,name=None,otherinfo=None,**kwargs):
         """Initalise multi-transiting candidate
@@ -515,7 +515,7 @@ class target():
         self.multis+=[name]
         
         #Fitting:
-        self.QuickMonoFit(name,ndurs=4.5,fluxindex='flux_flat',fit_poly=False,**kwargs)
+        self.quick_mono_fit(name,ndurs=4.5,fluxindex='flux_flat',fit_poly=False,**kwargs)
     
     def init_duo(self,tcen,tcen2,tdur,depth,period,name=None,otherinfo=None,**kwargs):
         """Initalise multi-transiting candidate
@@ -537,7 +537,7 @@ class target():
         self.duos+=[name]
         
         #Fitting:
-        self.QuickMonoFit(name,ndurs=4.5,fluxindex='flux_flat',fit_poly=False,**kwargs)
+        self.quick_mono_fit(name,ndurs=4.5,fluxindex='flux_flat',fit_poly=False,**kwargs)
 
     def remove_detn(self,name):
         """Remove candidate detection given the name. 
@@ -978,7 +978,7 @@ class target():
                 ires=self.run_BLS(modx,mody,modyerr,max_period=p_max,min_period=1.1)
             self.multi_results+=[ires[0]]
             self.multi_power_spectra[planet_name]=ires[1]
-            #anommask *= tools.CutAnomDiff(mody)
+            #anommask *= tools.cut_anom_diff(mody)
             #print(n_pl,"norm_mask:",np.sum(self.lc.mask),"anoms:",np.sum(anommask),"pl mask",np.sum(plmask),"total len",len(anommask))
             #print(results[-1])
             print(self.multi_results[-1])
@@ -1169,7 +1169,7 @@ class target():
         
         fig.savefig(plot_loc, dpi=400)
 
-    def QuickMonoFit(self, planet, useL2=False, fit_poly=True, tdur_prior='loguniform', sample_model=True, 
+    def quick_mono_fit(self, planet, useL2=False, fit_poly=True, tdur_prior='loguniform', sample_model=True, 
                      polyorder=3, ndurs=3.3, fluxindex='flux', mask=None, **kwargs):
         """Performs simple planet fit to monotransit dip given the detection data.
 
@@ -1249,7 +1249,7 @@ class target():
                 mean = pm.Normal("mean", mu=0.0, sd=3*np.nanstd(y))
                 flux_trend = mean
 
-            u_star = tools.getLDs(self.Teff['val'])[0]
+            u_star = tools.get_lds(self.Teff['val'])[0]
             #xo.distributions.QuadLimbDark("u_star")
             rhostar=self.Mstar['val']/self.Rstar['val']**3
 

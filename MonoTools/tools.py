@@ -52,7 +52,7 @@ lc_dic={'tess':'ts','kepler':'k1','k2':'k2','corot':'co','cheops':'ch'}
 
 #goto='/Users/hosborn' if 'Users' in os.path.dirname(os.path.realpath(__file__)).split('/') else '/home/hosborn'
 
-def openFits(f,fname,mission,cut_all_anom_lim=4.0,use_ppt=True,force_raw_flux=False,end_of_orbit=False,mask=None,**kwargs):
+def open_fits(f,fname,mission,cut_all_anom_lim=4.0,use_ppt=True,force_raw_flux=False,end_of_orbit=False,mask=None,**kwargs):
     """opens and processes all lightcurve files (especially, but not only, fits files).
 
     Args:
@@ -152,7 +152,7 @@ def openFits(f,fname,mission,cut_all_anom_lim=4.0,use_ppt=True,force_raw_flux=Fa
             lc['flux_err'][(lc['flux_err']>0.0)*(~np.isnan(lc['flux_err']))]=mederr
             lc['flux_err']/=np.nanmedian(lc['flux'])
             lc['flux']/=np.nanmedian(lc['flux'])
-            lc['mask']=CutHighRegions(lc['flux'],np.isfinite(lc['flux']),std_thresh=4.5,n_pts=25,n_loops=2)
+            lc['mask']=cut_high_regions(lc['flux'],np.isfinite(lc['flux']),std_thresh=4.5,n_pts=25,n_loops=2)
     elif type(f).__name__=='TessLightCurve':
         import lightkurve
         lc={'time':f.time,'flux':f.flux,'flux_err':f.flux_err,'quality':f.quality,
@@ -225,7 +225,7 @@ def openFits(f,fname,mission,cut_all_anom_lim=4.0,use_ppt=True,force_raw_flux=Fa
         lc['detrended_flux']=lc.pop('flux')
         lc['flux']=lc['raw_flux'][:]
 
-    lc['mask']=maskLc(lc,fname,cut_all_anom_lim=cut_all_anom_lim,use_ppt=use_ppt,end_of_orbit=end_of_orbit,input_mask=mask)
+    lc['mask']=mask_lc(lc,fname,cut_all_anom_lim=cut_all_anom_lim,use_ppt=use_ppt,end_of_orbit=end_of_orbit,input_mask=mask)
 
     #Including the cadence in the lightcurve as ["t2","t30","k1","k30"] mission letter + cadence
     lc['cadence']=np.tile(mission[0]+str(np.round(np.nanmedian(np.diff(lc['time']))*1440).astype(int)),len(lc['time']))
@@ -263,7 +263,7 @@ def find_time_regions(time,split_gap_size=1.5,min_region_dur=0.25,**kwargs):
     else:
         return [(np.nanmin(time),np.nanmax(time))]
 
-def maskLc(lc,fhead,cut_all_anom_lim=5.0,use_ppt=False,end_of_orbit=True,mask=None,
+def mask_lc(lc,fhead,cut_all_anom_lim=5.0,use_ppt=False,end_of_orbit=True,mask=None,
            use_binned=False,use_flat=False,mask_islands=True,input_mask=None,**kwargs):
     # Mask bad data (nans, infs and negatives)
 
@@ -295,12 +295,12 @@ def maskLc(lc,fhead,cut_all_anom_lim=5.0,use_ppt=False,end_of_orbit=True,mask=No
             stack_shitfed_flux=np.column_stack([lc[prefix+'flux'+suffix][mask][n:(-20+n)] for n in range(20)])
             mask[mask][10:-10]=abs(lc[prefix+'flux'+suffix][mask][10:-10] - np.nanmedian(stack_shitfed_flux,axis=1))<cut_all_anom_lim*np.nanmedian(abs(np.diff(stack_shitfed_flux,axis=1)),axis=1)
             #Now doing difference
-            mask[mask]=CutAnomDiff(lc[prefix+'flux'+suffix][mask],cut_all_anom_lim)
+            mask[mask]=cut_anom_diff(lc[prefix+'flux'+suffix][mask],cut_all_anom_lim)
             '''
             #Doing this a second time with more stringent limits to cut two-point outliers:
-            mask[mask]=CutAnomDiff(lc[prefix+'flux'+suffix][mask],cut_all_anom_lim+3.5)
+            mask[mask]=cut_anom_diff(lc[prefix+'flux'+suffix][mask],cut_all_anom_lim+3.5)
             '''
-            #print(np.sum(~lc['mask']),"after before CutAnomDiff")
+            #print(np.sum(~lc['mask']),"after before cut_anom_diff")
         mu = np.median(lc[prefix+'flux'+suffix][mask])
         if mu<1e-3:
             #In this case we have an already zero-divided flux array:
@@ -375,7 +375,7 @@ def maskLc(lc,fhead,cut_all_anom_lim=5.0,use_ppt=False,end_of_orbit=True,mask=No
         return mask
 
 
-def CutHighRegions(flux, mask, std_thresh=3.2,n_pts=25,n_loops=2):
+def cut_high_regions(flux, mask, std_thresh=3.2,n_pts=25,n_loops=2):
     # Masking anomalous high region using a running 25-point median and std comparison
     # This is best used for e.g. Corot data which has SAA crossing events.
 
@@ -408,7 +408,7 @@ def CutHighRegions(flux, mask, std_thresh=3.2,n_pts=25,n_loops=2):
                            ,axis=0)[1:-1]<20
     return mask
 
-def openPDC(epic,camp,use_ppt=True,**kwargs):
+def open_PDC(epic,camp,use_ppt=True,**kwargs):
     if camp == '10':
     #https://archive.stsci.edu/missions/k2/lightcurves/c1/201500000/69000/ktwo201569901-c01_llc.fits
         urlfilename1='https://archive.stsci.edu/missions/k2/lightcurves/c102/'+str(epic)[:4]+'00000/'+str(epic)[4:6]+'000/ktwo'+str(epic)+'-c102_llc.fits'
@@ -416,13 +416,13 @@ def openPDC(epic,camp,use_ppt=True,**kwargs):
         urlfilename1='https://archive.stsci.edu/missions/k2/lightcurves/c'+str(int(camp))+'/'+str(epic)[:4]+'00000/'+str(epic)[4:6]+'000/ktwo'+str(epic)+'-c'+str(camp).zfill(2)+'_llc.fits'
     if requests.get(urlfilename1, timeout=600).status_code==200:
         with fits.open(urlfilename1,show_progress=False) as hdus:
-            lc=openFits(hdus,urlfilename1,mission='kepler',use_ppt=use_ppt,**kwargs)
+            lc=open_fits(hdus,urlfilename1,mission='kepler',use_ppt=use_ppt,**kwargs)
             lc['src']='K2_pdc'
         return lc
     else:
         return None
 
-def openVand(epic,camp,v=1,use_ppt=True,**kwargs):
+def open_Vand(epic,camp,v=1,use_ppt=True,**kwargs):
     lcvand=[]
     #camp=camp.split(',')[0] if len(camp)>3
     if camp=='et' or camp=='E' or camp=='e':
@@ -436,11 +436,11 @@ def openVand(epic,camp,v=1,use_ppt=True,**kwargs):
         print("Vanderburg LC at ",url1)
         if requests.get(url1, timeout=600).status_code==200:
             with fits.open(url1,show_progress=False) as hdus:
-                lcvand+=[openFits(hdus,url1,mission='k2',use_ppt=use_ppt,**kwargs)]
+                lcvand+=[open_fits(hdus,url1,mission='k2',use_ppt=use_ppt,**kwargs)]
         url2='http://archive.stsci.edu/missions/hlsp/k2sff/c'+str(int(camp))+'2/'+str(epic)[:4]+'00000/'+str(epic)[4:]+'/hlsp_k2sff_k2_lightcurve_'+str(epic)+'-c'+str(int(camp))+'2_kepler_v1_llc.fits'
         if requests.get(url2, timeout=600).status_code==200:
             with fits.open(url2,show_progress=False) as hdus:
-                lcvand+=[openFits(hdus,url2,mission='k2',use_ppt=use_ppt)]
+                lcvand+=[open_fits(hdus,url2,mission='k2',use_ppt=use_ppt)]
     elif camp=='e':
         print("Engineering data")
         #https://www.cfa.harvard.edu/~avanderb/k2/ep60023342alldiagnostics.csv
@@ -450,25 +450,25 @@ def openVand(epic,camp,v=1,use_ppt=True,**kwargs):
         lc={'time':df['BJD - 2454833'].values,
             'flux':df[' Corrected Flux'].values,
             'flux_err':np.tile(np.median(abs(np.diff(df[' Corrected Flux'].values))),df.shape[0])}
-        lcvand+=[openFits(lc,url,mission='k2',use_ppt=use_ppt,**kwargs)]
+        lcvand+=[open_fits(lc,url,mission='k2',use_ppt=use_ppt,**kwargs)]
     else:
         urlfitsname='http://archive.stsci.edu/missions/hlsp/k2sff/c'+str(camp)+'/'+str(epic)[:4]+'00000/'+str(epic)[4:]+'/hlsp_k2sff_k2_lightcurve_'+str(epic)+'-c'+str(camp)+'_kepler_v'+str(int(v))+'_llc.fits'.replace(' ','')
         if requests.get(urlfitsname, timeout=600).status_code==200:
             with fits.open(urlfitsname,show_progress=False) as hdus:
-                lcvand+=[openFits(hdus,urlfitsname,mission='k2',use_ppt=use_ppt,**kwargs)]
+                lcvand+=[open_fits(hdus,urlfitsname,mission='k2',use_ppt=use_ppt,**kwargs)]
             print("Extracted vanderburg LC from ",urlfitsname)
         else:
             print("Cannot find vanderburg LC at ",urlfitsname)
     #Cutting Nones:
     lcvand=[lc for lc in lcvand if lc is not None]
     if lcvand is not None and len(lcvand)>0:
-        lc=lcStack(lcvand)
+        lc=lc_stack(lcvand)
         lc['src']='K2_vand'
         return lc
     else:
         return None
 
-def openEverest(epic,camp,pers=None,durs=None,t0s=None,use_ppt=True,**kwargs):
+def open_Everest(epic,camp,pers=None,durs=None,t0s=None,use_ppt=True,**kwargs):
     import everest
     if camp in [10,11,10.0,11.0,'10','11','10.0','11.0']:
         camp=[int(str(int(float(camp)))+'1'),int(str(int(float(camp)))+'2')]
@@ -508,28 +508,28 @@ def openEverest(epic,camp,pers=None,durs=None,t0s=None,use_ppt=True,**kwargs):
             print(c,"not possible to load")
             continue
     if hdr is not None:
-        lc=openFits(lcev,hdr,mission='k2',use_ppt=use_ppt)
+        lc=open_fits(lcev,hdr,mission='k2',use_ppt=use_ppt)
         #elif int(camp)>=14:
         #    lcloc='https://archive.stsci.edu/hlsps/everest/v2/c'+str(int(camp))+'/'+str(epic)[:4]+'00000/'+str(epic)[4:]+'/hlsp_everest_k2_llc_'+str(epic)+'-c'+str(int(camp))+'_kepler_v2.0_lc.fits'
-        #    lcev=openFits(fits.open(lcloc),lcloc)
-        #lc=lcStack(lcs)
+        #    lcev=open_fits(fits.open(lcloc),lcloc)
+        #lc=lc_stack(lcs)
         lc['src']='K2_ev'
         return lc
     else:
         return None
 
 
-def getK2lc(epic,camp,saveloc=None,pers=None,durs=None,t0s=None,use_ppt=True):
+def get_k2_lc(epic,camp,saveloc=None,pers=None,durs=None,t0s=None,use_ppt=True):
     '''
     Gets (or tries to get) all LCs from K2 sources. Order is Everest > Vanderburg > PDC.
     '''
     from urllib.request import urlopen
     import everest
     lcs={}
-    lcs['vand']={camp:openVand(int(epic), camp, use_ppt=use_ppt)}
+    lcs['vand']={camp:open_Vand(int(epic), camp, use_ppt=use_ppt)}
     if camp!='E':
-        lcs['ev']={camp:openEverest(int(epic), int(float(camp)), pers=pers, durs=durs, t0s=t0s, use_ppt=use_ppt)}
-        lcs['pdc']={camp:openPDC(int(epic),int(float(camp)),use_ppt=use_ppt)}
+        lcs['ev']={camp:open_Everest(int(epic), int(float(camp)), pers=pers, durs=durs, t0s=t0s, use_ppt=use_ppt)}
+        lcs['pdc']={camp:open_PDC(int(epic),int(float(camp)),use_ppt=use_ppt)}
     lcs={ilc:lcs[ilc] for ilc in lcs if lcs[ilc][camp] is not None}
     if len(lcs.keys())>1:
         lens = {l:len(lcs[l][camp]['flux'][lcs[l][camp]['mask']]) for l in lcs}
@@ -537,7 +537,7 @@ def getK2lc(epic,camp,saveloc=None,pers=None,durs=None,t0s=None,use_ppt=True):
         #Making a metric from std and length - std/len_norm**3. i.e. a lc 75% as long as the longest is downweighted by 0.42 (e.g. std increased by 2.4
         ordered_keys = [k for k, v in sorted(stds.items(), key=lambda item: item[1])]
         list(np.array(list(lcs.keys()))[np.argsort(stds)])
-        lc=lcStackDicts(lcs,ordered=ordered_keys)
+        lc=lc_stackDicts(lcs,ordered=ordered_keys)
         return lc
     elif len(lcs.keys())==1:
         return lcs[list(lcs.keys())[0]][camp]
@@ -579,10 +579,10 @@ def K2_lc(epic,coor=None,pers=None,durs=None,t0s=None, use_ppt=True):
     print("K2 campaigns to search:",np.unique(np.array(str(df['campaign']).split(','))))
     for camp in np.unique(np.array(str(df['campaign']).split(','))):
         if camp!='':
-            lcs+=[getK2lc(epic,camp,pers=pers,durs=durs,t0s=t0s, use_ppt=use_ppt)]
+            lcs+=[get_k2_lc(epic,camp,pers=pers,durs=durs,t0s=t0s, use_ppt=use_ppt)]
     lcs=[lc for lc in lcs if lc is not None]
     if len(lcs)>1:
-        lcs=lcStack(lcs)
+        lcs=lc_stack(lcs)
         return lcs,df
     elif len(lcs)==1:
         return lcs[0],df
@@ -590,7 +590,7 @@ def K2_lc(epic,coor=None,pers=None,durs=None,t0s=None, use_ppt=True):
         return None,df
 
 
-def getKeplerLC(kic,cadence='long',use_ppt=True,**kwargs):
+def get_kepler_lc(kic,cadence='long',use_ppt=True,**kwargs):
     '''
     This module uses the KIC of a planet candidate to download lightcurves
 
@@ -625,7 +625,7 @@ def getKeplerLC(kic,cadence='long',use_ppt=True,**kwargs):
             resp = h.request(lcloc, 'HEAD')
             if int(resp[0]['status']) < 400:
                 with fits.open(lcloc,show_progress=False) as hdu:
-                    ilc=openFits(hdu,lcloc,mission='kepler',use_ppt=use_ppt,**kwargs)
+                    ilc=open_fits(hdu,lcloc,mission='kepler',use_ppt=use_ppt,**kwargs)
                     if ilc is not None:
                         lcs+=[ilc]
                     hdr=hdu[1].header
@@ -636,17 +636,17 @@ def getKeplerLC(kic,cadence='long',use_ppt=True,**kwargs):
             resp = h.request(lcloc, 'HEAD')
             if int(resp[0]['status']) < 400:
                 with fits.open(lcloc,show_progress=False) as hdu:
-                    ilc=openFits(hdu,lcloc,mission='kepler',use_ppt=use_ppt,**kwargs)
+                    ilc=open_fits(hdu,lcloc,mission='kepler',use_ppt=use_ppt,**kwargs)
                     if ilc is not None:
                         lcs+=[ilc]
                     hdr=hdu[1].header
     if len(lcs)>0:
-        lc=lcStack(lcs)
+        lc=lc_stack(lcs)
         return lc,hdr
     else:
         return None,None
 
-def lcStackDicts(lcdicts, ordered=None):
+def lc_stackDicts(lcdicts, ordered=None):
     #Stacks multiple lcs together while keeping info from secondary data sources.
     #lcdicts must be in form {'src1':{'camp1':{'time':[],'flux:[], ...},'sect2':{'time':...}},'src2':{'camp1':...}}}
 
@@ -702,10 +702,10 @@ def lcStackDicts(lcdicts, ordered=None):
 
         outlc_by_sect+=[sec_lc]
     '''
-    lc=lcStack(outlc_by_sect)
+    lc=lc_stack(outlc_by_sect)
     return lc
 
-def lcStack(lcs):
+def lc_stack(lcs):
     if len(lcs)==1:
         return lcs[0]
     else:
@@ -744,7 +744,7 @@ def lcStack(lcs):
                 outlc['flux_unit']=lcs[nlc]['flux_unit']
         return outlc
 
-def CutAnomDiff(flux,thresh=4.2):
+def cut_anom_diff(flux,thresh=4.2):
     #Uses differences between points to establish anomalies.
     #Only removes single points with differences to both neighbouring points greater than threshold above median difference (ie ~rms)
     #Fast: 0.05s for 1 million-point array.
@@ -769,7 +769,7 @@ def observed(tic,radec=None,maxsect=84):
     #print(out_dic)
     return out_dic
 
-def getCorotLC(corid,use_ppt=True,**kwargs):
+def get_corot_lc(corid,use_ppt=True,**kwargs):
     #These are pre-computed CoRoT LCs I have lying around. There is no easy API as far as I can tell.
     initstring="https://exoplanetarchive.ipac.caltech.edu/data/ETSS/corot_exo/FITSfiles/"
     corotlclocs={102356770:["LRa03/EN2_STAR_MON_0102356770_20091003T223149_20100301T055642.fits"],
@@ -812,10 +812,10 @@ def getCorotLC(corid,use_ppt=True,**kwargs):
         lcs=[]
         for loc in corotlclocs[int(corid)]:
             with fits.open(initstring+loc,show_progress=False,timeout=120) as hdus:
-                lci=openFits(hdus,initstring+loc,mission='corot',use_ppt=use_ppt,**kwargs)
+                lci=open_fits(hdus,initstring+loc,mission='corot',use_ppt=use_ppt,**kwargs)
                 lci['src']='corot'
                 lcs+=[lci]
-        lc=lcStack(lcs)
+        lc=lc_stack(lcs)
         lc['jd_base']=2451545
         return lc
     else:
@@ -1003,7 +1003,7 @@ def TESS_lc(tic, sectors='all',use_ppt=True, coords=None, use_qlp=None, use_elea
             resp = h.request(fitsloc, 'HEAD')
             if int(resp[0]['status']) < 400:
                 with fits.open(fitsloc,show_progress=False) as hdus:
-                    spoclcs[key]=openFits(hdus,fitsloc,mission='tess',use_ppt=use_ppt,**kwargs)
+                    spoclcs[key]=open_fits(hdus,fitsloc,mission='tess',use_ppt=use_ppt,**kwargs)
                     lchdrs+=[hdus[0].header]
             else:
                 print("LC type",types[ntype],"is not accessible")
@@ -1017,7 +1017,7 @@ def TESS_lc(tic, sectors='all',use_ppt=True, coords=None, use_qlp=None, use_elea
             resp = h.request(fitsloc, 'HEAD')
             if int(resp[0]['status']) < 400:
                 with fits.open(fitsloc,show_progress=False) as hdus:
-                    spoclcs[key]=openFits(hdus,fitsloc,mission='tess')
+                    spoclcs[key]=open_fits(hdus,fitsloc,mission='tess')
                     lchdrs+=[hdus[0].header]
 
         if use_qlp is None or use_qlp is True:
@@ -1029,8 +1029,8 @@ def TESS_lc(tic, sectors='all',use_ppt=True, coords=None, use_qlp=None, use_elea
 
                 f1=h5py.File(qlpfiles[0])
                 f2=h5py.File(qlpfiles[1])
-                qlplcs[key]=lcStack([openFits(f1,sect_to_orbit[key][0],mission='tess',use_ppt=use_ppt,**kwargs),
-                                     openFits(f2,sect_to_orbit[key][1],mission='tess',use_ppt=use_ppt,**kwargs)])
+                qlplcs[key]=lc_stack([open_fits(f1,sect_to_orbit[key][0],mission='tess',use_ppt=use_ppt,**kwargs),
+                                     open_fits(f2,sect_to_orbit[key][1],mission='tess',use_ppt=use_ppt,**kwargs)])
                 lchdrs+=[{'source':'qlp'}]
             else:
                 fitsloc='https://mast.stsci.edu/api/v0.1/Download/file?uri=mast:HLSP/qlp/s'+str(int(key)).zfill(4) + \
@@ -1040,7 +1040,7 @@ def TESS_lc(tic, sectors='all',use_ppt=True, coords=None, use_qlp=None, use_elea
                 resp = h.request(fitsloc, 'HEAD')
                 if int(resp[0]['status']) < 400:
                     with fits.open(fitsloc,show_progress=False) as hdus:
-                        qlplcs[key]=openFits(hdus,fitsloc,mission='tess',use_ppt=use_ppt,**kwargs)
+                        qlplcs[key]=open_fits(hdus,fitsloc,mission='tess',use_ppt=use_ppt,**kwargs)
                         lchdrs+=[hdus[0].header]
         elif use_eleanor is None or use_eleanor is True:
             from eleanor import eleanor
@@ -1061,13 +1061,13 @@ def TESS_lc(tic, sectors='all',use_ppt=True, coords=None, use_qlp=None, use_elea
                 elen_hdr={'ID':star.tic,'GaiaID':star.gaia,'Tmag':star.tess_mag,
                           'RA':star.coords[0],'dec':star.coords[1],'mission':'TESS','campaign':key,'source':'eleanor',
                           'ap_masks':elen_obj.all_apertures,'ap_image':np.nanmedian(elen_obj.tpf[50:80],axis=0)}
-                elenorlcs[key]=openFits(elen_obj,elen_hdr,mission='tess',use_ppt=use_ppt,**kwargs)
+                elenorlcs[key]=open_fits(elen_obj,elen_hdr,mission='tess',use_ppt=use_ppt,**kwargs)
                 lchdrs+=[elen_hdr]
             except Exception as e:
                 print(e, tic,"not observed by TESS in sector",key)
 
     if len(spoclcs)+len(qlplcs)+len(elenorlcs)>0:
-        lc=lcStackDicts({'spoc':spoclcs,'qlp':qlplcs,'elen':elenorlcs},['spoc','qlp','elen'])
+        lc=lc_stackDicts({'spoc':spoclcs,'qlp':qlplcs,'elen':elenorlcs},['spoc','qlp','elen'])
         return lc,lchdrs[0]
         #elif len(lcs)==1:
         #    #print(lcs,lchdrs)
@@ -1075,7 +1075,7 @@ def TESS_lc(tic, sectors='all',use_ppt=True, coords=None, use_qlp=None, use_elea
     else:
         return None,None
 
-def openLightCurve(ID,mission,coor=None,use_ppt=True,other_data=True,
+def open_light_curve(ID,mission,coor=None,use_ppt=True,other_data=True,
                    jd_base=2457000,save=True,**kwargs):
     #from ..stellar import tess_stars2px_mod
     if coor is None:
@@ -1153,7 +1153,7 @@ def openLightCurve(ID,mission,coor=None,use_ppt=True,other_data=True,
                 if 'time' in key:
                     lcs['k2'][key]-=(jd_base-2454833)
     if IDs['kepler'] is not None:
-        lcs['kepler'],hdrs['kepler'] = getKeplerLC(IDs['kepler'],use_ppt=use_ppt)
+        lcs['kepler'],hdrs['kepler'] = get_kepler_lc(IDs['kepler'],use_ppt=use_ppt)
         if lcs['kepler'] is not None:
             lcs['kepler']['time']-=(jd_base-2454833)
     if mission.lower() == 'corot':
@@ -1163,7 +1163,7 @@ def openLightCurve(ID,mission,coor=None,use_ppt=True,other_data=True,
         hdrs['corot'] = None
     #print(IDs,lcs)
     if len(lcs.keys())>=1:
-        lc=lcStack([lcs[lc] for lc in lcs if lcs[lc] is not None])
+        lc=lc_stack([lcs[lc] for lc in lcs if lcs[lc] is not None])
     elif not other_data:
         lc=lcs[mission.lower()]
     else:
@@ -1187,7 +1187,7 @@ def openLightCurve(ID,mission,coor=None,use_ppt=True,other_data=True,
 
     return lc,hdrs[mission.lower()]
 
-def LoadLc(lcid,mission='tess',file_loc=None):
+def load_lc(lcid,mission='tess',file_loc=None):
     # Quick tool to load pickled lightcurve dict.
     # lcid = ID
     # mission = 'tess'. mission string (TESS, K2, Kepler, etc)
@@ -1196,7 +1196,7 @@ def LoadLc(lcid,mission='tess',file_loc=None):
     file_loc=MonoData_savepath+'/'+ID_string if file_loc is not None else file_loc
     return pickle.load(open(MonoData_savepath+'/'+ID_string+'/'+ID_string+'_lc.pickle','rb'))
 
-def cutLc(lctimes,max_len=10000,return_bool=True,transit_mask=None):
+def cut_lc(lctimes,max_len=10000,return_bool=True,transit_mask=None):
     # Naturally cut the lightcurve time into chunks smaller than max_len (e.g. for GP computations)
     assert(np.isnan(lctimes).sum()==0)
     if return_bool:
@@ -1265,14 +1265,14 @@ def weighted_avg_and_std(values, errs, masknans=True, axis=None):
     else:
         return [np.nan, np.nan]
 
-def lcBin(lc,binsize=1/48,split_gap_size=0.8,use_flat=True,use_masked=True, use_raw=False,extramask=None,modify_lc=True):
+def lc_bin(lc,binsize=1/48,split_gap_size=0.8,use_flat=True,use_masked=True, use_raw=False,extramask=None,modify_lc=True):
     #Binning lightcurve to e.g. 30-min cadence for planet search
     # Can optionally use the flatted lightcurve
     binlc={}
 
     #Using flattened lightcurve as well as normal one:
     if use_flat and 'flux_flat' not in lc:
-        lc=lcFlatten(lc)
+        lc=lc_flatten(lc)
     if use_flat:
         flux_dic=['flux_flat','flux']
         binlc['flux_flat']=[]
@@ -1466,7 +1466,7 @@ def create_transit_mask(t,tcens,tdurs,maskdist=1.1):
         in_trans+=abs(t-tcens[n])<0.5*maskdist*tdurs[n]
     return ~in_trans
 
-def dopolyfit(win,mask=None,stepcent=0.0,d=3,ni=10,sigclip=3):
+def do_polyfit(win,mask=None,stepcent=0.0,d=3,ni=10,sigclip=3):
     mask=np.tile(True,len(win)) if mask is None else mask
     maskedwin=win[mask]
 
@@ -1497,7 +1497,7 @@ def dopolyfit(win,mask=None,stepcent=0.0,d=3,ni=10,sigclip=3):
             best_base=new_base[:]
     return best_base
 
-def formwindow(dat,cent,size,boxsize,gapthresh=1.0):
+def form_window(dat,cent,size,boxsize,gapthresh=1.0):
 
     win = (dat[:,0]>cent-size/2.)&(dat[:,0]<cent+size/2.)
     box = (dat[:,0]>cent-boxsize/2.)&(dat[:,0]<cent+boxsize/2.)
@@ -1515,7 +1515,7 @@ def formwindow(dat,cent,size,boxsize,gapthresh=1.0):
         win = win&(~box)
     return win, box
 
-def lcFlatten(lc, winsize = 3.5, stepsize = 0.15, polydegree = 2,
+def lc_flatten(lc, winsize = 3.5, stepsize = 0.15, polydegree = 2,
               niter = 10, sigmaclip = 3., gapthreshold = 1.0,
               use_binned=False, use_mask=True, reflect=True, transit_mask=None, debug=False):
     '''#Flattens any lightcurve while maintaining in-transit depth.
@@ -1588,21 +1588,21 @@ def lcFlatten(lc, winsize = 3.5, stepsize = 0.15, polydegree = 2,
     #now for each step centre we perform the flattening:
     #actual flattening
     for s,stepcent in enumerate(stepcentres):
-        win,box = formwindow(uselc,stepcent,winsize,stepsize,gapthreshold)  #should return window around box not including box
+        win,box = form_window(uselc,stepcent,winsize,stepsize,gapthreshold)  #should return window around box not including box
         newbox=box[uselc[:,4].astype(bool)] # Excluding from our box any points which are actually part of the "reflection"
         #Checking that we have points in the box where the window is not entirely junk/masked
         if np.sum(newbox)>0 and np.sum(win&uselc[:,3].astype(bool))>0:
             #Forming the polynomial fit from the window around the box:
             if debug: print("window size:",np.sum(win),"masked points:",np.sum(uselc[win,3]))
             if debug: print("window lc:",uselc[win,:3])
-            baseline = dopolyfit(uselc[win,:3],mask=uselc[win,3].astype(bool),
+            baseline = do_polyfit(uselc[win,:3],mask=uselc[win,3].astype(bool),
                                  stepcent=stepcent,d=polydegree,ni=niter,sigclip=sigmaclip)
             lc[prefix+'flux_flat'][newbox] = lc[prefix+'flux'][newbox] - np.polyval(baseline,lc[prefix+'time'][newbox]-stepcent)*lc['flux_unit']
             #Here we have
 
     return lc
 
-def RunFromScratch(ID, mission, tcen, tdur, ra=None, dec=None,
+def run_from_scratch(ID, mission, tcen, tdur, ra=None, dec=None,
                    mono_SNRthresh=6.0,
                    other_planet_SNRthresh=6.0, PL_ror_thresh=0.2):
     '''
@@ -1619,8 +1619,8 @@ def RunFromScratch(ID, mission, tcen, tdur, ra=None, dec=None,
                                                              savedf=True)
 
     #Gets Lightcurve
-    lc,hdr=openLightCurve(ID,mission,use_ppt=False)
-    lc=lcFlatten(lc,winsize=9*tdur,stepsize=0.1*tdur)
+    lc,hdr=open_light_curve(ID,mission,use_ppt=False)
+    lc=lc_flatten(lc,winsize=9*tdur,stepsize=0.1*tdur)
 
     #Runs Quick Model fit
     monoparams, interpmodel = search.QuickMonoFit(lc,tc,dur,Rs=Rstar[0],Ms=rhostar[0]*Rstar[0]**3)
@@ -1672,7 +1672,7 @@ def RunFromScratch(ID, mission, tcen, tdur, ra=None, dec=None,
         elif planet_dic_1['01']['flag']=='periodic':
             print(" ")
 
-def GetSavename(ID, mission, how='load', suffix='mcmc.pickle', overwrite=False, savefileloc=None):
+def get_savename(ID, mission, how='load', suffix='mcmc.pickle', overwrite=False, savefileloc=None):
     '''
     # Get unique savename (defaults to MCMC suffic) with format:
     # [savefileloc]/[T/K]IC[11-number ID]_[20YY-MM-DD]_[n]_mcmc.pickle
@@ -1722,10 +1722,10 @@ def GetSavename(ID, mission, how='load', suffix='mcmc.pickle', overwrite=False, 
     return [os.path.join(savefileloc,id_dic[mission]+str(ID).zfill(11)+"_"+date+"_"+str(int(nsim))+"_"+suffix), os.path.join(savefileloc,id_dic[mission]+str(ID).zfill(11)+'_'+suffix)]
 
 
-def LoadPickle(ID, mission,loadname=None,savefileloc=None):
+def load_pickle(ID, mission,loadname=None,savefileloc=None):
     #Pickle file style: folder/TIC[11-number ID]_[20YY-MM-DD]_[n]_mcmc.pickle
     if loadname is None:
-        loadname=GetSavename(ID, mission, how='load', suffix='mcmc.pickle', savefileloc=savefileloc)[0]
+        loadname=get_savename(ID, mission, how='load', suffix='mcmc.pickle', savefileloc=savefileloc)[0]
     if os.path.exists(loadname):
         n_bytes = 2**31
         max_bytes = 2**31 - 1
@@ -1741,9 +1741,9 @@ def LoadPickle(ID, mission,loadname=None,savefileloc=None):
     else:
         return None
 
-def SavePickle(trace,ID,mission,savename=None,overwrite=False,savefileloc=None):
+def save_pickle(trace,ID,mission,savename=None,overwrite=False,savefileloc=None):
     if savename is None:
-        savename=GetSavename(ID, mission, how='save', suffix='mcmc.pickle', overwrite=overwrite, savefileloc=savefileloc)[0]
+        savename=get_savename(ID, mission, how='save', suffix='mcmc.pickle', overwrite=overwrite, savefileloc=savefileloc)[0]
 
     n_bytes = 2**31
     max_bytes = 2**31 - 1
@@ -1754,7 +1754,7 @@ def SavePickle(trace,ID,mission,savename=None,overwrite=False,savefileloc=None):
         for idx in range(0, len(bytes_out), max_bytes):
             f_out.write(bytes_out[idx:idx+max_bytes])
 
-def getLDs(Ts,logg=4.43812,FeH=0.0,mission="TESS"):
+def get_lds(Ts,logg=4.43812,FeH=0.0,mission="TESS"):
     from scipy.interpolate import CloughTocher2DInterpolator as ct2d
 
     if mission[0]=="T" or mission[0]=="t":
@@ -1812,7 +1812,7 @@ def PlotCorner(trace, ID, mission='TESS', varnames=["b", "ecc", "period", "r_pl"
     print("varnames = ",varnames)
 
     if savename is None:
-        savename=GetSavename(ID, mission, how='save', suffix='_corner.png',
+        savename=get_savename(ID, mission, how='save', suffix='_corner.png',
                              overwrite=overwrite, savefileloc=savefileloc)[0]
 
     if tracemask is None:
@@ -1855,12 +1855,12 @@ def vals_to_latex(vals):
     except:
         return " - "
 
-def ToLatexTable(trace, ID, mission='TESS', varnames='all',order='columns',
+def to_latex_table(trace, ID, mission='TESS', varnames='all',order='columns',
                savename=None, overwrite=False, savefileloc=None, tracemask=None):
     #Plotting corner of the parameters to see correlations
     print("MakingLatexTable")
     if savename is None:
-        savename=GetSavename(ID, mission, how='save', suffix='_table.txt',overwrite=False, savefileloc=savefileloc)[0]
+        savename=get_savename(ID, mission, how='save', suffix='_table.txt',overwrite=False, savefileloc=savefileloc)[0]
     if tracemask is None:
         tracemask=np.tile(True,len(trace['Rs']))
     if varnames is None or varnames == 'all':
@@ -2136,7 +2136,7 @@ def err_string_parse(s):
             return True, s[:-1*len(estr)]
     return False, None
 
-def MakeBokehTable(df, dftype='toi', cols2use=None, cols2avoid=None, errtype=' err', width=300, height=350):
+def make_bokeh_table(df, dftype='toi', cols2use=None, cols2avoid=None, errtype=' err', width=300, height=350):
     """Form Bokeh table from an input pandas dataframe
 
     Args:
@@ -2221,7 +2221,7 @@ def MakeBokehTable(df, dftype='toi', cols2use=None, cols2avoid=None, errtype=' e
     data_table = DataTable(source=ColumnDataSource(newdf), columns=columns, width=width, height=height)    
     return data_table
 
-def GapCull(t0,t,dat,std_thresh=10,boolean=None,time_jump_thresh=0.4):
+def gap_cull(t0,t,dat,std_thresh=10,boolean=None,time_jump_thresh=0.4):
     #Removes data before/after gaps and jumps in t & y
     #If there's a big gap or a big jump, we'll remove the far side of that
     if boolean is None:
