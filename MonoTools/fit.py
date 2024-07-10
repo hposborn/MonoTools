@@ -182,7 +182,7 @@ class monoModel():
             for key in pick:
                 setattr(self,key,pick[key])
             del pick
-            setattr(self,'trace',az.InferenceData.from_netcdf(loadfile.replace('_model.pickle','_trace.nc')))
+            setattr(self,'trace',az.InferenceData.from_netcdf(loadfile.replace('_model.pickle','_trace.nc')).stack())
         elif os.path.exists(loadfile):
             #Loading old version using pickle from pickled dictionary
             pick=pickle.load(open(loadfile,'rb'))
@@ -216,7 +216,7 @@ class monoModel():
                 except:
                     print("Still a save error after unstacking")
         excl_types=[az.InferenceData]
-        cloudpickle.dumps({attr:getattr(self,attr) for attr in self.__dict__},open(savefile,'wb'))
+        cloudpickle.dump({attr:getattr(self,attr) for attr in self.__dict__ if type(getattr(self,attr)) not in excl_types},open(savefile,'wb'))
 
         # #Loading from pickled dictionary
         # saving={}
