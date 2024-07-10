@@ -1302,7 +1302,7 @@ class monoModel():
                 kernel = pymc_terms.SHOTerm(sigma=phot_sigma, w0=phot_w0, Q=1/np.sqrt(2))
                 self.gp['train'] = celerite2.pymc.GaussianProcess(kernel+ampl_mult_kernel*periodic_kernel,self.lc.time[mask].astype(floattype),
                                                             diag=self.lc.flux_err[mask].astype(floattype)**2 + \
-                                     pm.math.dot(self.lc.cadence_index[mask,:].astype(floattype),pm.math.exp(logs2)), quiet=True)
+                                        pm.math.dot(self.lc.cadence_index[mask,:].astype(floattype),pm.math.exp(logs2)), quiet=True)
             elif hasattr(self,'rotation_kernel') and self.rotation_kernel is not None:
                 #Building a purely rotational kernel
                 rotation_period=pm.Normal("rotation_period",mu=self.rotation_kernel['period'],sigma=self.rotation_kernel['period_err'])
@@ -1338,7 +1338,8 @@ class monoModel():
             
             #self.gp['train'].log_likelihood(self.lc.flux[mask].astype(floattype) - phot_mean)
             self.gp['train'].compute(self.lc.time[mask].astype(floattype), 
-                                     yerr=np.sqrt(self.lc.flux_err[mask].astype(floattype) ** 2 + pm.math.exp(logs2)**2), quiet=True)
+                                     yerr=np.sqrt(self.lc.flux_err[mask].astype(floattype) ** 2 + pm.math.dot(self.lc.cadence_index[mask,:].astype(floattype),pm.math.exp(logs2))**2), 
+                                     quiet=True)
 
             loglik=self.gp['train'].marginal("loglik",observed=self.lc.flux[mask].astype(floattype))
 
