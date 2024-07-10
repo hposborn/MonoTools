@@ -1092,7 +1092,8 @@ class monoModel():
                     phase=self.make_phase(self.lc.time,t0s,p)
                 else:
                     t0= self.init_soln['t0_'+pl] if hasattr(self,'init_soln') else self.planets[pl]['tcen_2']
-                    phase=self.make_phase(self.lc.time,t0,p)
+                    p=abs(self.init_soln['t0_2_'+pl]-self.init_soln['t0_'+pl]) if hasattr(self,'init_soln') else abs(self.planets[pl]['tcen_2']-self.planets[pl]['tcen'])
+                    phase=(self.lc.time-t0-0.5*p)%p-0.5*p
             elif pl in self.duos:
                 t0= self.init_soln['t0_'+pl] if hasattr(self,'init_soln') else self.planets[pl]['tcen']
                 p=abs(self.init_soln['t0_2_'+pl]-self.init_soln['t0_'+pl]) if hasattr(self,'init_soln') else abs(self.planets[pl]['tcen_2']-self.planets[pl]['tcen'])
