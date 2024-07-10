@@ -1089,10 +1089,10 @@ class monoModel():
                 p=np.max(self.init_soln['per_'+pl]) if hasattr(self,'init_soln') else np.max(self.planets[pl]['period_aliases'])
                 if self.model_t03_ttv:
                     t0s= [self.init_soln['t0_'+pl],self.init_soln['t0_2_'+pl],self.init_soln['t0_3_'+pl]] if hasattr(self,'init_soln') else [self.planets[pl]['tcen'],self.planets[pl]['tcen_2'],self.planets[pl]['tcen_3']]
-                    
+                    phase=self.make_phase(self.lc.time,t0s,p)
                 else:
                     t0= self.init_soln['t0_'+pl] if hasattr(self,'init_soln') else self.planets[pl]['tcen_2']
-                phase=self.make_phase(self.lc.time,t0s,p)
+                    phase=self.make_phase(self.lc.time,t0,p)
             elif pl in self.duos:
                 t0= self.init_soln['t0_'+pl] if hasattr(self,'init_soln') else self.planets[pl]['tcen']
                 p=abs(self.init_soln['t0_2_'+pl]-self.init_soln['t0_'+pl]) if hasattr(self,'init_soln') else abs(self.planets[pl]['tcen_2']-self.planets[pl]['tcen'])
