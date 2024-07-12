@@ -1235,7 +1235,7 @@ class monoModel():
         elif self.use_multinest:
             self.run_multinest(**kwargs)
 
-    def init_GP(self, n_draws=900, max_len_lc=25000, use_binned=False):
+    def init_GP(self, n_draws=900, max_len_lc=25000, use_binned=False, overwrite=False):
         """Function to train GPs on out-of-transit photometry
 
         Args:
@@ -1244,6 +1244,10 @@ class monoModel():
             uselc (bool, optional): Specify lightcurve to use. Defaults to None, which takes the `mod.lc` light curve.
         """
 
+        #Only rerunning the initialis function if overwrite is True:
+        if hasattr(self,'gp') and self.gp!={} and hasattr(self,'gp_init_soln') and not overwrite:
+            return None
+        
         self.gp={}
 
         print("initialising the GP")
