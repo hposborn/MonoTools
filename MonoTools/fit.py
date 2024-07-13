@@ -4259,7 +4259,7 @@ class monoModel():
                 vars=['t0_'+pl]
                 if pl in self.trios:
                     vars+=['t0_3_'+pl]
-                elif pl in self.duos:
+                if pl in self.trios+self.duos:
                     vars+=['t0_2_'+pl]
                 elif pl in self.multis or pl in self.rvplanets:
                     vars+=['per_'+pl]
