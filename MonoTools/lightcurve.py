@@ -1206,6 +1206,7 @@ class multilc(lc):
             #QLP orbit files stored in folder:
             orbits=[7+sector*2,8+sector*2]
             qlpfiles=['/'.join(self.savefileloc.split('/')[:-1])+"/orbit-"+str(int(orbits[n]))+"_qlplc.h5" for n in range(2)]
+            print(qlpfiles)
             import h5py
             if os.path.isfile(qlpfiles[0]) and os.path.isfile(qlpfiles[1]):
                 f1=h5py.File(qlpfiles[0])
@@ -1591,14 +1592,31 @@ class multilc(lc):
                     return None
             elif f[0][0].header['TELESCOP'].lower()=='tess':
                 if 'ORIGIN' in f[0][0].header and f[0][0].header['ORIGIN']=='MIT/QLP':
-                    print([type(fi[1].columns) for fi in f])
                     fs='elec' if int(sect)<56 else 'norm1'
+                    fluxnames={'raw_flux':['SAP_FLUX'],
+                               'flux':['SYS_RM_FLUX','DET_FLUX','KSPSAP_FLUX'],
+                               'xl_ap_flux':['DET_FLUX_LAG','KSPSAP_FLUX_LAG','SAP_FLUX_LAG'],
+                               'xs_ap_flux':['DET_FLUX_SML','KSPSAP_FLUX_SML','SAP_FLUX_SML']}
+                    ifluxes={}
+                    for ifname in fluxnames:
+                        ifluxes[ifname]=[]
+                        found=np.tile(False,len(f))
+                        for ifi,fi in enumerate(f):
+                            found[ifi]=False;icname=0
+                            while not found[ifi] and icname<len(fluxnames[ifname]):
+                                if fluxnames[ifname][icname] in fi[1].data.columns.names:
+                                    ifluxes[ifname]+=[fi[1].data[fluxnames[ifname][icname]]]
+                                    found[ifi]=True
+                                icname+=1
+                        if np.all(found):
+                            #Only stacking together if we have all
+                            ifluxes[ifname]=np.hstack(ifluxes[ifname])
+                        else:
+                            assert ifname is not 'flux', "QLP flux extraction failed - must at least have a flux measurement..."
                     ilc.load_lc(np.hstack([fi[1].data['TIME'] for fi in f]), 
-                                fluxes={'flux':np.hstack([fi[1].data['SAP_FLUX'] for fi in f]),
-                                        'xl_ap_flux':np.hstack([fi[1].data['KSPSAP_FLUX_LAG'] for fi in f]),
-                                        'xs_ap_flux':np.hstack([fi[1].data['KSPSAP_FLUX_SML'] for fi in f])},
-                                flux_errs={'flux_err':np.hstack([fi[1].data['KSPSAP_FLUX_ERR'] for fi in f])},
-                                src='qlp',mission='tess', jd_base=2457000, flx_system='elec', sect=sect, 
+                                fluxes=ifluxes,
+                                flux_errs={'flux_err':np.hstack([fi[1].data['KSPSAP_FLUX_ERR'] if 'KSPSAP_FLUX_ERR' in fi[1].data.columns.names else fi[1].data['DET_FLUX_ERR'] for fi in f])},
+                                src='qlp',mission='tess', jd_base=2457000, flx_system=fs, sect=sect, 
                                 cent1=np.hstack([fi[1].data['SAP_X'] for fi in f]), cent2=np.hstack([fi[1].data['SAP_Y'] for fi in f]))
                     return ilc
 
