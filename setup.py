@@ -41,7 +41,7 @@ setuptools.setup(
     install_requires=['matplotlib',
                       'numpy',
                       'pandas',
-                      'scipy',
+                      'scipy<1.13',
                       'astropy',
                       'astroquery',
                       'batman-package',
@@ -64,7 +64,9 @@ setuptools.setup(
                       'sphinx==4.3.1',
                       'nbsphinx',
                       'myst_parser',
-                      'sphinx_rtd_theme'
+                      'sphinx_rtd_theme',
+                      'netcdf4',
+                      'openpyxl'
                       ],
     classifiers=[
         'Development Status :: 1 - Planning',
