@@ -1612,7 +1612,7 @@ class multilc(lc):
                             #Only stacking together if we have all
                             ifluxes[ifname]=np.hstack(ifluxes[ifname])
                         else:
-                            assert ifname is not 'flux', "QLP flux extraction failed - must at least have a flux measurement..."
+                            assert ifname != 'flux', "QLP flux extraction failed - must at least have a flux measurement..."
                     ilc.load_lc(np.hstack([fi[1].data['TIME'] for fi in f]), 
                                 fluxes=ifluxes,
                                 flux_errs={'flux_err':np.hstack([fi[1].data['KSPSAP_FLUX_ERR'] if 'KSPSAP_FLUX_ERR' in fi[1].data.columns.names else fi[1].data['DET_FLUX_ERR'] for fi in f])},
