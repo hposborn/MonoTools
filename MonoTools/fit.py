@@ -2831,10 +2831,10 @@ class monoModel():
                 #assert self.bin_oot
                 stacktime=np.hstack((self.lc.time[0]-1,self.model_time,self.lc.time[-1]+1))
                 preds=[]
-                ext_lightcurves=az.extract(self.trace.posterior,var_names=['gp_pred'])
+                gp_posteriors=az.extract(self.trace.posterior,var_names=['gp_pred'])
 
                 for i in np.random.choice(len(self.trace.posterior['phot_mean']),int(np.clip(10*n_samp,1,len(self.trace.posterior['phot_mean']))),replace=False):
-                    smooth_func=interpolate.interp1d(stacktime, np.hstack((0,ext_lightcurves['gp_pred'][:,i],0)), kind='slinear')
+                    smooth_func=interpolate.interp1d(stacktime, np.hstack((0,gp_posteriors[:,i],0)), kind='slinear')
                     preds+=[smooth_func(self.lc.time)+self.trace.posterior['phot_mean'].values[i]]
                 prcnts=np.nanpercentile(np.column_stack(preds),[15.8655254, 50., 84.1344746],axis=1)
                 self.gp_to_plot['gp_pred']=prcnts[1]
