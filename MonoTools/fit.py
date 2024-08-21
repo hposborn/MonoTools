@@ -922,16 +922,16 @@ class monoModel():
             if Mstar is None:
                 self.Mstar=rhostar[0]*self.Rstar[0]**3
         
-        if self.rhostar[0] is not None and (self.rhostar[1] is None or self.rhostar[1]==np.nan):
+        if self.rhostar[0] is not None and (self.rhostar[1] is None or np.isnan(self.rhostar[1])):
             self.rhostar[1]=0.5*self.rhostar[0]
             self.rhostar[2]=0.5*self.rhostar[0]
-        if self.logg[0] is not None and (self.logg[1] is None or self.logg[1]==np.nan):
+        if self.logg[0] is not None and (self.logg[1] is None or np.isnan(self.logg[1])):
             self.logg[1]=0.25
             self.logg[2]=0.25
-        if self.Rstar[0] is not None and (self.Rstar[1] is None or self.Rstar[1]==np.nan):
+        if self.Rstar[0] is not None and (self.Rstar[1] is None or np.isnan(self.Rstar[1])):
             self.Rstar[1]=0.15*self.Rstar[0]
             self.Rstar[2]=0.15*self.Rstar[0]
-        if self.Teff[0] is not None and (self.Teff[1] is None or self.Teff[1]==np.nan):
+        if self.Teff[0] is not None and (self.Teff[1] is None or np.isnan(self.Teff[1])):
             self.Teff[1]=300
             self.Teff[2]=300
 
