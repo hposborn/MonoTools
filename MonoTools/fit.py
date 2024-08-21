@@ -932,8 +932,8 @@ class monoModel():
             self.Rstar[1]=0.15*self.Rstar[0]
             self.Rstar[2]=0.15*self.Rstar[0]
         if self.Teff[0] is not None and (self.Teff[1] is None or self.Teff[0]==np.nan):
-            self.Rstar[1]=300
-            self.Rstar[2]=300
+            self.Teff[1]=300
+            self.Teff[2]=300
 
     def get_savename(self, how='load',overwrite=None):
         """Adds unique savename prefixes to class (self.savenames) with two formats:
