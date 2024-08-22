@@ -4270,13 +4270,11 @@ class monoModel():
         setattr(self.lc,'phase',{})
         for n,pl in enumerate(self.planets):
             if hasattr(self,'trace'):
-                vars=['t0_'+pl]
+                vars=['t0_'+pl,'per_'+pl]
                 if pl in self.trios:
                     vars+=['t0_3_'+pl]
                 if pl in self.trios+self.duos:
                     vars+=['t0_2_'+pl]
-                elif pl in self.multis or pl in self.rvplanets:
-                    vars+=['per_'+pl]
                 if 'tdur_'+pl in self.init_soln:
                     vars+=['tdur_'+pl]
                 elif 'tdur_'+pl+'[0]' in self.init_soln:
