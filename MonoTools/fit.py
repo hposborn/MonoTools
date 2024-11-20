@@ -822,7 +822,7 @@ class monoModel():
         else:
             assert pl_dic['period']==abs(pl_dic['tcen']-pl_dic['tcen_2'])
         if 'period_err' not in pl_dic or not np.isfinite(pl_dic['period_err']):
-            pl_dic['period_err'] = 0.1666*pl_dic['tdur']
+            pl_dic['period_err'] = np.clip(0.1666*pl_dic['tdur'],0.03,0.5)
         tcens=np.array([pl_dic['tcen'],pl_dic['tcen_2']])
         pl_dic['tcen']=np.max(tcens)
         pl_dic['tcen_2']=np.min(tcens)
@@ -2184,7 +2184,7 @@ class monoModel():
                 ################################################
                 #Force model to match expected/input depth_duration with sigmoid (not used in default)
                 if self.force_match_input is not None:
-                    match_input_potentials[pl]=pm.math.sum(pm.math.exp( -(tdurs[pl]**2 + self.planets[pl]['tdur']**2) / (2*(self.force_match_input*self.planets[multi]['tdur'])**2) )) + \
+                    match_input_potentials[pl]=pm.math.sum(pm.math.exp( -(tdurs[pl]**2 + self.planets[pl]['tdur']**2) / (2*(self.force_match_input*self.planets[pl]['tdur'])**2) )) + \
                                      pm.math.sum(pm.math.exp( -(logrors[pl]**2 + self.planets[pl]['log_ror']**2) / (2*(self.force_match_input*self.planets[pl]['log_ror'])**2) ))
                     pm.Potential("all_match_input_potentials",
                                  pm.math.sum([match_input_potentials[i] for i in match_input_potentials]))
