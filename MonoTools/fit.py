@@ -101,6 +101,7 @@ class monoModel():
                        'mask_distance': 0.666,       #Distance, in transit durations, from set transits, to "mask" as in-transit data when e.g. flattening.
                        'force_match_input':None,# force_match_input - Float/None add potential with this the sigma between the input and the output logror and logdur to force MCMC to match the input duration & maximise logror [e.g. 0.1 = match to 1-sigma=10%]
                        'debug':False,           # debug - bool - print debug statements?
+                       'maxdep':0.04,           #Max depth to be fitted. Also results in max rp/rs (default 0.2)
                        'fit_params':['logror','b','tdur', 't0'], # fit_params - list of strings - fit these parameters. Options: ['logror', 'b' or 'tdur', 'ecc', 'omega']
                        'marginal_params':['per','ecc','omega'], # marginal_params - list of strings - marginalise over these parameters. Options: ['per', 'b' ´or 'tdur', 'ecc', 'omega','logror']
                        'interpolate_v_prior':True, # Whether to use interpolation to produce transit velocity prior
@@ -281,7 +282,7 @@ class monoModel():
             if 'ror' in pl_dic:
                 pl_dic['log_ror']=np.log(pl_dic['ror'])
             elif 'depth' in pl_dic:
-                assert pl_dic['depth']<0.25 #Depth must be a ratio (not in mmags)
+                assert pl_dic['depth']<self.maxdep #Depth must be a ratio (not in mmags)
                 pl_dic['ror']=pl_dic['depth']**0.5
                 pl_dic['log_ror']=np.log(pl_dic['ror'])
         if 'ror' not in pl_dic:
@@ -1576,12 +1577,12 @@ class monoModel():
                     logrors[pl]=pm.TruncatedNormal("logror_"+pl,
                                                     mu=np.tile(np.log(self.planets[pl]['ror']),self.n_margs[pl]),
                                                     sigma=np.tile(1.0,self.n_margs[pl]),
-                                                    lower=np.log(0.001), upper=np.log(0.25+int(self.use_L2)),
+                                                    lower=np.log(0.001), upper=np.log(self.maxdep**0.5+int(self.use_L2)),
                                                     initval=np.tile(np.log(self.planets[pl]['ror']),self.n_margs[pl]),
                                                     shape=self.n_margs[pl])
                 else:
                     logrors[pl]=pm.TruncatedNormal("logror_"+pl,mu=np.log(self.planets[pl]['ror']), sigma=0.75, 
-                                                    lower=np.log(0.001), upper=np.log(0.25+int(self.use_L2)),
+                                                    lower=np.log(0.001), upper=np.log(self.maxdep**0.5+int(self.use_L2)),
                                                     initval=np.log(self.planets[pl]['ror']))
                 rors[pl]=pm.Deterministic("ror_"+pl,pm.math.exp(logrors[pl]))
                 rpls[pl]=pm.Deterministic("rpl_"+pl,109.2*rors[pl]*Rs)
