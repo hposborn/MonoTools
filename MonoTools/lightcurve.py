@@ -542,7 +542,7 @@ class lc():
             self.sort_timeseries()
 
         if np.any(['_flat' in its and its not in self.timeseries for its in timeseries]):
-            print("Flattening "+its+" to bin")
+            #print("Flattening "+its+" to bin")
             self.flatten(timeseries=list(np.unique([t.replace('_flat','') for t in timeseries])))
             
         #setattr(self, 'bin_cadence',binlc['flux'][:,0])
