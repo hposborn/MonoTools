@@ -414,12 +414,16 @@ class lc():
                 self.timeseries+=[its+'_flat']
 
         elif flattype=='polystep':
+            splines={}
+            flats={}
             for its in timeseries:
                 timearr=self.bin_time[:] if 'bin_' in its else self.time[:]
-
-                if its+'_flat' not in self.timeseries:
-                    setattr(self,its+'_flat',np.zeros(len(getattr(self,its))))
-
+                splines[its]=np.zeros(len(getattr(self,its)))
+                flats[its]=np.zeros(len(getattr(self,its)))
+                #if its+'_flat' not in self.timeseries:
+                #    setattr(self,its+'_spline',np.zeros(len(getattr(self,its))))
+                #    setattr(self,its+'_flat',np.zeros(len(getattr(self,its))))
+                    
                 if hasattr(self,its+'err'):
                     uselc=np.column_stack((timearr,getattr(self,its)[:],getattr(self,its+'_err')[:]))
                 else:
@@ -469,15 +473,19 @@ class lc():
                 #now for each step centre we perform the flattening:
                 #actual flattening
                 for stepcent in stepcentres:
-                    win,box = tools.formwindow(uselc,stepcent, knot_dist, stepsize,0.8*knot_dist)  #should return window around box not including box
+                    win,box = tools.form_window(uselc,stepcent, knot_dist, stepsize,0.8*knot_dist)  #should return window around box not including box
                     newbox=box[uselc[:,4].astype(bool)] # Excluding from our box any points which are actually part of the "reflection"
                     #Checking that we have points in the box where the window is not entirely junk/masked
                     if np.sum(newbox)>0 and np.sum(win&uselc[:,3].astype(bool))>0:
                         #Forming the polynomial fit from the window around the box:
-                        baseline = tools.dopolyfit(uselc[win,:3],mask=uselc[win,3].astype(bool),
+                        baseline = tools.do_polyfit(uselc[win,:3],mask=uselc[win,3].astype(bool),
                                             stepcent=stepcent,d=polydegree,ni=maxiter,sigclip=sigmaclip)
-                        getattr(self, its+'_flat')[newbox] = getattr(self,its)[newbox] - np.polyval(baseline,timearr[newbox]-stepcent)
-            self.timeseries+=[its+'_flat']
+                        splines[its][newbox] = np.polyval(baseline,timearr[newbox]-stepcent)
+                        flats[its][newbox] = getattr(self,its)[newbox] - splines[its][newbox]
+                        print(stepcent,baseline,np.ptp(splines[its][newbox]))
+            setattr(self,its+'_spline',splines[its])
+            setattr(self,its+'_flat',flats[its])
+            self.timeseries+=[its+'_flat',its+'_spline']
     
     def OOTbin(self,near_transit_mask,use_flat=False,binsize=1/48):
         """Out-Of-Transit binning of the lightcurve (to speed up computation)
@@ -534,6 +542,7 @@ class lc():
             self.sort_timeseries()
 
         if np.any(['_flat' in its and its not in self.timeseries for its in timeseries]):
+            print("Flattening "+its+" to bin")
             self.flatten(timeseries=list(np.unique([t.replace('_flat','') for t in timeseries])))
             
         #setattr(self, 'bin_cadence',binlc['flux'][:,0])
@@ -648,6 +657,7 @@ class lc():
         import seaborn as sns
         sns.set_palette('viridis')
         if 'flux_flat' in timeseries and not hasattr(self,'flux_flat'):
+            print("Flattening", hasattr(self,'flux_flat'))
             self.flatten()
 
         if plot_ephem is not None:

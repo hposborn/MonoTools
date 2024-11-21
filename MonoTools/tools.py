@@ -1426,12 +1426,11 @@ def bin_light_curve(time, flux, flux_err= None,
     else:
         avbinsize=np.nanmedian(np.diff(new_time_bins))
         #Making bin divisions half way between each defined x point here
-        bins=np.hstack((np.nanmin(time),0.5*(new_time_bins[:-1]+new_time_bins[1:]),np.nanmax(time)+np.arange(3)*bin_time))
+        bins=np.hstack((new_time_bins[0]-0.5*avbinsize,0.5*(new_time_bins[:-1]+new_time_bins[1:]),new_time_bins[-1]+0.5*avbinsize))
 
     # Digitize the time array into the created bins
     bin_indices = np.digitize(time, bins) - 1
-    print(bin_indices)
-
+    
     # Find non-empty bins
     points_per_bin = np.bincount(bin_indices)
     non_empty_bins = np.where(points_per_bin > 0)

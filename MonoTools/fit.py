@@ -4065,10 +4065,10 @@ class monoModel():
                     bin_flux=self.lc.bin_flux_flat[self.lc_regions[key]['bin_ix']]
                 elif plot_flat and self.use_GP:
                     flux=self.lc.flux[self.lc_regions[key]['ix']]-self.gp_to_plot['gp_pred'][self.lc_regions[key]['ix']]
-                    bin_flux=tools.bin_lc_given_new_x(np.column_stack((self.lc.time[self.lc_regions[key]['ix']],
+                    bin_flux=tools.old_bin_lc_given_new_x(np.column_stack((self.lc.time[self.lc_regions[key]['ix']],
                                                       (self.lc.flux-self.gp_to_plot['gp_pred'])[self.lc_regions[key]['ix']],
-                                                      self.lc.flux_err[self.lc_regions[key]['ix']])),
-                                                     self.lc.bin_time[self.lc_regions[key]['bin_ix']])[:,1]
+                                                       self.lc.flux_err[self.lc_regions[key]['ix']])),
+                                                       self.lc.bin_time[self.lc_regions[key]['bin_ix']])[:,1]
                 else:
                     flux=self.lc.flux[self.lc_regions[key]['ix']]
                     bin_flux=self.lc.bin_flux[self.lc_regions[key]['bin_ix']]

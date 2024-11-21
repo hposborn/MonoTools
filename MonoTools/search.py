@@ -44,9 +44,6 @@ if os.environ.get('MONOTOOLSPATH') is None:
 else:
     MonoData_savepath = os.environ.get('MONOTOOLSPATH')
 
-if not os.path.isdir(MonoData_savepath):
-    os.mkdir(MonoData_savepath)
-
 #os.environ["CXXFLAGS"]="-fbracket-depth=512" if not "CXXFLAGS" in os.environ else "-fbracket-depth=512,"+os.environ["CXXFLAGS"]
 os.environ["CFLAGS"] = "-fbracket-depth=512" if not "CFLAGS" in os.environ else "-fbracket-depth=512,"+os.environ["CFLAGS"]
 
@@ -69,6 +66,7 @@ for key in theano_pars:
 
 import pymc as pm
 import pymc_ext as pmx
+import arviz as az
 
 from . import tools
 from . import fit
@@ -78,7 +76,7 @@ from . import starpars
 class target():
     """The core target class which represents an individual star
     """
-    def __init__(self, id, mission, radec=None, lc=None, dataloc=None):
+    def __init__(self, id, mission, radec=None, lc=None, save=True, dataloc=None):
         """Initialising `target` class.
 
         Args:
@@ -105,7 +103,10 @@ class target():
             self.dataloc = os.path.join(MonoData_savepath,tools.id_dic[self.mission]+str(int(self.id)).zfill(11))
         else:
             self.dataloc = dataloc
-        if not os.path.isdir(self.dataloc):
+        if save and not os.path.isdir(MonoData_savepath):
+            os.mkdir(MonoData_savepath)
+
+        if save and not os.path.isdir(self.dataloc):
             os.mkdir(self.dataloc)
 
     def init_starpars(self,Rstar=None,Teff=None,logg=None,FeH=0.0,rhostar=None,Mstar=None):
@@ -494,7 +495,7 @@ class target():
             self.detns[name].update({col:otherinfo[col] for col in otherinfo.index if col not in self.detns[name]})
         self.monos+=[name]
 
-        self.quick_mono_fit(name, ndurs=4.5, **kwargs)
+        self.quick_mono_fit(name, **kwargs)
     
     def init_multi(self,tcen,tdur,depth,period,name=None,otherinfo=None,**kwargs):
         """Initalise multi-transiting candidate
@@ -627,7 +628,7 @@ class target():
         isl_lens=[islands[j][1]-islands[j][0] for j in range(len(islands))]
         from iteround import saferound
         plot_ix = np.hstack((0,np.cumsum(saferound(24*np.array(isl_lens)/np.sum(isl_lens), places=0)))).astype(int)
-        print(plot_ix,24,isl_lens)
+        #print(plot_ix,24,isl_lens)
         ix=(np.isfinite(self.mono_search_timeseries['sum_DeltaBICs']))&(self.mono_search_timeseries['sin_DeltaBIC']<1e8)&(self.mono_search_timeseries['poly_DeltaBIC']<1e8)
         min_bic=np.nanmin(self.mono_search_timeseries.loc[ix,'poly_DeltaBIC'])
         maxylim=np.nanmax([np.nanpercentile(self.mono_search_timeseries.loc[ix,'poly_DeltaBIC'],98),
@@ -811,7 +812,7 @@ class target():
         samp_durs = np.random.normal(self.Rstar['val'],self.Rstar['av_err'],len(samp_pers)) * np.sqrt((1+0.025)**2 - np.random.random(len(samp_pers))**2) * ((3*samp_pers*86400)/(np.pi**2*6.67e-11*1409.78*np.random.normal(self.Mstar['val'],self.Mstar['av_err'],len(samp_pers))))**(1/3)/86400
         model = BoxLeastSquares(modx, mody, dy=modyerr)
 
-        print(np.percentile(samp_durs,np.linspace(2,98,n_durs)),np.percentile(samp_durs,np.arange(8,98,n_durs)))
+        #print(np.percentile(samp_durs,np.linspace(2,98,n_durs)),np.percentile(samp_durs,np.arange(8,98,n_durs)))
         periodogram = model.power(samp_pers, duration=np.percentile(samp_durs,np.linspace(8,98,n_durs)), oversample=1/dur_shift)
 
         detn = np.argmax(periodogram['power'])
@@ -880,7 +881,7 @@ class target():
                 model = transitleastsquares(masked_t, masked_y, masked_yerr)
                 iresults+=[model.power(period_min=np.min(reg_durs)/3,period_max=max_period,duration_grid_step=1.0625,Rstar=self.Rstar['val'],Mstar=self.Mstar['val'],
                                         use_threads=1,show_progress_bar=False, n_transits_min=3)]
-                print(np.min(iresults[-1].periods),np.max(iresults[-1].periods))
+                #print(np.min(iresults[-1].periods),np.max(iresults[-1].periods))
                 all_periods=np.hstack((base_arr[:,0],iresults[-1].periods))
                 all_powers =np.hstack((mixed_spec,iresults[-1].power))
             else:
@@ -953,7 +954,7 @@ class target():
             anommask=self.lc.mask[:]
         else:
             time=self.lc.bin_time[:]
-            print(fluxname, hasattr(self.lc,fluxname))
+            #print(fluxname, hasattr(self.lc,fluxname))
             anommask=np.isfinite(getattr(self.lc,fluxname))
         plmask=np.tile(False,len(anommask))
         SNR_last_planet=100;init_n_pl=len(self.detns);n_pl=len(self.detns);self.multi_results=[]
@@ -971,7 +972,7 @@ class target():
                 mody[plmask[anommask]] = mody[~plmask[anommask]][np.random.choice(np.sum(~plmask[anommask]),np.sum(plmask[anommask]))]
                 #print("in-transit points:",np.sum(plmask),", median of all points:",np.nanmedian(mody),", median of randomly selected points",
                 #      np.nanmedian(rand_oot_data),", median of in-transit points",np.nanmedian(mody[plmask&anommask]))
-            print(np.isnan(mody).sum(),mody)
+            #print(np.isnan(mody).sum(),mody)
             if use_tls:
                 ires=self.run_broken_TLS(modx,mody,modyerr,p_max,min_period=1.1)
             else:
@@ -981,7 +982,7 @@ class target():
             #anommask *= tools.cut_anom_diff(mody)
             #print(n_pl,"norm_mask:",np.sum(self.lc.mask),"anoms:",np.sum(anommask),"pl mask",np.sum(plmask),"total len",len(anommask))
             #print(results[-1])
-            print(self.multi_results[-1])
+            #print(self.multi_results[-1])
             if 'snr' in self.multi_results[-1] and not np.isnan(self.multi_results[-1]['snr']) and 'transit_times' in self.multi_results[-1]:
                 if 'snr_per_transit' in self.multi_results[-1]:
                     #Defining transit times as those times where the SNR in transit is consistent with expectation (>-3sigma)
@@ -994,7 +995,7 @@ class target():
                     trans=self.multi_results[-1]['transit_times'][self.multi_results[-1]['llk_per_transit']>(self.multi_results[-1]['pts_per_transit']*per_pt_llk*0.5)]
             else:
                 trans=[]
-            print(len(time),len(anommask),len(plmask))
+            #print(len(time),len(anommask),len(plmask))
             phase_nr_trans=(time[anommask&(~plmask)]-self.multi_results[-1]['T0']-0.5*self.multi_results[-1]['period'])%self.multi_results[-1]['period']-0.5*self.multi_results[-1]['period']
             if 'snr' in self.multi_results[-1] and np.sum(abs(phase_nr_trans)<0.5*np.clip(self.multi_results[-1]['duration'],0.2,2))>3:
                 if self.multi_results[-1]['duration']<0.15 or self.multi_results[-1]['duration']>2:
@@ -1079,7 +1080,7 @@ class target():
             axes['timeseries_'+str(ni)].plot(self.lc.time[timeix],self.lc.flux_flat[timeix],'.k',alpha=0.28,markersize=0.75, rasterized=rast)
             axes['timeseries_'+str(ni)].plot(self.lc.bin_time[bin_timeix],self.lc.bin_flux_flat[bin_timeix],'.',alpha=0.8, rasterized=rast)
             axes['timeseries_'+str(ni)].set_xlim(isle[0]-0.3,isle[1]+0.3)
-            print(1.5*np.nanpercentile(self.lc.flux_flat[self.lc.mask],[0.25,99.75]))
+            #print(1.5*np.nanpercentile(self.lc.flux_flat[self.lc.mask],[0.25,99.75]))
             axes['timeseries_'+str(ni)].set_ylim(1.5*np.nanpercentile(self.lc.flux_flat[self.lc.mask],[0.1,99.9]))
             #axes['timeseries_'+str(ni)].set_ylim(-3.5*np.nanstd(self.lc.flux_flat[self.lc.mask])-max_all_depths, 3.5*np.nanstd(self.lc.flux_flat[self.lc.mask]))
 
@@ -1231,22 +1232,22 @@ class target():
             oot_flux=np.nanmedian((y-np.polyval(init_poly,x-self.detns[planet]['tcen']))[abs(phase[nearby&mask])>0.65*dur])
             int_flux=np.nanmedian((y-np.polyval(init_poly,x-self.detns[planet]['tcen']))[abs(phase[nearby&mask])<0.35*dur])
         dep=abs(oot_flux-int_flux)
-        print(dep,dur,init_poly)
-        print(x[abs(phase[nearby&mask])>0.55*dur],y[abs(phase[nearby&mask])>0.55*dur])
+        #print(dep,dur,init_poly)
+        #print(x[abs(phase[nearby&mask])>0.55*dur],y[abs(phase[nearby&mask])>0.55*dur])
         
         with pm.Model() as model:
             # Parameters for the stellar properties
             if fit_poly:
-                trend = pm.Normal("trend", mu=0, sd=np.exp(np.arange(1-polyorder,1,1.0)), shape=polyorder, testval=init_poly)
+                trend = pm.Normal("trend", mu=0, sigma=np.exp(np.arange(1-polyorder,1,1.0)), shape=polyorder, initval=init_poly)
                 flux_trend = pm.Deterministic("flux_trend", pm.math.dot(np.vander(x-self.detns[planet]['tcen'], polyorder), trend))
                 #trend = pm.Uniform("trend", upper=np.tile(1,polyorder+1), shape=polyorder+1,
-                #                  lower=np.tile(-1,polyorder+1), testval=init_poly)
-                #trend = pm.Normal("trend", mu=np.zeros(polyorder+1), sd=5*(10.0 ** -np.arange(polyorder+1)[::-1]), 
-                #                  shape=polyorder+1, testval=np.zeros(polyorder+1))
+                #                  lower=np.tile(-1,polyorder+1), initval=init_poly)
+                #trend = pm.Normal("trend", mu=np.zeros(polyorder+1), sigma=5*(10.0 ** -np.arange(polyorder+1)[::-1]), 
+                #                  shape=polyorder+1, initval=np.zeros(polyorder+1))
                 #trend = pm.Uniform("trend", upper=np.tile(10,polyorder+1),lower=np.tile(-10,polyorder+1),
-                #                   shape=polyorder+1, testval=np.zeros(polyorder+1))
+                #                   shape=polyorder+1, initval=np.zeros(polyorder+1))
             else:
-                mean = pm.Normal("mean", mu=0.0, sd=3*np.nanstd(y))
+                mean = pm.Normal("mean", mu=0.0, sigma=3*np.nanstd(y))
                 flux_trend = mean
 
             u_star = tools.get_lds(self.Teff['val'])[0]
@@ -1256,38 +1257,38 @@ class target():
             #init_per = abs(18226*rhostar*((2*np.sqrt((1+dep**0.5)**2-0.41**2))/dur)**-3) if ('period' not in self.detns[planet] or not np.isfinite(self.detns[planet]['period'])) else self.detns[planet]['period']
             #print(rhostar,init_per,(2*np.sqrt((1+dep**0.5)**2-0.41**2)))
             #log_per = pm.Uniform("log_per", lower=np.log(dur*5),upper=np.log(1000),
-            #                    testval=np.clip(np.log(init_per),np.log(dur*6),np.log(1000))
+            #                    initval=np.clip(np.log(init_per),np.log(dur*6),np.log(1000))
             #                    )
             #per = pm.Deterministic("per",pm.math.exp(log_per))
 
 
             # Orbital parameters for the planets
-            log_ror = pm.Uniform("log_ror",lower=-6,upper=-0.5,testval=np.clip(0.5*np.log(dep),-6,-0.5))
+            log_ror = pm.Uniform("log_ror",lower=-6,upper=-0.5,initval=np.clip(0.5*np.log(dep),-6,-0.5))
             ror = pm.Deterministic("ror", pm.math.exp(log_ror))
-            b = xo.distributions.ImpactParameter("b", ror=ror, testval=0.41)
+            b = xo.distributions.ImpactParameter("b", ror=ror, initval=0.41)
 
-            tcen = pm.Bound(pm.Normal, lower=self.detns[planet]['tcen']-0.7*dur, upper=self.detns[planet]['tcen']+0.7*dur)("tcen", mu=self.detns[planet]['tcen'], sd=0.25*dur, testval=np.random.normal(self.detns[planet]['tcen'],0.1*dur))
+            tcen = pm.TruncatedNormal("tcen", mu=self.detns[planet]['tcen'], sigma=0.25*dur, initval=np.random.normal(self.detns[planet]['tcen'],0.1*dur),lower=self.detns[planet]['tcen']-0.7*dur, upper=self.detns[planet]['tcen']+0.7*dur)
             if self.detns[planet]['orbit_flag']=='duo':
-                tcen2 = pm.Bound(pm.Normal, lower=-0.7*dur, upper=0.7*dur)("tcen2", mu=self.detns[planet]['tcen_2'], sd=0.25*dur, testval=np.random.normal(self.detns[planet]['tcen_2'],0.1*dur))
+                tcen2 = pm.TruncatedNormal("tcen2", mu=self.detns[planet]['tcen_2'], sigma=0.25*dur, initval=np.random.normal(self.detns[planet]['tcen_2'],0.1*dur), lower=-0.7*dur, upper=0.7*dur)
             elif self.detns[planet]['orbit_flag']=='multi':
-                period = pm.Bound(pm.Normal, lower=(-0.7*dur)/n_trans, upper=(0.7*dur)/n_trans)("period", mu=init_p, sd=0.25*dur/n_trans, testval=init_p)
+                period = pm.TruncatedNormal("period", mu=init_p, sigma=0.25*dur/n_trans, initval=init_p, lower=(-0.7*dur)/n_trans, upper=(0.7*dur)/n_trans)
             if not self.detns[planet]['orbit_flag']=='multi':
                 if tdur_prior=='loguniform':
                     log_tdur = pm.Uniform("log_tdur", lower=np.log(5*cad), upper=np.log(2))
                     tdur = pm.Deterministic("tdur",pm.math.exp(log_tdur))
                 elif tdur_prior=='lognormal':
-                    log_tdur = pm.Bound(pm.Normal, lower=np.log(5*cad), upper=np.log(2))("log_tdur", mu=np.log(dur), sd=0.33, testval=np.log(dur))
+                    log_tdur = pm.TruncatedNormal("log_tdur", mu=np.log(dur), sigma=0.33, initval=np.log(dur), lower=np.log(5*cad), upper=np.log(2))
                     tdur = pm.Deterministic("tdur",pm.math.exp(log_tdur))
                 elif tdur_prior=='uniform':
-                    tdur = pm.Uniform("tdur", lower=5*cad, upper=2, testval=dur)
+                    tdur = pm.Uniform("tdur", lower=5*cad, upper=2, initval=dur)
                 elif tdur_prior=='normal':
-                    tdur = pm.Bound(pm.Normal, lower=5*cad, upper=2)("tdur", mu=dur, sd=0.33*dur, testval=dur)                
+                    tdur = pm.TruncatedNormal("tdur", mu=dur, sigma=0.33*dur, initval=dur, lower=5*cad, upper=2)                
 
             if self.detns[planet]['orbit_flag']!='multi':
                 circ_per = pm.Deterministic("circ_per",(np.pi**2*6.67e-11*rhostar*1409.78)*((tdur*86400)/pm.math.sqrt((1+ror)**2 - b**2))**3/(3*86400))
 
             #ror, b = xo.distributions.get_joint_radius_impact(min_radius=0.0075, max_radius=0.25,
-            #                                                  testval_r=np.sqrt(dep), testval_b=0.41)
+            #                                                  initval_r=np.sqrt(dep), initval_b=0.41)
             #logror = pm.Deterministic("logror",pm.math.log(ror))
             
             
@@ -1334,7 +1335,7 @@ class target():
                                                         orbit=orbit, r=r_pl/109.1, t=x, texp=cad),
                                                 xo.LimbDarkLightCurve(u_star).get_light_curve(
                                                         orbit=orbit, r=r_pl/109.1, t=x-tcen2, texp=cad)]),axis=-1)*(1+third_light)
-                pm.math.printing.Print("duo light_curves")(light_curves)
+                #pm.math.printing.Print("duo light_curves")(light_curves)
             else:
                 light_curves = pm.math.sum(xo.LimbDarkLightCurve(u_star).get_light_curve(
                         orbit=orbit, r=r_pl/109.1, t=x, texp=cad),axis=-1)*(1+third_light)
@@ -1342,41 +1343,43 @@ class target():
             depth_lc = pm.Deterministic("depth_lc",pm.math.min(light_curves))
             
             light_curve = pm.Deterministic("light_curve", light_curves + flux_trend)
-            pm.math.printing.Print("lc")(light_curves)
-            pm.math.printing.Print("trend")(flux_trend)
-            pm.Normal("obs", mu=light_curve, sd=yerr, observed=y)
-            print(model.check_test_point())
+            #pm.math.printing.Print("lc")(light_curves)
+            #pm.math.printing.Print("trend")(flux_trend)
+            pm.Normal("obs", mu=light_curve, sigma=yerr, observed=y)
+            #print(model.check_test_point())
             if fit_poly:
-                map_soln = pmx.optimize(start=model.test_point,vars=[trend],verbose=False)
+                map_soln = pmx.optimize(vars=[trend])
                 print(map_soln['trend'],map_soln['log_ror'],map_soln['b'],map_soln['tcen'],map_soln['tdur'],map_soln['depth_lc'],map_soln['circ_per'])
-                map_soln = pmx.optimize(start=map_soln,vars=[trend,log_ror,tdur,b,tcen],verbose=False)
+                map_soln = pmx.optimize(start=map_soln,vars=[trend,log_ror,tdur,b,tcen])
                 print(map_soln['trend'],map_soln['log_ror'],map_soln['b'],map_soln['tcen'],map_soln['tdur'],map_soln['depth_lc'],map_soln['circ_per'])
 
                 # Fit for the maximum a posteriori parameters
             else:
-                map_soln = pmx.optimize(start=model.test_point,vars=[mean],verbose=False)
+                map_soln = pmx.optimize(start=model.test_point,vars=[mean])
                 map_soln = pmx.optimize(start=map_soln,vars=[mean,log_ror,tdur,b,tcen],verbose=True)
             
-            map_soln, func = pmx.optimize(start=map_soln,verbose=False,return_info=True)
+            map_soln = pmx.optimize(start=map_soln)
         
         #Reconstructing best-fit model into a dict:
-        best_fit={'log_lik_mono':-1*func['fun'],'model_success':str(func['success'])}
+        best_fit={}#'log_lik_mono':-1*func['fun'],'model_success':str(func['success'])}
         
         if sample_model:
             with model:
-                trace = pm.sample(tune=1200, draws=500, chains=3, cores=1, regularization_steps=20,
+                trace = pm.sample(tune=1200, draws=500, chains=3, cores=1,
                                    start=map_soln, target_accept=0.9)
-            
-            for col in trace.varnames:
+            base_size=len(trace.posterior.draw)*len(trace.posterior.chain)
+            vnams=[var for var in trace.posterior if np.product(trace.posterior[var].shape)/base_size<8]
+            extrace=az.extract(trace,var_names=vnams)
+            for col in vnams:
                 if 'interval__' not in col:
-                    if trace[col].size<2:
-                        best_fit[col]=np.nanmedian(trace[col])
-                        best_fit[col+"_sd"]=np.nanstd(trace[col])
-                        best_fit[col+"_samps"]=trace[col]
+                    if extrace[col].size<2:
+                        best_fit[col]=np.nanmedian(extrace[col])
+                        best_fit[col+"_sd"]=np.nanstd(extrace[col])
+                        best_fit[col+"_samps"]=extrace[col]
                     else:
-                        best_fit[col]=np.nanmedian(trace[col],axis=0)
-                        best_fit[col+"_sd"]=np.nanstd(trace[col],axis=0)
-                        best_fit[col+"_samps"]=trace[col]
+                        best_fit[col]=np.nanmedian(extrace[col],axis=0)
+                        best_fit[col+"_sd"]=np.nanstd(extrace[col],axis=0)
+                        best_fit[col+"_samps"]=extrace[col]
         else:
             for col in map_soln:
                 if 'interval__' not in col:
