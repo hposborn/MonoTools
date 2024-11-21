@@ -1352,7 +1352,7 @@ def old_bin_lc_given_new_x(lc_segment, new_x):
     binlc=np.column_stack((new_x,fluxes))
     return binlc
 
-def bin_lc_given_new_x(lc_segment, new_x):
+def bin_lc_given_new_x(lc_segment, new_x, binsize=1/48, return_digi=False):
     return np.column_stack((bin_light_curve(time=lc_segment[:,0],flux=lc_segment[:,1],flux_err=lc_segment[:,2],bin_time=binsize,return_bin_indices=return_digi,new_time_bins=new_x)))
 
 def old_bin_lc_segment(lc_segment, binsize,return_digi=False):
@@ -2355,4 +2355,30 @@ def iteratively_determine_GP_params(pmmodel,time,flux,flux_err,tdurs,debug=False
         #         minpower/=1.2
         #         success=False
         # if debug: print(success, minpower,maxpower)
+    
+
+def calc_trio_periods(trans,minp=18,thresh=0.5):
+    """Calculate most likely period given three transits, a minimum period, and a threshold (in time) below which to search for period matches."""
+    poss_pers=[(trans[1]-trans[0])/np.arange(1,int(np.floor((trans[1]-trans[0])/minp))),(trans[2]-trans[1])/np.arange(1,int(np.floor((trans[2]-trans[1])/minp)))]
+    mins=np.min(abs(poss_pers[0][:,None]-poss_pers[1][None,:]),axis=1)
+    if np.any(mins<thresh):
+        iperdic={}
+        for n_p,p in enumerate(poss_pers[0][mins<thresh]):
+            iperdic[n_p]={'p0':p,'p1':poss_pers[1][np.argmin(abs(poss_pers[1]-p))]}
+        perdf=pd.DataFrame(iperdic).T
+        perdf['dist']=0.5*(perdf['p0']-perdf['p1'])
+        perdf['avper']=0.5*(perdf['p0']+perdf['p1'])
+        #For Total TTV - given average period, what is min distance in days from all transits? 
+        #Half of TTV between predicted 0->2 period span at transit 1
+        perdf['n0']=(trans[1]-trans[0])/perdf['p0']
+        perdf['n1']=(trans[2]-trans[1])/perdf['p1']
+        perdf['nspan']=perdf['n0']+perdf['n1']
+        perdf['abs_total_ttv']=abs(0.5*(trans[1]-(trans[0]+(perdf['n0']/perdf['nspan'])*(trans[2]-trans[0]))))
+        #perdf['abs_total_ttv']=abs(perdf['nearest_total_n']*((trans[2]-trans[0])/perdf['avper']-perdf['nearest_total_n']))
+        perdf['distratio']=abs(perdf['dist']/perdf['avper'])
+        #Sorting by total TTV from set times:
+        perdf=perdf.sort_values('abs_total_ttv')
+        return perdf
+    else:
+        return None
     
