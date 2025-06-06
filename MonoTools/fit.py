@@ -621,8 +621,8 @@ class monoModel():
                 #exp_transtimes = tcens[0]+(tcens[-1]-tcens[0])*np.hstack([0,ideal_pratio_spans[:,1]])/ideal_pratio_spans[0,0]
             linfit=np.polyfit(exp_transn,tcens,len(tcens))#
             poly_tcens=np.polyval(linfit,exp_transn)
-            if np.max(tcens-poly_tcens)<max_ttv_amp and np.max(np.polyval(linfit,time))<max_ttv_amp:
-                print("TTVs appear too large - "+str(max_ttv_amp)+" day threshold exceeded.")
+            if np.max(tcens-poly_tcens)>max_ttv_amp:
+                # and np.max(np.polyval(linfit,time))<max_ttv_amp:
                 return self.make_phase(time,tcens,per,fit_ttv_polynomial=False,ideal_pratio_spans=ideal_pratio_spans)# Turning off fit_ttv_polynomial and returning "normal" linear fit
             else:
                 #This gives the polynomial-derived t0s, which we can then find minimum distances to:
@@ -993,7 +993,6 @@ class monoModel():
                 rho_MR=[Mstar[0]/self.Rstar[0]**3]
                 rho_MR+=[(Mstar[0]+Mstar[1])/(self.Rstar[0]-abs(self.Rstar[1]))**3/rho_MR[0]-1.0,
                          1.0-(Mstar[0]-abs(Mstar[2]))/(self.Rstar[0]+self.Rstar[2])**3/rho_MR[0]]
-                print(rho_MR)
                 #Weighted sums of two avenues to density:
                 rhostar=[rho_logg[0]*(rho_MR[1]+rho_MR[2])/(rho_logg[1]+rho_logg[2]+rho_MR[1]+rho_MR[2])+
                          rho_MR[0]*(rho_logg[1]+rho_logg[2])/(rho_logg[1]+rho_logg[2]+rho_MR[1]+rho_MR[2])]
@@ -1159,7 +1158,7 @@ class monoModel():
                 #p=np.max(self.planets[pl]['period_aliases'])
                 t0s= self.init_soln['t0_'+pl] if hasattr(self,'init_soln') else self.planets[pl]['tcens']
                 #print(t0s)
-                phase=self.make_phase(self.lc.time,t0s,per=None,ideal_pratio_spans=self.planets[pl]['ideal_pratio_span'])
+                phase=self.make_phase(self.lc.time,t0s,per=None,ideal_pratio_spans=self.planets[pl]['p_ratios'][:,:,0])
             elif pl in self.duos:
                 t0= self.init_soln['t0_'+pl] if hasattr(self,'init_soln') else np.max(self.planets[pl]['tcens'])
                 p=abs(self.init_soln['t0_2_'+pl]-self.init_soln['t0_'+pl]) if hasattr(self,'init_soln') else abs(np.max(self.planets[pl]['tcens'])-np.min(self.planets[pl]['tcens']))
@@ -1170,7 +1169,6 @@ class monoModel():
             dur = self.init_soln['tdur_'+pl] if hasattr(self,'init_soln') else self.planets[pl]['tdur']
             self.lc.near_trans[pl] = abs(phase)<self.cut_distance*dur
             self.lc.near_trans['all'] += self.lc.near_trans[pl][:]
-            print(phase[abs(self.lc.time-2677.94)<0.2],np.sum(self.lc.near_trans[pl][:]))
             self.lc.in_trans[pl] = abs(phase)<self.mask_distance*dur
             self.lc.in_trans['all'] += self.lc.in_trans[pl][:]
 
@@ -1562,7 +1560,6 @@ class monoModel():
         interp_locs={'kipping':"kip", 'vaneylen':"vve",'flat':"flat",'apogee':'apo','bernmodel_both':'both__bernmodel','bernmodel_sing':'singles__bernmodel','bernmodel_mult':'multis__bernmodel'}
         
         interp_locs['auto']='both__bernmodel' if len(self.planets)==1 else 'multis__bernmodel' #1 transiting planet may not mean only one, so assuming both where Npl=1.
-        print(interp_locs[self.ecc_prior.lower()],self.ecc_prior,interp_locs,interp_locs[self.ecc_prior.lower()][:4],["bern","auto"])
         if self.ecc_prior.lower() not in ["bernmodel_sing","bernmodel_mult","bernmodel_both","auto"]:
             f_emarg=gzip.open(os.path.join(MonoData_tablepath,
                                                     "emarg_array_"+interp_locs[self.ecc_prior.lower()]+".txt.gz"), "rb")
@@ -1788,7 +1785,6 @@ class monoModel():
                                                      mu=np.nanmedian(trans_ld_dists,axis=0),
                                                      sigma=np.clip(ld_mult*np.nanstd(trans_ld_dists,axis=0),0.1,1.0), shape=2, 
                                                      lower=0.0, upper=1.0, initval=np.clip(np.nanmedian(trans_ld_dists,axis=0),0,1))
-                    print(q_star[mis].shape)
                     u_star[mis] = pm.Deterministic("u_star_"+mis, pm.math.stack([2*pm.math.sqrt(q_star[mis][0])*q_star[mis][1], 
                                                                   pm.math.sqrt(q_star[mis][0])*(1 - 2*q_star[mis][1])]))
                 else:
@@ -2164,8 +2160,8 @@ class monoModel():
                 #Period from:
                 # - Uniform per-gap (in ^per_index)
                 ind_min = np.power(self.planets[pl]['per_gaps']['gap_ends']/self.planets[pl]['per_gaps']['gap_starts'],self.per_index)
-                print((1-ind_min[None,None,:]).shape,np.random.random(sample_shapes)[:,:,None].shape,ind_min[None,None,:].shape,self.planets[pl]['per_gaps']['gap_starts'][None,None,:].shape)
-                print(((((1-ind_min[None,None,:])*np.random.random(sample_shapes)[:,:,None]+ind_min[None,None,:])**(1/self.per_index))*self.planets[pl]['per_gaps']['gap_starts'][None,None,:]).shape)
+                # print((1-ind_min[None,None,:]).shape,np.random.random(sample_shapes)[:,:,None].shape,ind_min[None,None,:].shape,self.planets[pl]['per_gaps']['gap_starts'][None,None,:].shape)
+                # print(((((1-ind_min[None,None,:])*np.random.random(sample_shapes)[:,:,None]+ind_min[None,None,:])**(1/self.per_index))*self.planets[pl]['per_gaps']['gap_starts'][None,None,:]).shape)
                 self.trace.posterior['per_'+pl] = (('chain','draw','per_'+pl+'_dim_0'), (((1-ind_min[None,None,:])*np.random.random(sample_shapes)[:,:,None]+ind_min[None,None,:])**(1/self.per_index))*self.planets[pl]['per_gaps']['gap_starts'][None,None,:])
 
                 self.trace.posterior['av_t0_'+pl] = (('chain','draw'),self.trace.posterior['t0_'+pl].values)
@@ -2423,7 +2419,7 @@ class monoModel():
                     #min_dist_to_lc=np.hstack([np.min(abs(self.lc.time[(self.lc.time>timechunks[tc])&(self.lc.time<=timechunks[tc+1]),None]-self.model_time[None,(self.model_time>timechunks[tc])&(self.model_time<=timechunks[tc+1])]),axis=1) for tc in range(nchunks)])
                     min_dist_to_lc=np.hstack([np.min(abs(t[(t>timechunks[tc])&(t<=timechunks[tc+1]),None]-self.model_lcs[unqcad]['time'][None,(self.model_lcs[unqcad]['time']>timechunks[tc])&(self.model_lcs[unqcad]['time']<=timechunks[tc+1])]),axis=1) for tc in range(nchunks)])
                 else:
-                    print([(self.lc.time>timechunks[tc])&(self.lc.time<=timechunks[tc+1]).sum() for tc in range(nchunks)])
+                    #print([(self.lc.time>timechunks[tc])&(self.lc.time<=timechunks[tc+1]).sum() for tc in range(nchunks)])
                     print("No time to intertpolate GP")
                 #scaling stdev -> 0.1day duration -> making artificially larger away from parts of lc
                 sd=np.nanmedian(abs(np.diff(self.lc.flux[self.cad_indexes[unqcad]])))/np.sqrt(0.1/self.texp_dict[unqcad])*(np.clip(86400/1800*min_dist_to_lc,1.0,25)**0.33)
@@ -4067,18 +4063,18 @@ class monoModel():
             else:
                 # print("flux",len(self.lc.flux_flat),"mask",len(self.lc.mask),np.sum(self.lc.mask),"phasebool",len(phasebool),np.sum(phasebool),
                 #       "cad_index",len(self.cad_indexes[unqcad]),np.sum(self.cad_indexes[unqcad]),"transit model",len(np.sum([self.trans_to_plot[unqcad][opl]['med'] for opl in self.planets if opl!=pl],axis=0)))
-                print("phase",self.lc.phase[pl][self.lc.mask&phasebool[pl]&self.cad_indexes[unqcad]].shape,
-                      "masked_flux",len(self.lc.flux_flat[self.lc.mask&phasebool[pl]&self.cad_indexes[unqcad]]),
-                      "cad_mask",len(self.cad_masks[unqcad]),self.cad_masks[unqcad].sum(),
-                      "phasebool",phasebool[pl][self.cad_indexes[unqcad]].shape,phasebool[pl][self.cad_indexes[unqcad]].sum(),
-                      "transmod",self.trans_to_plot[unqcad][pl]['med'][self.cad_masks[unqcad]&phasebool[pl][self.cad_indexes[unqcad]]].shape,
-                      "othpls",othpls[unqcad],othpls[unqcad].shape)
-                for unqcad in self.unique_cads:
-                    print(self.lc.phase[pl][self.lc.mask&phasebool[pl]&self.cad_indexes[unqcad]].shape,
-                                                    self.lc.flux_flat[self.lc.mask&phasebool[pl]&self.cad_indexes[unqcad]].shape,
-                                                    self.lc.flux_err[self.lc.mask&phasebool[pl]&self.cad_indexes[unqcad]].shape,
-                                                    othpls[unqcad].shape,
-                                                    self.trans_to_plot[unqcad][pl]['med'][self.cad_masks[unqcad]&phasebool[pl][self.cad_indexes[unqcad]]].shape)
+                # print("phase",self.lc.phase[pl][self.lc.mask&phasebool[pl]&self.cad_indexes[unqcad]].shape,
+                #       "masked_flux",len(self.lc.flux_flat[self.lc.mask&phasebool[pl]&self.cad_indexes[unqcad]]),
+                #       "cad_mask",len(self.cad_masks[unqcad]),self.cad_masks[unqcad].sum(),
+                #       "phasebool",phasebool[pl][self.cad_indexes[unqcad]].shape,phasebool[pl][self.cad_indexes[unqcad]].sum(),
+                #       "transmod",self.trans_to_plot[unqcad][pl]['med'][self.cad_masks[unqcad]&phasebool[pl][self.cad_indexes[unqcad]]].shape,
+                #       "othpls",othpls[unqcad],othpls[unqcad].shape)
+                # for unqcad in self.unique_cads:
+                #     print(self.lc.phase[pl][self.lc.mask&phasebool[pl]&self.cad_indexes[unqcad]].shape,
+                #                                     self.lc.flux_flat[self.lc.mask&phasebool[pl]&self.cad_indexes[unqcad]].shape,
+                #                                     self.lc.flux_err[self.lc.mask&phasebool[pl]&self.cad_indexes[unqcad]].shape,
+                #                                     othpls[unqcad].shape,
+                #                                     self.trans_to_plot[unqcad][pl]['med'][self.cad_masks[unqcad]&phasebool[pl][self.cad_indexes[unqcad]]].shape)
                 phaselc[pl]=np.vstack([np.column_stack((self.lc.phase[pl][self.lc.mask&phasebool[pl]&self.cad_indexes[unqcad]],
                                                 self.lc.flux_flat[self.lc.mask&phasebool[pl]&self.cad_indexes[unqcad]] - othpls[unqcad],
                                                 self.lc.flux_err[self.lc.mask&phasebool[pl]&self.cad_indexes[unqcad]],
@@ -4189,7 +4185,6 @@ class monoModel():
                                                                  (phaselc[pl][:,1]-phaselc[pl][:,3]-phaselc[pl][:,4])[np.argsort(phaselc[pl][:,0])],
                                                                  phaselc[pl][np.argsort(phaselc[pl][:,0]),2])),binsize[pl])
                 nrtrns_resid=np.nanstd(bin_resids[:,1])
-                print(nrtrns_resid)
                 f_trans_resids[pl].errorbar(bin_resids[:,0],bin_resids[:,1],yerr=bin_resids[:,2],fmt=".",color='C2',
                                          alpha=0.75, markersize=5, rasterized=raster)
 
@@ -4487,7 +4482,6 @@ class monoModel():
         #print(samples.shape,samples.columns)
         #assert samples.shape[1]<50
         
-        print(corner_vars)
         if use_marg:
             fig = corner.corner(self.trace.posterior,var_names=corner_vars)#,truths=truths)
         else:
@@ -4535,7 +4529,6 @@ class monoModel():
             #         samples.loc[sampl_loc,'log_prob'] = ext['logprob_marg_'+dpl][:,n_per]
             #         n_pos+=1
             # weight_samps = np.exp(samples["log_prob"])
-            print(samples)
             fig = corner.corner(samples)#[[col for col in samples.columns if col!='log_prob']],weights=weight_samps);
 
         fig.savefig(self.savenames[0]+'_corner.pdf')#,dpi=400,rasterized=True)
@@ -4902,7 +4895,7 @@ class monoModel():
             plt.plot(tdur_mult+sd_t0+tdur[1],dip,'--',c='C0',lw=2.5,alpha=0.6)
 
             start_times=np.linspace(pred_t0+(row['Ph_early']-1)*p[0], pred_t0+(row['Ph_late']-1)*p[0], or_niter)
-            print(p,dep,tdur,t0,pred_t0,sd_t0,tdur,tdur_mult,start_times)
+            #print(p,dep,tdur,t0,pred_t0,sd_t0,tdur,tdur_mult,start_times)
             for start in start_times:
                 plt.fill_between([start, start+row['T_visit']/86400],[-1.25*dep,-1.25*dep],[0.25*dep,0.25*dep],alpha=0.2,color='C4')
 
