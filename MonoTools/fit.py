@@ -43,7 +43,6 @@ if not os.path.isdir(MonoData_savepath):
     os.mkdir(MonoData_savepath)
 
 from . import tools
-from . import search
 from . import lightcurve
 #from . import tools
 #from .stellar import starpars
