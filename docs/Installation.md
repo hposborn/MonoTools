@@ -10,6 +10,6 @@ Alternatively, to run the most up-to-date development version, you can run `git 
 ## The \$MONOTOOLSDIR environment variable
 The default location to store files is within the installed `MonoTools` package (i.e. MonoTools/MonoTools/data). However, this can be modified with the environment variable `$MONOTOOLSDIR` (e.g. by placing `export MONOTOOLSDIR="/path/to/new/folder/"` in your `.bashrc` file).
 
-Mac OSX users may need to make sure PyMC3, exoplanet and theano are all properly installed, which require GCC (e.g. using brew install gcc) and C libraries are present.
+Mac OSX users may need to make sure `PyMC`, `exoplanet[pymc]` are all properly installed, which may require GCC (e.g. using brew install gcc) and C libraries are present.
 
-Be aware that `monotools` only works with python 3 and will almost certainly break on windows.
+Be aware that `monotools` only works with python 3, with testing for 3.9-3.11. It is untested on windows.

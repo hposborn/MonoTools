@@ -27,7 +27,7 @@ MonoTools will look at the `$MONOTOOLSPATH` bash variable as the location to sto
 For a tutorial on how to deal with the in-built lightcurve class, see [using_lightcurve.ipynb](https://github.com/hposborn/MonoTools/blob/main/docs/using_lightcurve.html).
 
 Various examples for fitting applications can be found for:
-- [Modelling Duotransits](https://github.com/hposborn/MonoTools/blob/main/MonoTools/examples/Duotransit_Example.ipynb)
-- [Modelling a Monotransit](https://github.com/hposborn/MonoTools/blob/main/MonoTools/examples/Monotransit model example.ipynb)
-- [Modelling a lightcurve with five transits but an ambiguous period](https://github.com/hposborn/MonoTools/blob/main/MonoTools/examples/Modelling Ambiguous Transits \(simple\).ipynb)
-- [and modelling the same pentatransit including TTVs and a GP](https://github.com/hposborn/MonoTools/blob/main/MonoTools/examples/Modelling Ambiguous Transits with TTVs and GPs.ipynb)
+- [Modelling Duotransits](https://github.com/hposborn/MonoTools/blob/pymc/docs/Example_1_Duotransit_Example.ipynb)
+- [Modelling a Monotransit](https://github.com/hposborn/MonoTools/blob/pymc/docs/Example_2_Monotransit_and_duotransit.ipynb)
+- [Modelling a lightcurve with five transits but an ambiguous period](https://github.com/hposborn/MonoTools/blob/pymc/docs/Example_3_Model_Ambiguous_Transits_simple.ipynb)
+- [and modelling the same pentatransit including TTVs and a GP](https://github.com/hposborn/MonoTools/blob/pymc/docs/Example_4_Modelling_Ambiguous_Transits_with_TTVs_and_GPs.ipynb)
