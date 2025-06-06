@@ -6,7 +6,7 @@ For the moment, please cite Osborn et al (2022), and include the following ackno
 
 ## Acknowledgement
 ```
-This research made use of \textsf{MonoTools} \citep{osborn2022uncovering} and its
+This research made use of \textsf{MonoTools} \citep{Osborn2022,osborn2022uncovering} and its
 dependencies \citep{exoplanet:exoplanet, exoplanet:agol20, exoplanet:astropy13, exoplanet:astropy18,
 exoplanet:exoplanet, exoplanet:kipping13, exoplanet:luger18, exoplanet:pymc3,
 exoplanet:theano}.
@@ -16,6 +16,17 @@ exoplanet:theano}.
 With the following bib items:
 
 ```
+@software{Osborn2022,
+       author = {{Osborn}, Hugh P.},
+        title = "{MonoTools: Planets of uncertain periods detector and modeler}",
+ howpublished = {Astrophysics Source Code Library, record ascl:2204.020},
+         year = 2022,
+        month = apr,
+          eid = {ascl:2204.020},
+       adsurl = {https://ui.adsabs.harvard.edu/abs/2022ascl.soft04020O},
+      adsnote = {Provided by the SAO/NASA Astrophysics Data System}
+}
+
 @article{osborn2022uncovering,
     author = {Hugh P. Osborn, Andrea Bonfanti, Davide Gandolfi, Christina Hedges, Adrien Leleu, Andrea Fortier, David Futyan, Pascal Gutermann, Pierre F. L. Maxted, Luca Borsato, Karen A. Collins, J. Gomes~da~Silva, Yilen Gómez~Maqueo~Chew, Matthew J. Hooton, Monika Lendl, Hannu Parviainen, Sébastien Salmon, Nicole Schanche, Luisa M. Serrano, Sergio G. Sousa, Amy Tuson, Solène Ulmer-Moll, Valerie Van Grootel, R.D. Wells, Thomas G. Wilson, Yann Alibert, Roi Alonso, Guillem Anglada, Joel Asquier, David Barrado y Navascues, Wolfgang Baumjohann, Thomas Beck, Willy Benz, Federico Biondi, Xavier Bonfils, Francois Bouchy, Alexis Brandeker, Christopher Broeg, Tamas Bárczy, S. C. C. Barros, Juan Cabrera, Sébastien Charnoz, Andrew Collier Cameron, Szilard Csizmadia, Melvyn B. Davies, Magali Deleuil, Laetitia Delrez, Brice-Olivier Demory, David Ehrenreich, Anders Erikson, Luca Fossati, Malcolm Fridlund, Michaël Gillon, M.A. Gómez-Muñoz, Manuel Güdel, Kevin Heng, Sergio Hoyer, Kate G. Isaak, Laszlo Kiss, Jacques Laskar, Alain Lecavelier des Etangs, Christophe Lovis, Demetrio Magrin, Luca Malavolta, James McCormac, Valerio Nascimbeni, Göran Olofsson, Roland Ottensamer, Isabella Pagano, Enric Pallé, Gisbert Peter, Daniele Piazza, Giampaolo Piotto, Don Pollacco, Didier Queloz, Roberto Ragazzoni, Nicola Rando, Heike Rauer, Christian Reimers, Ignasi Ribas, Olivier D. S. Demangeon, Alexis M. S. Smith, L. Sabin, Nuno Santos, Gaetano Scandariato, U. Schroffenegger, Rick P. Schwarz, Avi Shporer, Attila E. Simon, Manfred Steller, Gyula M. Szabó, Damien Ségransan, Nicolas Thomas, Stéphane Udry, Ingo Walter, Nicholas Walton},
     title = {Uncovering the true periods of the young sub-Neptunes orbiting TOI-2076},
