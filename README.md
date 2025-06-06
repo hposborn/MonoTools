@@ -2,11 +2,11 @@
 
 MonoTools is a package specific to modelling transiting exoplanets with unknown periods (Monos, Duos, Trios, etc).
 
-Full documentation is are taking shape at [readthedocs](https://monotools.readthedocs.io/en/main/).
+Full documentation is are taking shape at [readthedocs](https://monotools.readthedocs.io/en/pymc/).
 
 MonoTools.fit is an update to my [previous Namaste code](http://github.com/hposborn/Namaste) using the ["exoplanet" models of Dan Foreman-Mackey et al](http://github.com/dfm/exoplanet).
 
-This uses a `PyMC`(v5)/`pytensor` back-end, a differentiable Keplerian orbital model, and the Gaussian process modeling of [Celerite](http://github.com/dfm/celerite) to fit exoplanetary transits.
+This uses a `PyMC`(v5)/`pytensor` back-end, a differentiable Keplerian orbital model, and the Gaussian process modeling of [Celerite](http://github.com/dfm/celerite) to fit exoplanetary transits. For the old and buggy PyMC3 backend-based, manually install the `old_pymc3` branch via github.
 
 Here we wrap the ["exoplanet"](http://github.com/dfm/exoplanet) core model to specify it for single and "duo"-transits, and plot/analyse the results.
 
