@@ -757,7 +757,7 @@ def cut_anom_diff(flux,thresh=4.2):
                      abs(flux[-1]-np.median(flux[-3:-1]))<(np.median(abs(diffarr[0,:]))*thresh*5)))
     return anoms
 
-def observed(tic,radec=None,maxsect=84):
+def observed(tic,radec=None,maxsect=96):
     # Using either "webtess" page or Chris Burke's tesspoint to check if TESS object was observed:
     # Returns dictionary of each sector and whether it was observed or not
     
@@ -1254,13 +1254,15 @@ def weighted_avg_and_std(values, errs, masknans=True, axis=None):
 
     values, weights -- Numpy ndarrays with the same shape.
     """
-    if len(values)>1:
-        average = np.average(values, weights=1/errs**2,axis=axis)
+    ma = np.isfinite(values)&np.isfinite(errs) if masknans else np.tile(True,len(values))
+
+    if np.sum(ma)>1:
+        average = np.average(values[ma], weights=1/errs[ma]**2, axis=axis)
         # Fast and numerically precise:
-        variance = np.average((values-average)**2, weights=1/errs**2,axis=axis)
-        binsize_adj = np.sqrt(len(values)) if axis is None else np.sqrt(values.shape[axis])
+        variance = np.average((values[ma]-average)**2, weights=1/errs[ma]**2, axis=axis)
+        binsize_adj = np.sqrt(np.sum(ma)) if axis is None else np.sqrt(values.shape[axis])
         return [average, np.sqrt(variance)/binsize_adj]
-    elif len(values)==1:
+    elif np.sum(ma)==1:
         return [values[0], errs[0]]
     else:
         return [np.nan, np.nan]
@@ -1459,6 +1461,62 @@ def bin_light_curve(time, flux, flux_err= None,
             return bin_centers, weighted_mean, bin_indices
         else:
             return bin_centers, weighted_mean
+
+def robust_binning(time, flux, flux_err, mask=None, split_gap_size=10, binsize=1/48,do_weighting=True, **kwargs):
+    """
+    """
+
+    bintime=[]
+    time_bools=np.tile(-1,len(time))
+    bintime_bools=[]
+    digis={}
+
+    mask=np.tile(True,len(time)) if mask is None else mask
+    #Found lightcurve gaps - making shorter blocks to loop through.
+    if np.nanmax(np.diff(np.sort(time)))>split_gap_size:
+        #We have gaps in the lightcurve, so we'll find the bins by looping through those gaps
+        time_regions=find_time_regions(time,**kwargs)
+    else:
+        time_regions={0:[np.min(time),np.max(time)]}
+    for j in range(len(time_regions)):
+        time_bools[mask*(time>=time_regions[j][0])*(time<=time_regions[j][1])]=j
+        cad=np.nanmedian(np.diff(time[time_bools==j]))
+        if binsize>(cad*1.5):
+            bintime+=[np.arange(time_regions[j][0],time_regions[j][1]+binsize,binsize)]
+        else:
+            bintime+=[time[time_bools==(j)]]
+        bintime_bools+=[np.tile(j,len(bintime[-1]))]
+        digis[j]=np.digitize(time[time_bools==j],bintime[-1])
+    # else:
+    #     time_bools[mask]=1
+    #     cad=np.nanmedian(np.diff(time))
+    #     if binsize>(cad*1.5):
+    #         bintime+=[np.arange(np.nanmin(time),np.nanmax(time)+binsize,binsize)]
+    #     else:
+    #         bintime+=[time[mask]]
+    #     bintime_bools+=[np.ones(len(bintime[-1]))]
+    #     digis[0]=np.digitize(time,bintime[-1])
+
+    bintime_bools=np.hstack((bintime_bools))
+    binlc={'time':np.hstack((bintime))}
+    binlc['flux']=np.zeros(len(binlc['time']));binlc['flux_err']=np.zeros(len(binlc['time']))
+    #For each of the seprated lightcurve blocks:
+    for j in np.arange(1+np.max(time_bools)).astype(int):
+        #For each of the flux arrays (binned and normal):
+        #Using the pre-computed "bintime_bools" and "time_bools" to index the (empty) binned array and the lc.time one...
+        if np.sum(bintime_bools==j)==np.sum(time_bools==j):
+            #Cadence is ~binsize, so we can just take the raw flux values - i.e. no binning
+            binlc['flux'][bintime_bools==j]=flux[time_bools==j]
+            binlc['flux_err'][bintime_bools==j]=flux_err[time_bools==j]
+        else:
+            #Only doing the binning if the cadence involved is >> the cadence
+            if do_weighting:
+                binnedlc = np.vstack([[weighted_avg_and_std(flux[time_bools==j][digis[j]==d],flux_err[time_bools==j][digis[j]==d])] for d in np.arange(len(bintime[j]))])
+            else:
+                binnedlc = np.vstack([[med_and_std(flux[time_bools==j][digis[j]==d])] for d in np.arange(len(bintime[j]))])
+            binlc['flux'][bintime_bools==j]=binnedlc[:,0]
+            binlc['flux_err'][bintime_bools==j]=binnedlc[:,1]
+    return binlc
 
 def create_transit_mask(t,tcens,tdurs,maskdist=1.1):
     in_trans=np.zeros_like(t).astype(bool)
@@ -1946,6 +2004,168 @@ def partition_list(a, k):
         direction = -1 if bound_to_move < worst_partition_index else 1
         partition_between[bound_to_move] += move * direction
 
+# if use_binned:
+#     init_gp_on_lc(self.lc.bin_time,self.lc.bin_flux,self.lc.bin_flux_err,mask=(~self.lc.bin_in_trans['all'])&np.isfinite(self.lc.bin_flux)
+# else:
+#     init_gp_on_lc(self.lc.time,self.lc.flux,self.lc.flux_err,mask=(~self.lc.in_trans['all'])&self.lc.mask&np.isfinite(self.lc.flux)
+
+def init_gp_on_lc(time, flux, flux_err, mask, tdurs=[0.3], predict_flux=False, pred_time=None, n_burnin=450,n_draws=900, max_len_lc=25000, 
+                  use_binned=False, overwrite=False, n_chains=4, cores=4, periodic_kernel=None, rotation_kernel=None, 
+                  jitterscaling=2, **kwargs):
+    """Function to train GPs on out-of-transit photometry
+
+    Args:
+        n_draws (int, optional): Number of draws from sample. Defaults to 900.
+        max_len_lc (int, optional): Maximum length of lightcurve to use (limiting to a few 1000 helps with compute time). Defaults to 25000.
+        uselc (bool, optional): Specify lightcurve to use. Defaults to None, which takes the `mod.lc` light curve.
+        jitterscaling (float,optional): how high to scaler the log jitter relative to measured (e.g. 1=push for jitter 1 orders higher)
+    """
+    floattype=np.float64
+
+    import pymc as pm
+    import pymc_ext as pmx
+    from celerite2.pymc import terms as pymc_terms
+    import celerite2
+    
+    if pred_time is None:
+        pred_time=time[:]
+    #Also cutting exceptionally steep/sharp bins based on differences
+    diffs=np.diff(np.sort(time))
+    #Cutting any differences where two consecutive steps are not within 5% (i.e. excluding all skipped frames) to retain "good" cadences
+    maxcad=np.max(diffs[1:-1][np.all(np.column_stack((abs(np.log(diffs[:-2]/diffs[1:-1]))<0.05,abs(np.log(diffs[2:]/diffs[1:-1]))<0.05)),axis=1)])
+    #Finding max cadence
+    thresh=1.75
+    for binsize in np.geomspace(3*maxcad,0.5,7)[::-1]:
+        #1 Find steps where the implied gradient is much larger than the typical error for a run of binsizes, starting at the largests
+         
+        bintime,binflux,binflux_err=bin_light_curve(time,flux,flux_err,bin_time=binsize)#avcad*np.sum(ix&flux_mask&transit_mask)/npts_max)
+
+        large_grads=np.where(np.diff(binflux)/np.diff(bintime)>thresh*np.nanmedian(binflux_err)/maxcad)[0]
+        #print("extra points masked due to "+str(thresh)+"-sig bin differences at binsize:",binsize,"=",len(large_grads))
+        if len(large_grads)>0:
+            for nclip in large_grads:
+                mask*=(time<bintime[nclip]-binsize)|(time>bintime[1+nclip]+binsize)
+    
+    if len(time[mask])>max_len_lc:
+        mask[mask]*=np.arange(0,np.sum(mask),1)<max_len_lc
+
+    with pm.Model() as gp_train_model:
+        #####################################################
+        #     Training GP kernel on out-of-transit data
+        #####################################################
+        phot_mean=pm.Normal("phot_mean",mu=np.median(flux[mask]),
+                                sigma=np.std(flux[mask]))
+
+        log_flux_std=np.log(np.nanmedian(abs(np.diff(flux[mask])))).astype(floattype)
+        
+        logs2 = pm.Normal("logs2", mu = jitterscaling+log_flux_std,
+                            sigma = 1, initval=2*jitterscaling+log_flux_std)
+        
+        if periodic_kernel is not None:
+            #Building a periodic kernel with amplitude modified by a third kernel term (i.e. allowing amplitude to vary with time)
+
+            periodic_w0=pm.Normal("periodic_w0",mu=(2*np.pi)/periodic_kernel['period'],sigma=(2*np.pi)/periodic_kernel['period_err'])
+            periodic_power=pm.Normal("periodic_logpower",mu=periodic_kernel['logamp'],sigma=periodic_kernel['logamp_err'])
+            if "periodic_Q" not in periodic_kernel:
+                periodic_logQ=pm.Normal("periodic_kernel",mu=2,sigma=2)
+            ampl_mult_logc=pm.Normal("ampl_mult_logc",mu=3,sigma=2,initval=5)
+            ampl_mult_loga=pm.Normal("ampl_mult_loga",mu=-1,sigma=2,initval=-1)
+            ampl_mult_kernel=pymc_terms.RealTerm(a=pm.math.exp(ampl_mult_loga),c=pm.math.exp(ampl_mult_logc))
+            periodic_kernel = pymc_terms.SHOTerm(S0=pm.math.exp(periodic_power)/(periodic_w0**4), w0=periodic_w0, Q=pm.math.exp(periodic_logQ))
+            
+            phot_w0, phot_sigma = iteratively_determine_GP_params(gp_train_model,time=time[mask],flux=flux[mask], flux_err=flux_err[mask],
+                                                                        tdurs=tdurs)
+            optvars=[logs2, phot_sigma, phot_w0, phot_mean,periodic_w0,periodic_power,ampl_mult_logc,ampl_mult_loga]
+            kernel = pymc_terms.SHOTerm(sigma=phot_sigma, w0=phot_w0, Q=1/np.sqrt(2))
+            gp = celerite2.pymc.GaussianProcess(kernel+ampl_mult_kernel*periodic_kernel,time[mask].astype(floattype),
+                                                        diag=flux_err[mask].astype(floattype)**2 + pm.math.exp(logs2), quiet=True)
+        elif rotation_kernel is not None:
+            #Building a purely rotational kernel
+            rotation_period=pm.Normal("rotation_period",mu=rotation_kernel['period'],sigma=rotation_kernel['period_err'])
+            rotation_logamp=pm.Normal("rotation_logamp",mu=rotation_kernel['logamp'],sigma=rotation_kernel['sigma_logamp'])
+            if 'logQ0' in rotation_kernel and 'sigma_logQ0' in rotation_kernel:
+                rotation_logQ0=pm.Normal("rotation_logQ0",mu=rotation_kernel['logQ0'],sigma=rotation_kernel['sigma_logQ0'])
+            else:
+                rotation_logQ0=pm.Normal("rotation_logQ0",mu=1.0,sigma=5)
+            if 'logdeltaQ0' in rotation_kernel and 'sigma_logdeltaQ0' in rotation_kernel:
+                rotation_logdeltaQ=pm.Normal("rotation_logdeltaQ", mu=rotation_kernel['logdeltaQ0'], sigma=rotation_kernel['sigma_logdeltaQ0'])
+            else:
+                rotation_logdeltaQ=pm.Normal("rotation_logdeltaQ", mu=2.,sigma=10.)
+            rotation_mix=pm.Uniform("rotation_mix",lower=0,upper=1.0)
+            #'sigma', 'Q0', 'dQ', and 'f'
+            optvars=[phot_mean,rotation_logamp,rotation_period,rotation_logQ0,rotation_logdeltaQ,rotation_mix]
+            rotational_kernel = pymc_terms.RotationTerm(sigma=pm.math.exp(rotation_logamp), period=rotation_period, 
+                                                            Q0=pm.math.exp(rotation_logQ0), dQ=pm.math.exp(rotation_logdeltaQ), f=rotation_mix)
+
+            gp = celerite2.pymc.GaussianProcess(rotational_kernel,time[mask].astype(floattype))
+                                #                         diag=flux_err[mask].astype(floattype)**2 + \
+                                #  pm.math.dot(cadence_index[mask,:].astype(floattype),pm.math.exp(logs2)), quiet=True)
+        else:
+            phot_w0, phot_sigma = iteratively_determine_GP_params(gp_train_model,time=time[mask],flux=flux[mask], flux_err=flux_err[mask],
+                                                                    tdurs=tdurs)
+
+            kernel = pymc_terms.SHOTerm(sigma=phot_sigma, w0=phot_w0, Q=1/np.sqrt(2))
+            optvars=[logs2, phot_sigma, phot_w0, phot_mean]
+            gp = celerite2.pymc.GaussianProcess(kernel,time[mask].astype(floattype))
+                                #                         diag=flux_err[mask].astype(floattype)**2 + \
+                                #  pm.math.dot(cadence_index[mask,:].astype(floattype),pm.math.exp(logs2)), quiet=True)
+        #logs2 = pm.Normal("logs2", mu=np.log(np.var(y[m])), sigma=10)
+        #max_cad = np.nanmax([np.nanmedian(np.diff(time[mask&(cadence_index[mask,n])])) for n in range(len(cads_short))])
+        
+        #gp.log_likelihood(flux[mask].astype(floattype) - phot_mean)
+        gp.compute(time[mask].astype(floattype), 
+                                    yerr=np.sqrt(flux_err[mask].astype(floattype) ** 2 + pm.math.exp(logs2))**2)
+
+        loglik=gp.marginal("loglik",observed=flux[mask].astype(floattype))
+        if predict_flux:
+            gp_pred=pm.Deterministic("gp_pred",gp.predict(y=flux[mask].astype(floattype),t=pred_time))
+
+        gp_init_soln = pmx.optimize(start=None, vars=optvars)
+        gp_init_trace = pm.sample(tune=n_burnin, draws=n_draws, start=gp_init_soln, chains=n_chains,cores=cores)# **kwargs)
+    return gp_init_trace
+
+def gp_flatten(time, flux, flux_err, flux_mask = None, tdurs=[0.3], transit_mask = None, npts_max=6000,**kwargs):
+    """Computes a best-fit GP using masked/binned out-of-transit data and then applies it to all datapoints.
+    GPs don't scale well to many datapoints, so we will dynamically splice/bin to ensure fewer than ~5000 datapoints total
+    
+    Args:
+        time
+        flux
+        flux_err
+        flux_mask
+        transit_mask
+    """
+    import arviz as az
+    
+    transit_mask=np.tile(True,len(time)) if transit_mask is None else transit_mask
+    flux_mask=np.tile(True,len(time)) if flux_mask is None else flux_mask
+
+    #Step 1) if there is a large gap (>50% of total lightcurve cadence), we split
+    bk_space=0.5*np.sum(np.diff(np.sort(time))[np.diff(np.sort(time))<0.1])#Summing cadences with large jumps removed.
+    region_starts=np.sort(time)[1+np.hstack((-1,np.where(np.diff(np.sort(time))>bk_space)[0]))]
+    region_ends  =np.sort(time)[np.hstack((np.where(np.diff(np.sort(time))>bk_space)[0],len(time)-1))]
+    print(len(region_starts),"regions:",[str(region_starts[n])[:6]+" - "+str(region_ends[n])[:6] for n in range(len(region_starts))])
+
+    gpfits = np.zeros(len(time))
+    for n in range(len(region_starts)):
+        ix=(time>=region_starts[n])*(time<=region_ends[n])
+        assert len(time[ix])>500
+        
+        #Step 2) if longer than npts_max, bin by the factor required to get to npts_max
+        if np.sum(ix&flux_mask&transit_mask)>npts_max:
+            avcad=np.nanmedian(np.diff(time[ix&flux_mask&transit_mask]))
+            ibinlc=bin_lc_segment(np.column_stack((time[ix&flux_mask&transit_mask],flux[ix&flux_mask&transit_mask],flux_err[ix&flux_mask&transit_mask])),binsize=avcad*np.sum(ix&flux_mask&transit_mask)/npts_max)
+            modtime=ibinlc[:,0];modflux=ibinlc[:,1];modflux_err=ibinlc[:,2];modmask=np.isfinite(ibinlc[:,1])
+            pred_time=time[ix]
+        else:
+            modtime=time[ix];modflux=flux[ix];modflux_err=flux_err[ix];modmask=flux_mask[ix]&transit_mask[ix];pred_time=time[ix]
+
+        gp_trace = init_gp_on_lc(modtime, modflux, modflux_err, mask=modmask, tdurs=tdurs, predict_flux=True, pred_time=pred_time, n_burnin=600, n_draws=300,**kwargs)
+        gpfits[ix] = np.nanmedian(az.extract(gp_trace,var_names=['gp_pred']), axis=1)
+
+    return np.hstack(gpfits)
+
+
 def kepler_spline(time, flux, flux_mask = None, transit_mask = None, bk_space=1.25, maxiter=5, outlier_cut=3, polydegree=3, reflect=False):
     """Computes a best-fit spline curve for a light curve segment.
     The spline is fit using an iterative process to remove outliers that may cause
@@ -1980,91 +2200,96 @@ def kepler_spline(time, flux, flux_mask = None, transit_mask = None, bk_space=1.
     region_ends  =np.sort(time)[np.hstack((np.where(np.diff(np.sort(time))>bk_space)[0],len(time)-1))]
     spline = []
     mask = []
+    print(region_starts,region_ends)
     for n in range(len(region_starts)):
         ix=(time>=region_starts[n])*(time<=region_ends[n])
-        assert len(time[ix])>4
-
-        # Rescale time into [0, 1].
-        #t_min = np.min(time[ix])
-        #t_max = np.max(time[ix])
-        #n_interior_knots = int(np.round((t_max-t_min)/bk_space))
-        #qs = np.linspace(0, 1, n_interior_knots+2)[1:-1]
-        qs = np.arange(np.min(time[ix]), np.max(time[ix]), bk_space)[1:-1]
-        qs = (qs-np.min(time[ix]))/(np.max(time[ix])-np.min(time[ix]))
-
-        # Values of the best fitting spline evaluated at the time points.
-        ispline = None
-
+        
         # Mask indicating the points used to fit the spline.
         imask = np.ones_like(time[ix]).astype(bool)
         imask = imask*flux_mask[ix] if flux_mask is not None else imask
         imask = imask*transit_mask[ix] if transit_mask is not None else imask
 
-        if reflect and (region_ends[n]-region_starts[n])>1.8*bk_space:
-            incad=np.nanmedian(np.diff(time[ix]))
-            xx=[np.arange(region_starts[n]-bk_space*0.9,region_starts[n]-incad,incad),
-                np.arange(region_ends[n]+incad,region_ends[n]+bk_space*0.9,incad)]
-            # Adding the lc, plus a reflected region either side of each part.
-            # Also adding a boolean array to show where the reflected parts are
-            # Also including zeros to make sure flux spline does not wander far from lightcurve
-            itime=np.hstack((time[ix][0]-1.35*bk_space, time[ix][0]-1.3*bk_space, xx[0], time[ix], xx[1], time[ix][-1]+1.3*bk_space,time[ix][-1]+1.35*bk_space))
-            imask=np.hstack((True, True, imask[:len(xx[0])][::-1], imask, imask[-1*len(xx[1]):][::-1], True, True))
-            iflux=np.hstack((0.0,0.0,flux[ix][:len(xx[0])][::-1], flux[ix], flux[ix][-1*len(xx[1]):][::-1], 0.0, 0.0 ))
-            ibool=np.hstack((np.zeros(len(xx[0])+2),np.ones(np.sum(ix)),np.zeros(len(xx[1])+2))).astype(bool)
+        if len(time[ix])>4 and (time[ix][-1]-time[ix][0])>2.5*bk_space:
 
-        else:
-            itime=time[ix]
-            iflux=flux[ix]
-            ibool=np.tile(True,len(itime))
+            # Rescale time into [0, 1].
+            #t_min = np.min(time[ix])
+            #t_max = np.max(time[ix])
+            #n_interior_knots = int(np.round((t_max-t_min)/bk_space))
+            #qs = np.linspace(0, 1, n_interior_knots+2)[1:-1]
+            qs = np.arange(np.min(time[ix]), np.max(time[ix]), bk_space)[1:-1]
+            qs = (qs-np.min(time[ix]))/(np.max(time[ix])-np.min(time[ix]))
 
-        for ni in range(maxiter):
-            if ispline is not None:
-                # Choose points where the absolute deviation from the median residual is
-                # less than outlier_cut*sigma, where sigma is a robust estimate of the
-                # standard deviation of the residuals from the previous spline.
-                residuals = iflux - ispline
-                
-                new_imask = robust_mean(residuals[imask], cut=outlier_cut)[2]
-                # in ",ni,"th run")
-                if np.all(new_imask):
-                    break    # Spline converged.
-                #Otherwise we're adding the updated mask to the mask
-                imask[imask] = new_imask
+            # Values of the best fitting spline evaluated at the time points.
+            ispline = None
 
-            if np.sum(imask) > 4:
-                # Fewer than 4 points after removing outliers. We could plausibly return
-                # the spline from the previous iteration because it was fit with at least
-                # 4 points. However, since the outliers were such a significant fraction
-                # of the curve, the spline from the previous iteration is probably junk,
-                # and we consider this a fatal error.
-                try:
-                    with warnings.catch_warnings():
-                        # Suppress warning messages printed by pydlutils.bspline. Instead we
-                        # catch any exception and raise a more informative error.
-                        warnings.simplefilter("ignore")
+            if reflect and (region_ends[n]-region_starts[n])>1.8*bk_space:
+                incad=np.nanmedian(np.diff(time[ix]))
+                xx=[np.arange(region_starts[n]-bk_space*0.9,region_starts[n]-incad,incad),
+                    np.arange(region_ends[n]+incad,region_ends[n]+bk_space*0.9,incad)]
+                # Adding the lc, plus a reflected region either side of each part.
+                # Also adding a boolean array to show where the reflected parts are
+                # Also including zeros to make sure flux spline does not wander far from lightcurve
+                itime=np.hstack((time[ix][0]-1.35*bk_space, time[ix][0]-1.3*bk_space, xx[0], time[ix], xx[1], time[ix][-1]+1.3*bk_space,time[ix][-1]+1.35*bk_space))
+                imask=np.hstack((True, True, imask[:len(xx[0])][::-1], imask, imask[-1*len(xx[1]):][::-1], True, True))
+                iflux=np.hstack((0.0,0.0,flux[ix][:len(xx[0])][::-1], flux[ix], flux[ix][-1*len(xx[1]):][::-1], 0.0, 0.0 ))
+                ibool=np.hstack((np.zeros(len(xx[0])+2),np.ones(np.sum(ix)),np.zeros(len(xx[1])+2))).astype(bool)
 
-                        # Fit the spline on non-outlier points.
-                        #curve = BSpline.iterfit(time[mask], flux[mask], bkspace=bk_space)[0]
-                        knots = np.quantile(itime[imask], qs)
-                        #print(np.all(np.isfinite(flux[mask])),np.average(flux[mask]))
-                        tck = splrep(itime[imask], iflux[imask], t=knots, k=polydegree)
-                    ispline = splev(itime, tck)
-
-                    # Evaluate spline at the time points.
-                    #spline = curve.value(time)[0]
-
-                    #spline = np.copy(flux)
-                except (IndexError, TypeError, ValueError) as e:
-                    raise ValueError(
-                            "Fitting spline failed with error: '%s'. This might be caused by the "
-                            "breakpoint spacing being too small, and/or there being insufficient "
-                            "points to fit the spline in one of the intervals." % e)
             else:
-                ispline=np.tile(np.nanmedian(iflux[imask]),len(iflux))
-                break
+                itime=time[ix]
+                iflux=flux[ix]
+                ibool=np.tile(True,len(itime))
+            ni=0
+            while ni<maxiter:
+                if ispline is not None:
+                    # Choose points where the absolute deviation from the median residual is
+                    # less than outlier_cut*sigma, where sigma is a robust estimate of the
+                    # standard deviation of the residuals from the previous spline.
+                    residuals = iflux - ispline
+                    
+                    new_imask = robust_mean(residuals[imask], cut=outlier_cut)[2]
+                    # in ",ni,"th run")
+                    if np.all(new_imask):
+                        break    # Spline converged.
+                    #Otherwise we're adding the updated mask to the mask
+                    imask[imask] = new_imask
+
+                if np.sum(imask) > 4:
+                    # Fewer than 4 points after removing outliers. We could plausibly return
+                    # the spline from the previous iteration because it was fit with at least
+                    # 4 points. However, since the outliers were such a significant fraction
+                    # of the curve, the spline from the previous iteration is probably junk,
+                    # and we consider this a fatal error.
+                    try:
+                        with warnings.catch_warnings():
+                            # Suppress warning messages printed by pydlutils.bspline. Instead we
+                            # catch any exception and raise a more informative error.
+                            warnings.simplefilter("ignore")
+
+                            # Fit the spline on non-outlier points.
+                            #curve = BSpline.iterfit(time[mask], flux[mask], bkspace=bk_space)[0]
+                            knots = np.quantile(itime[imask], qs)
+                            #print(np.all(np.isfinite(flux[mask])),np.average(flux[mask]))
+                            tck = splrep(itime[imask], iflux[imask], t=knots, k=polydegree)
+                        ispline = splev(itime, tck)
+
+                        # Evaluate spline at the time points.
+                        #spline = curve.value(time)[0]
+                        ni+=1
+                        #spline = np.copy(flux)
+                    except (IndexError, TypeError, ValueError) as e:
+                        raise ValueError(
+                                "Fitting spline failed with error: '%s'. This might be caused by the "
+                                "breakpoint spacing being too small, and/or there being insufficient "
+                                "points to fit the spline in one of the intervals." % e)
+                else:
+                    ispline=np.tile(np.nanmedian(iflux[imask]),np.sum(imask))
+                    ni+=1e6
+                
+        else:
+            ispline=np.tile(np.nanmedian(flux[ix]), np.sum(ix))
+            ibool=np.tile(True,np.sum(ix))
         spline+=[ispline[ibool]]
         mask+=[imask[ibool]]
-
 
     return np.hstack(spline), np.hstack(mask)
 
@@ -2268,13 +2493,12 @@ def update_period_w_tls(time,flux,per,N_search_pers=200,per_range_search=0.01,ov
                            oversampling_factor=oversampling,transit_depth_min=100e-6)
     return outtls.period
 
-def iteratively_determine_GP_params(pmmodel,time,flux,flux_err,tdurs,debug=False):
+def iteratively_determine_GP_params(pmmodel,time,flux,flux_err,tdurs,mult_long_timespan=4,mult_short_timespan=1.5,debug=False):
     """Iteratively determining best start parameter arrays for SHO GP kernel w0 and power."""
     lcrange=27
     av_dur = np.average(tdurs)
     exps=np.array([np.log((2*np.pi)/(av_dur)), np.log((2*np.pi)/(0.1*lcrange))])
     #Max power as half the 1->99th percentile in flux
-    print(flux)
     maxpowers=0.5*np.ptp(np.nanpercentile(flux,[2,98]))
     logmaxpowers=np.log(0.5*np.ptp(np.nanpercentile(flux,[1,99])))
     #([np.nanstd(self.lc_fit[scope].loc[~self.lc_fit[scope]['in_trans_all'],'flux'].values) for scope in self.lcs]))
@@ -2291,10 +2515,10 @@ def iteratively_determine_GP_params(pmmodel,time,flux,flux_err,tdurs,debug=False
         while np.any(~success) and target<0.2:
             if not success[0]:
                 try:
-                    low=(2*np.pi)/(abs(np.random.normal(3*(0.03/target)**0.25,1)))#Targetting ~3 days at max (start 3.5d, end 2.0d)
-                    up=np.clip((2*np.pi)/(av_dur*(0.1/target)),2*low,10000) #And ~2.5x average transit duration at min (start 8x, end 0.5x)
+                    low=(2*np.pi)/(abs(np.random.normal(mult_long_timespan*(0.03/target)**0.25,1)))#Targetting ~18 days at max (start 21d, end 12d)
+                    up=np.clip((2*np.pi)/(mult_short_timespan*av_dur*(0.1/target)),2*low,10000) #And ~2.5x average transit duration at min (start 8x, end 0.5x)
                     #itarg=abs(np.random.normal(target,0.5*target))
-                    print(low,up,(2*np.pi)/av_dur,(2*np.pi)/(av_dur*(0.1/target)),2*low)
+                    #print(low,up,(2*np.pi)/(2*av_dur),(2*np.pi)/(av_dur*(0.1/target)),2*low)
                     w0vals = pmx.utils.estimate_inverse_gamma_parameters(lower=low, upper=up, target=target)
                     success[0]=True
                 except:
@@ -2381,4 +2605,374 @@ def calc_trio_periods(trans,minp=18,thresh=0.5):
         return perdf
     else:
         return None
+
+def noneg_get_assymetric_dist(inval,uperr,derr,nd=5000,Nnegthresh=0.001):
+    neg=np.tile(True,nd)
+    retdist=np.zeros(nd)
+    Nnegs=nd
+    while Nnegs>Nnegthresh*nd:
+        retdist[neg]=get_assymetric_dist(inval,uperr,derr,Nnegs,returndist=True)
+        neg=retdist<0
+        Nnegs=np.sum(neg)
+    return abs(retdist)
+
+def correct_lightcurve_steps(lc,time_jump_norm=0.3,diff_sigma_thresh=3,do_polyfit=False,polyfit_deg=2):
+    from scipy.stats import norm
+    #Find jumps with large flux jump over small time difference
+    if not hasattr(lc,'bin_flux'):
+        lc.bin()
+    diff_sigma = abs(np.diff(lc.bin_flux[np.isfinite(lc.bin_flux)]))/0.5*(lc.bin_flux_err[np.isfinite(lc.bin_flux)][:-1]+lc.bin_flux_err[np.isfinite(lc.bin_flux)][1:])
+    diff_time = norm(np.log(time_jump_norm),1.5).pdf(np.log(np.diff(lc.bin_time[np.isfinite(lc.bin_flux)])))
+    wh=np.where(diff_sigma*diff_time>diff_sigma_thresh)[0]
+    jumps=np.hstack([lc.bin_time[0]-0.2,0.5*(lc.bin_time[np.isfinite(lc.bin_flux)][:-1][wh]+lc.bin_time[np.isfinite(lc.bin_flux)][1:][wh]),lc.bin_time[-1]+0.2])
+    shifts=np.zeros(len(lc.time))
+    for j in range(1, len(jumps)-1):
+        pre_jump_time=np.max(lc.time[lc.time<jumps[j]])
+        post_jump_time=np.min(lc.time[lc.time>jumps[j]])
+        jumpwidth=jumps[j+1]-jumps[j]
+        edge_width = np.clip(jumpwidth*0.03,0.05,0.3)
+        pre_jump_med = np.nanmedian(lc.flux[(lc.time>(pre_jump_time-edge_width))&(lc.time<jumps[j])])
+        post_jump_med = np.nanmedian(lc.flux[(lc.time<(post_jump_time+edge_width))&(lc.time>jumps[j])])
+        #print(j,post_jump_med,pre_jump_med,edge_width,np.sum((lc.time>(pre_jump_time-edge_width))&(lc.time<jumps[j])),np.sum((lc.time<(post_jump_time+edge_width))&(lc.time>jumps[j])))
+        shifts[lc.time>jumps[j]]+=(post_jump_med-pre_jump_med)
+
+    #Renormalising for each large time jumps
+    time_jumps = np.hstack([lc.time[0]-0.2,
+                            0.5*(lc.time[:-1][np.where(np.diff(lc.time)>10)[0]]+lc.time[1:][np.where(np.diff(lc.time)>10)[0]]),
+                            lc.time[-1]+0.2])
+    for j in range(1,len(time_jumps)-2):
+        ix = (lc.time>time_jumps[j]) & (lc.time>time_jumps[j+1]) 
+        print(np.sum(ix),np.sum(ix&lc.mask))
+        if do_polyfit:
+            shifts[ix]-=np.polyval(np.polyfit(lc.time[ix&lc.mask],shifts[ix&lc.mask],polyfit_deg),lc.time[ix])
+        else:
+            shifts[ix]-=np.nanmedian(shifts[ix])
+    return shifts
+
+def u_to_q(us):
+    #Limb darkening convert quadratic parameters to kipping-transformed params
+    return (us[0] + us[1])**2, 0.5*us[0]/(us[0] + us[1])
     
+def q_to_u(qs):
+    #Limb darkening convert kipping-transformed params to quadratic parameters
+    return 2*np.sqrt(qs[0])*qs[1], np.sqrt(qs[0])*(1 - 2*qs[1])
+
+def get_assymetric_dist(inval,uperr,derr,nd=5000,returndist=False):
+    derr=abs(derr)
+
+    #Up and Down errors indistinguishable, returning numpy array:
+    if abs(np.log10(uperr/derr)-1.0)<0.05:
+        if returndist:
+            return np.random.normal(inval,0.5*(uperr+derr),nd)
+        else:
+            return inval, uperr, derr
+    else:
+        #Fitting some skew to the distribution to match up/down errors.
+        if derr>uperr:
+            minusitall=True
+            derr,uperr=uperr,derr
+        else:
+            minusitall=False
+        mult= -1.0 if inval<0.0 else 1.0
+        inval=mult*inval
+        val = derr*3 if inval>derr*3 else inval
+        plushift= 2.5*derr if val<1.2*derr else 0
+        val+=plushift
+        #finding n exponent for which power to this produces equidistant errors
+        findn = lambda n : abs(1.0-(((val+uperr)**(n)-(val)**(n))/((val)**(n)-(val-derr)**(n))))
+        import scipy.optimize as op
+        res=op.minimize(findn,0.5)
+        try:
+            dist=np.random.normal(val**(res.x),abs((val**(res.x))-(val-derr)**(res.x)),nd)**(1.0/res.x)
+            n=0
+            if np.sum(np.isnan(dist))!=nd:
+                while np.sum(np.isnan(dist))>0 or n>10:
+                    dist[np.isnan(dist)]=np.random.normal(val**(res.x),abs((val**(res.x))-(val-derr)**(res.x)),np.sum(np.isnan(dist)))**(1.0/res.x)
+                    n+=1
+                #print np.sum(np.isnan(dist))
+                #print str(derr)+' vs '+str(np.median(dist)-np.percentile(dist,16))+"  |  "+str(uperr)+' vs '+str(np.percentile(dist,84)-np.median(dist))
+                if plushift!=0:
+                    dist-=plushift
+                if minusitall:
+                    dist=-1*(dist-val)+val
+                dist=mult*(dist+inval-derr*3) if inval>derr*3 else mult*(dist)
+                if returndist:
+                    return dist
+                else:
+                    if mult==-1:
+                        return [np.median(dist),np.percentile(dist,84)-np.median(dist),np.median(dist)-np.percentile(dist,16)]
+                    else:
+                        return [np.median(dist),np.median(dist)-np.percentile(dist,16),np.percentile(dist,84)-np.median(dist)]
+            else:
+                raise ValueError()
+        except:
+            return np.zeros(3)
+        
+def out_of_transit_binning(time, flux, flux_err, near_transit_mask, flux_mask=None, in_transit_mask=None, binsize=1/48, return_arrays=True):
+    """Out-Of-Transit binning of the lightcurve (to speed up computation)
+
+    Args:
+        near_transit_mask (np.ndarray, boolean): [description]
+        binsize (float, optional): [description]. Defaults to 1/48.
+    """
+    #Binning the timeseries while masking the near-transit regions
+    binlc=robust_binning(time[~near_transit_mask],flux[~near_transit_mask],flux_err[~near_transit_mask],mask=flux_mask[~near_transit_mask], binsize=binsize)
+    #Stacking the binned out-of-transit regions with the unbinned near-transit data:
+    finites=np.isfinite(binlc['time'])&np.isfinite(binlc['flux'])&np.isfinite(binlc['flux_err'])
+    ootlcdict={"time":np.hstack((binlc['time'][finites],
+                                        time[near_transit_mask])),
+               "flux":np.hstack((binlc['flux'][finites],
+                                        flux[near_transit_mask])),
+               "flux_err":np.hstack((binlc['flux_err'][finites],
+                                        flux_err[near_transit_mask]))}
+    ootlcdict['near_trans']=np.hstack((np.tile(False,np.sum(finites)),
+                                                np.tile(True,np.sum(near_transit_mask)) ))
+    if type(in_transit_mask)==dict:
+        ootlcdict['n_trans']=np.hstack((np.tile(False,np.sum(finites)),
+                                                in_transit_mask['all'][near_transit_mask] ))
+    elif type(in_transit_mask)==np.ndarray:
+        ootlcdict['in_trans']=np.hstack((np.tile(False,np.sum(finites)),
+                                                in_transit_mask[near_transit_mask] ))
+    
+    #Sorting by time:
+    for col in [c for c in ootlcdict if c!='time']:
+        ootlcdict[col]=ootlcdict[col][np.argsort(ootlcdict['time'])]
+    ootlcdict['time']=np.sort(ootlcdict['time'])
+    return ootlcdict
+
+from exoplanet.utils import as_tensor_variable
+from exoplanet.compat import tensor as pt
+
+def get_cl(u1, u2):
+    u1 = as_tensor_variable(u1)
+    u2 = as_tensor_variable(u2)
+    c0 = 1 - u1 - 1.5 * u2
+    c1 = u1 + 2 * u2
+    c2 = -0.25 * u2
+    norm = np.pi * (c0 + c1 / 1.5)
+    return pt.stack([c0, c1, c2]) / norm
+
+def quad_limbdark_light_curve(c, b, r):
+    b = as_tensor_variable(b)
+    r = as_tensor_variable(r)
+    return pt.dot(ops.quad_solution_vector(b, r), c) - 1.0
+
+class SingleOrbit:
+    """An orbit representing a long-period planet transiting a common central
+
+    This orbit is parameterized by the observables of a transiting system,
+    period, phase, duration, and impact parameter.
+
+    Args:
+        t0: The midpoint time of a reference transit for each planet in days.
+        b: The impact parameters of the orbits.
+        duration: The durations of the transits in days.
+        r_star: The radius of the star in ``R_sun``.
+    """
+    
+
+    def __init__(self, duration, t0=0.0, b=0.0, r_star=1.0, ror=0):
+        self.t0 = as_tensor_variable(t0)
+        self.b = as_tensor_variable(b)
+        self.duration = as_tensor_variable(duration)
+        self.r_star = as_tensor_variable(r_star)
+
+        self._b_norm = self.b * self.r_star
+        x2 = r_star**2 * ((1 + ror) ** 2 - b**2)
+        self.speed = 2 * np.sqrt(x2) / duration
+        
+    def get_relative_position(self, t, light_delay=False):
+        """The planets' positions relative to the star
+
+        Args:
+            t: The times where the position should be evaluated.
+
+        Returns:
+            The components of the position vector at ``t`` in units of
+            ``R_sun``.
+
+        """
+        if light_delay:
+            raise NotImplementedError(
+                "Light travel time delay is not implemented for simple orbits"
+            )
+        dt = pt.shape_padright(t) - self.t0
+        x = pt.squeeze(self.speed * dt)
+        y = pt.squeeze(self._b_norm + pt.zeros_like(dt))
+        m = pt.abs(dt) < 0.5 * self.duration
+        z = pt.squeeze(m * 1.0 - (~m) * 1.0)
+        return x, y, z
+    
+    def in_transit(self, t, r=None, texp=None, light_delay=False):
+        """Get a list of timestamps that are in transit
+
+        Args:
+            t (vector): A vector of timestamps to be evaluated.
+            r (Optional): The radii of the planets.
+            texp (Optional[float]): The exposure time.
+
+        Returns:
+            The indices of the timestamps that are in transit.
+
+        """
+        if light_delay:
+            raise NotImplementedError(
+                "Light travel time delay is not implemented for simple orbits"
+            )
+        dt = pt.shape_padright(t) - self.t0
+        if r is None:
+            tol = 0.5 * self.duration
+        else:
+            x = (r + self.r_star) ** 2 - self._b_norm**2
+            tol = pt.sqrt(x) / self.speed
+        if texp is not None:
+            tol += 0.5 * texp
+        mask = pt.any(pt.abs(dt) < tol, axis=-1)
+        return pt.arange(t.size)[mask]
+
+class DuoOrbit:
+    """An orbit representing a long-period planet transiting a common central
+
+    This orbit is parameterized by the observables of a transiting system,
+    period, phase, duration, and impact parameter.
+
+    Args:
+        t0: The midpoint time of a reference transit for each planet in days.
+        b: The impact parameters of the orbits.
+        duration: The durations of the transits in days.
+        r_star: The radius of the star in ``R_sun``.
+        maxper_span: The ratio of max period divided by the span between first and last t0
+    """
+
+    def __init__(self, duration, t0s, b, r_star=1.0, ror=0, maxper_span=1):
+        self.t0s = as_tensor_variable(t0s)
+        self.maxper = as_tensor_variable(t0s[-1]-t0s[0])/maxper_span
+        self.b = as_tensor_variable(b)
+        self.duration = as_tensor_variable(duration)
+        self.r_star = as_tensor_variable(r_star)
+
+        self._b_norm = self.b * self.r_star
+        x2 = r_star**2 * ((1 + ror) ** 2 - b**2)
+        self.speed = 2 * np.sqrt(x2) / duration
+        
+    def get_relative_position(self, t, light_delay=False):
+        """The planets' positions relative to the star
+
+        Args:
+            t: The times where the position should be evaluated.
+
+        Returns:
+            The components of the position vector at ``t`` in units of
+            ``R_sun``.
+
+        """
+        if light_delay:
+            raise NotImplementedError(
+                "Light travel time delay is not implemented for simple orbits"
+            )
+        dt = pt.mod(pt.shape_padright(t) - self.t0s[0] - 0.5*self.maxper,self.maxper) - 0.5*self.maxper
+        x = pt.squeeze(self.speed * dt)
+        y = pt.squeeze(self._b_norm + pt.zeros_like(dt))
+        m = pt.abs(dt) < 0.5 * self.duration
+        z = pt.squeeze(m * 1.0 - (~m) * 1.0)
+        return x, y, z
+    
+    def in_transit(self, t, r=None, texp=None, light_delay=False):
+        """Get a list of timestamps that are in transit
+
+        Args:
+            t (vector): A vector of timestamps to be evaluated.
+            r (Optional): The radii of the planets.
+            texp (Optional[float]): The exposure time.
+
+        Returns:
+            The indices of the timestamps that are in transit.
+
+        """
+        if light_delay:
+            raise NotImplementedError(
+                "Light travel time delay is not implemented for simple orbits"
+            )
+        dt = pt.mod(pt.shape_padright(t) - self.t0s[0] - 0.5*self.maxper,self.maxper) - 0.5*self.maxper
+        if r is None:
+            tol = 0.5 * self.duration
+        else:
+            x = (r + self.r_star) ** 2 - self._b_norm**2
+            tol = pt.sqrt(x) / self.speed
+        if texp is not None:
+            tol += 0.5 * texp
+        mask = pt.any(pt.abs(dt) < tol, axis=-1)
+        return pt.arange(t.size)[mask]
+
+class AmbigOrbit:
+    """An orbit representing a long-period planet transiting a common central
+
+    This orbit is parameterized by the observables of a transiting system,
+    period, phase, duration, and impact parameter.
+
+    Args:
+        t0: The midpoint time of a reference transit for each planet in days.
+        b: The impact parameters of the orbits.
+        duration: The durations of the transits in days.
+        r_star: The radius of the star in ``R_sun``.
+    """
+
+    def __init__(self, duration, t0s, b, maxper_span, r_star=1.0, ror=0,):
+        self.t0s = as_tensor_variable(t0s)
+        self.span = as_tensor_variable(t0s[1]-t0s[0])
+        self.b = as_tensor_variable(b)
+        self.duration = as_tensor_variable(duration)
+        self.r_star = as_tensor_variable(r_star)
+
+        self._b_norm = self.b * self.r_star
+        x2 = r_star**2 * ((1 + ror) ** 2 - b**2)
+        self.speed = 2 * np.sqrt(x2) / duration
+        
+    def get_relative_position(self, t, light_delay=False):
+        """The planets' positions relative to the star
+
+        Args:
+            t: The times where the position should be evaluated.
+
+        Returns:
+            The components of the position vector at ``t`` in units of
+            ``R_sun``.
+
+        """
+        if light_delay:
+            raise NotImplementedError(
+                "Light travel time delay is not implemented for simple orbits"
+            )
+        dt = pt.mod(pt.shape_padright(t) - self.t0s[0] - 0.5*self.span,self.span) - 0.5*self.span
+        x = pt.squeeze(self.speed * dt)
+        y = pt.squeeze(self._b_norm + pt.zeros_like(dt))
+        m = pt.abs(dt) < 0.5 * self.duration
+        z = pt.squeeze(m * 1.0 - (~m) * 1.0)
+        return x, y, z
+    
+    def in_transit(self, t, r=None, texp=None, light_delay=False):
+        """Get a list of timestamps that are in transit
+
+        Args:
+            t (vector): A vector of timestamps to be evaluated.
+            r (Optional): The radii of the planets.
+            texp (Optional[float]): The exposure time.
+
+        Returns:
+            The indices of the timestamps that are in transit.
+
+        """
+        if light_delay:
+            raise NotImplementedError(
+                "Light travel time delay is not implemented for simple orbits"
+            )
+        dt = pt.mod(pt.shape_padright(t) - self.t0s[0] - 0.5*self.span,self.span) - 0.5*self.span
+        if r is None:
+            tol = 0.5 * self.duration
+        else:
+            x = (r + self.r_star) ** 2 - self._b_norm**2
+            tol = pt.sqrt(x) / self.speed
+        if texp is not None:
+            tol += 0.5 * texp
+        mask = pt.any(pt.abs(dt) < tol, axis=-1)
+        return pt.arange(t.size)[mask]

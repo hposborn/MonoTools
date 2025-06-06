@@ -385,18 +385,21 @@ class lc():
                 trans=ephems[name]['t0']+trans*ephems[name]['p']
                 self.in_trans+=np.min(abs(self.time[:,None]-trans[None,:]),axis=1)<(0.51*ephems[name]['dur'])
             transit_mask=~self.in_trans
+        if ephems is not None and np.all(['dur' in ephems[pl] for pl in ephems]):
+            tdurs=[ephems[pl]['dur'] for pl in ephems]
+        else:
+            tdurs=[0.3]
 
+        if transit_mask is None and hasattr(self,'in_trans') and ((type(self.in_trans) is dict and np.sum(self.in_trans['all'])>0) or (type(self.in_trans) is np.ndarray and np.sum(self.in_trans)>0)) and type(transit_mask)!=np.ndarray:
+            if type(self.in_trans) is dict:
+                transit_mask = ~self.in_trans['all']
+            else:
+                transit_mask = ~self.in_trans[:]
+        elif transit_mask is None:
+            transit_mask = np.tile(True,len(self.time))
         if flattype=='bspline':
-            if transit_mask is None and hasattr(self,'in_trans') and ((type(self.in_trans) is dict and np.sum(self.in_trans['all'])>0) or (type(self.in_trans) is np.ndarray and np.sum(self.in_trans)>0)) and type(transit_mask)!=np.ndarray:
-                if type(self.in_trans) is dict:
-                    transit_mask = ~self.in_trans['all']
-                else:
-                    transit_mask = ~self.in_trans[:]
-            elif transit_mask is None:
-                transit_mask = np.tile(True,len(self.time))
             for its in timeseries:
                 timearr=self.bin_time[:] if 'bin_' in its else self.time[:]
-
                 maskarr=self.mask[:] if 'bin_' not in its else None
                 if flatcadences!='all':
                     if 'bin_' in its:
@@ -406,11 +409,33 @@ class lc():
                 else:
                     cadmask=np.tile(True,len(timearr))
                 spline=np.zeros(len(timearr))
+                
                 spline[cadmask] = tools.kepler_spline(timearr[cadmask],getattr(self,its)[cadmask],flux_mask=maskarr[cadmask],
                                                 maxiter=maxiter,bk_space=knot_dist,transit_mask=transit_mask[cadmask],reflect=reflect)[0]
                 setattr(self, its+'_spline', spline)
                 self.timeseries+=[its+'_spline']
                 setattr(self, its+'_flat', getattr(self,its) - spline)
+                self.timeseries+=[its+'_flat']
+        elif flattype=='gp':
+            for its in timeseries:
+                timearr=self.bin_time[:] if 'bin_' in its else self.time[:]
+                maskarr=self.mask[:] if 'bin_' not in its else None
+                if flatcadences!='all':
+                    if 'bin_' in its:
+                        cadmask=np.isin(self.bin_cadence,np.array(flatcadences.split(',')))
+                    else:
+                        cadmask=np.isin(self.cadence,np.array(flatcadences.split(',')))
+                else:
+                    cadmask=np.tile(True,len(timearr))
+                if hasattr(self,its+'_err'):
+                    iflux_err=getattr(self,its+'_err')[cadmask]
+                else:
+                    iflux_err=np.tile(1.06*np.nanmedian(abs(np.diff(getattr(self,its)[cadmask]))),np.sum(cadmask))
+                gpfit=np.zeros(len(timearr))
+                gpfit[cadmask] = tools.gp_flatten(timearr[cadmask],getattr(self,its)[cadmask], iflux_err, flux_mask = maskarr, tdurs=tdurs, transit_mask = transit_mask, npts_max=6000)
+                setattr(self, its+'_gpfit', gpfit)
+                self.timeseries+=[its+'_gpfit']
+                setattr(self, its+'_flat', getattr(self,its) - gpfit)
                 self.timeseries+=[its+'_flat']
 
         elif flattype=='polystep':
@@ -487,7 +512,7 @@ class lc():
             setattr(self,its+'_flat',flats[its])
             self.timeseries+=[its+'_flat',its+'_spline']
     
-    def OOTbin(self,near_transit_mask,use_flat=False,binsize=1/48):
+    def OOTbin(self, near_transit_mask, use_flat=False, binsize=1/48, return_arrays=False):
         """Out-Of-Transit binning of the lightcurve (to speed up computation)
 
         Args:
@@ -510,18 +535,21 @@ class lc():
         assert hasattr(self,'in_trans')
         if type(self.in_trans)==dict:
             ootlcdict['ootbin_in_trans']=np.hstack((np.tile(False,np.sum(np.isfinite(getattr(self,"bin_"+flux_name)))),
-                                                self.in_trans['all'][near_transit_mask*self.mask] ))
+                                                    self.in_trans['all'][near_transit_mask*self.mask] ))
         else:
             ootlcdict['ootbin_in_trans']=np.hstack((np.tile(False,np.sum(np.isfinite(getattr(self,"bin_"+flux_name)))),
-                                                self.in_trans[near_transit_mask*self.mask] ))
-
-        #Sorting these timeseries by the stacked time
-        for key in ["ootbin_"+flux_name,'ootbin_flux_err','ootbin_cadence','ootbin_near_trans','ootbin_in_trans']:
-            setattr(self,key,ootlcdict[key][np.argsort(ootlcdict['ootbin_time'])])
-        setattr(self,"ootbin_time",np.sort(ootlcdict['ootbin_time']))
+                                                    self.in_trans[near_transit_mask*self.mask] ))
+        if not return_arrays:
+            #Sorting these timeseries by the stacked time
+            for key in ["ootbin_"+flux_name,'ootbin_flux_err','ootbin_cadence','ootbin_near_trans','ootbin_in_trans']:
+                setattr(self,key,ootlcdict[key][np.argsort(ootlcdict['ootbin_time'])])
+            setattr(self,"ootbin_time",np.sort(ootlcdict['ootbin_time']))
 
         #Rebinning without the near-transit mask
         self.bin(timeseries=['flux','flux_flat'],binsize=binsize)
+
+        if return_arrays:
+            return ootlcdict
 
     def bin(self,timeseries=['flux'],binsize=1/48,split_gap_size=0.8,use_masked=True, do_weighting=True,
             extramask=None, overwrite=False, binsuffix='', **kwargs):
@@ -658,7 +686,7 @@ class lc():
         sns.set_palette('viridis')
         if 'flux_flat' in timeseries and not hasattr(self,'flux_flat'):
             print("Flattening", hasattr(self,'flux_flat'))
-            self.flatten()
+            self.flatten(**kwargs)
 
         if plot_ephem is not None:
             assert type(plot_ephem) is dict
@@ -945,8 +973,10 @@ class multilc(lc):
         
         # TESS ID and data:
         if (overwrite or self.all_ids['tess']=={}) and ('all' in search or 'tess' in search):
-            tess_id = Catalogs.query_criteria(coordinates=self.radec.transform_to(FK5(equinox='J2000.0')),radius=12*u.arcsec,catalog="TIC",
-                                                objType="STAR",columns=['ID','KIC','Tmag']).to_pandas()
+            tess_id=Catalogs.query_criteria(coordinates=self.radec,radius=12*u.arcsec,catalog="TIC",objType="STAR").to_pandas().loc[:,['ID','KIC','Tmag']]
+
+            # tess_id = Catalogs.query_criteria(coordinates=self.radec.transform_to(FK5(equinox='J2000.0')),radius=12*u.arcsec,catalog="TIC",
+            #                                     objType="STAR",columns=['ID','KIC','Tmag']).to_pandas()
             if tess_id is not None and len(tess_id)>0:
                 tess_id=tess_id.iloc[np.argmin(tess_id['Tmag'])] if type(tess_id)==pd.DataFrame else tess_id
                 self.all_ids['tess']={'id':tess_id['ID']}
@@ -1087,9 +1117,9 @@ class multilc(lc):
         most_recent_sect = int(np.ceil((Time(datetime.now().strftime("%Y-%m-%d")).jd-2458325.29278)/27.295))
         epoch=pd.read_csv(tools.MonoData_tablepath+"/tess_lc_locations.csv",index_col=0)
         if most_recent_sect>np.max(np.array(list(epoch.index))) and self.update_tess_file:
+            print(most_recent_sect,np.max(np.array(list(epoch.index))))
             for newsec in np.arange(np.max(np.array(list(epoch.index))),most_recent_sect+1,1):
                 epoch=tools.update_lc_locs(epoch,newsec)
-            #print(epoch)
         
         if sectors == 'all':
             if hasattr(self,'radec'):
@@ -1097,6 +1127,7 @@ class multilc(lc):
             else:
                 sect_obs=tools.observed(int(id))
             #print({key:sect_obs[key] for key in epoch.index})
+            #print(epoch.index,sect_obs.keys())
             epochs=[key for key in epoch.index if sect_obs[key]]
 
             if epochs==[]:
@@ -1902,6 +1933,7 @@ class multilc(lc):
         import seaborn as sns
         sns.set_palette('viridis')
         if 'flux_flat' in timeseries and not hasattr(self,'flux_flat'):
+            print("flattening")
             self.flatten(**kwargs)
                 
         for cad in self.init_plot_info['ordered_cadences']:
