@@ -25,7 +25,7 @@ from astropy.coordinates import SkyCoord
 from astropy import units as u
 from astropy.io import fits
 
-from . import tools, starpars
+from . import tools
 
 import seaborn as sns
 import logging
@@ -1082,7 +1082,7 @@ class multilc(lc):
         else:
             from astroquery.mast import Observations
             #Normal K2 observation:
-            df,_=starpars.GetExoFop(id,"k2")
+            df,_=tools.GetExoFop(id,"k2")
             obs_table = Observations.query_object("EPIC "+str(int(id)))
             cands=list(np.unique(obs_table[obs_table['obs_collection']=='K2']['sequence_number'].data.data).astype(str))
         
