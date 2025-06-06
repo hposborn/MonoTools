@@ -44,8 +44,6 @@ if os.environ.get('MONOTOOLSPATH') is None:
 else:
     MonoData_savepath = os.environ.get('MONOTOOLSPATH')
 
-from . import starpars
-
 id_dic={'TESS':'TIC','tess':'TIC','Kepler':'KIC','kepler':'KIC','KEPLER':'KIC',
         'K2':'EPIC','k2':'EPIC','CoRoT':'CID','corot':'CID'}
 lc_dic={'tess':'ts','kepler':'k1','k2':'k2','corot':'co','cheops':'ch'}
@@ -544,6 +542,174 @@ def get_k2_lc(epic,camp,saveloc=None,pers=None,durs=None,t0s=None,use_ppt=True):
     elif len(lcs.keys())==0:
         return None
 
+def GetExoFop(icid, mission='tess',file=''):
+    cols={'Telescope':'telescope','Instrument':'instrument','Teff (K)':'teff','Teff (K) Error':'teffe',
+          'Teff':'teff','Teff Error':'teffe','log(g)':'logg',
+          'log(g) Error':'logge','Radius (R_Sun)':'rad','Radius':'rad','Radius Error':'rade',
+          'Radius (R_Sun) Error':'rade','logR\'HK':'logrhk',
+          'logR\'HK Error':'logrhke','S-index':'sindex','S-index Error':'sindexe','H-alpha':'haplha','H-alpha Error':'halphae',
+          'Vsini':'vsini','Vsini Error':'vsinie','Rot Per':'rot_per','Rot Per Error':'rot_pere','Metallicity':'feh',
+          'Metallicity Error':'fehe','Mass (M_Sun)':'mass','Mass':'mass','Mass Error':'masse',
+          'Mass (M_Sun) Error':'masse','Density (g/cm^3)':'rho_gcm3',
+          'Density':'rho_gcm3',
+          'Density (g/cm^3) Error':'rho_gcm3e','Luminosity':'lum','Luminosity Error':'lume',
+          'Observation Time (BJD)':'obs_time_bjd','Distance':'dis','Distance Error':'dise',
+          'RV (m/s)':'rv_ms','RV Error':'rv_mse','Distance (pc)':'dis','Distance (pc) Error':'dise',
+          '# of Contamination sources':'n_contams', 'B':'bmag', 'B Error':'bmage', 'Dec':'dec', 'Ecliptic Lat':'lat_ecl',
+          'Ecliptic Long':'long_ecl', 'Gaia':'gmag', 'Gaia Error':'gmage', 'Galactic Lat':'lat_gal', 'Galactic Long':'long_gal',
+          'H':'hmag', 'H Error':'hmage', 'In CTL':'in_ctl', 'J':'jmag', 'J Error':'jmage', 'K':'kmag', 'K Error':'kmage',
+          'Planet Name(s)':'planet_names', 'Proper Motion Dec (mas/yr)':'pm_dec',
+          'Proper Motion RA (mas/yr)':'pm_ra', 'RA':'ra','RA (J2015.5)':'ra', 'Dec (J2015.5)':'dec',
+          'Star Name & Aliases':'star_name', 'TESS':'tmag','Kep':'kepmag',
+          'TESS Error':'tmage', 'TIC Contamination Ratio':'ratio_contams', 'TOI':'toi', 'V':'vmag', 'V Error':'vmage',
+          'WISE 12 micron':'w3mag', 'WISE 12 micron Error':'w3mage', 'WISE 22 micron':'w4mag',
+          'WISE 22 micron Error':'w4mage', 'WISE 3.4 micron':'w1mag', 'WISE 3.4 micron Error':'w1mage',
+          'WISE 4.6 micron':'w2mag', 'WISE 4.6 micron Error':'w2mag', 'n_TOIs':'n_tois','spec':'spec',
+          'Campaign':'campaign','Object Type':'objtype'}
+    '''
+    Index(['mission', 'ra', 'dec', 'GalLong', 'GalLat', 'Aliases', 'campaign',
+           'Proposals', 'objtype', 'bmag', 'bmag_err', 'g', 'g_err', 'vmag',
+           'vmag_err', 'r', 'r_err', 'kepmag', 'kepmag_err', 'i', 'i_err', 'jmag',
+           'jmag_err', 'hmag', 'hmag_err', 'kmag', 'kmag_err', 'w1mag',
+           'w1mag_err', 'w2mag', 'w2mag_err', 'w3mag', 'w3mag_err', 'w4mag',
+           'w4mag_err', 'Teff', 'Teff_err', 'logg', 'logg_err', 'Radius',
+           'Radius_err', 'FeH', 'FeH_err', 'Distance', 'Distance_err', 'Mass',
+           'Mass_err', 'Density', 'Density_err', 'spec', 'bmagem', 'bmagep', 'gem',
+           'gep', 'vmagem', 'vmagep', 'rem', 'rep', 'kepmagem', 'kepmagep'],
+          dtype='object')
+    Index(['iem', 'iep', 'jmagem', 'jmagep', 'hmagem', 'hmagep', 'kmagem',
+           'kmagep', 'w1magem', 'w1magep', 'w2magem', 'w2magep', 'w3magem',
+           'w3magep', 'w4magem', 'w4magep', 'Teffem', 'Teffep', 'loggem', 'loggep',
+           'Radiusem', 'Radiusep', 'FeHem', 'FeHep', 'Distanceem', 'Distanceep',
+           'Massem', 'Massep', 'Densityem', 'Densityep', 'bmage', 'ge', 'vmage',
+           're', 'ie', 'jmage', 'hmage', 'kmage', 'w1mage', 'w2mage', 'w3mage',
+           'Teffe', 'logge', 'Radiuse', 'FeHe', 'Distancee', 'Masse', 'Densitye'],
+          dtype='object')
+    '''
+
+    #Strips online file for a given epic/tic
+    if mission.lower() in ['kep','kepler']:
+        kicinfo=GetKICinfo(icid)
+        #Checking if the object is also in the TIC:
+        ticout=Catalogs.query_criteria(catalog="Tic",coordinates=str(kicinfo['ra'])+','+str(kicinfo['dec']),
+                                       radius=20*u.arcsecond,objType="STAR",columns=['ID','KIC','Tmag','Vmag']).to_pandas()
+        if len(ticout.shape)>1:
+            ticout=ticout.loc[np.argmin(ticout['Tmag'])]
+            icid=ticout['ID']
+            mission='tess'
+        elif ticout.shape[0]>0:
+            #Not in TIC
+            return kicinfo
+    else:
+        kicinfo = None
+    assert mission.lower() in ['tess','k2','corot']
+    outdat={}
+    outdat['mission']=mission.lower()
+    #Searching TESS and K2 ExoFop for info (and TIC-8 info):
+    req=requests.get("https://exofop.ipac.caltech.edu/"+mission.lower()+"/download_target.php?id="+str(icid), timeout=120)
+    if req.status_code==200:
+        #Splitting into each 'paragraph'
+        sections=req.text.split('\n\n')
+        for sect in sections:
+            #Processing each section:
+            if sect[:2]=='RA':
+                #This is just general info - saving
+                for line in sect.split('\n'):
+                    if mission.lower()=='tess':
+                        if line[:28].strip() in cols:
+                            outdat[cols[line[:28].strip()]]=line[28:45].split('  ')[0].strip()
+                        else:
+                            outdat[re.sub('\ |\^|\/|\{|\}|\(|\)|\[|\]', '',line[:28])]=line[28:45].split('  ')[0].strip()
+                    elif mission.lower()=='k2':
+                        if line[:13].strip() in cols:
+                            outdat[cols[line[:13].strip()]]=line[13:].strip()
+                        else:
+                            outdat[re.sub('\ |\^|\/|\{|\}|\(|\)|\[|\]', '',line[:13])]=line[13:].strip()
+            elif sect[:24]=='TESS Objects of Interest':
+                #Only taking number of TOIs and TOI number:
+                outdat['n_TOIs']=len(sect.split('\n'))-2
+                outdat['TOI']=sect.split('\n')[2][:15].strip()
+            elif sect[:7]=='STELLAR':
+                #Stellar parameters
+                labrow=sect.split('\n')[1]
+                boolarr=np.array([s==' ' for s in labrow])
+                splits=[0]+list(2+np.where(boolarr[:-3]*boolarr[1:-2]*~boolarr[2:-1]*~boolarr[3:])[0])+[len(labrow)]
+                labs = [re.sub('\ |\^|\/|\{|\}|\(|\)|\[|\]', '',labrow[splits[i]:splits[i+1]]) for i in range(len(splits)-1)]
+                spec=[]
+                if mission.lower()=='tess':
+                    #Going through all sources of Stellar params:
+                    for row in sect.split('\n')[2:]:
+                        stpars=np.array([row[splits[i]:splits[i+1]].strip() for i in range(len(splits)-1)])
+                        for nl in range(len(labs)):
+                            if labs[nl].strip() not in cols:
+                                label=re.sub('\ |\/|\{|\}|\(|\)|\[|\]', '', labs[nl]).replace('Error','_err')
+                            else:
+                                label=cols[labs[nl].strip()]
+                            if not label in outdat.keys() and stpars[1]=='' and stpars[nl].strip()!='':
+                                #Stellar info just comes from TIC, so saving simply:
+                                outdat[label] = stpars[nl]
+                            elif stpars[1]!='' and stpars[nl].strip()!='':
+                                #Stellar info comes from follow-up, so saving with _INSTRUMENT:
+                                spec+=['_'+row[splits[3]:splits[4]].strip()]
+                                outdat[labs[nl]+'_'+stpars[1]] = stpars[nl]
+                elif mission.lower()=='k2':
+                    for row in sect.split('\n')[1:]:
+                        if row[splits[0]:splits[1]].strip() not in cols:
+                            label=re.sub('\ |\/|\{|\}|\(|\)|\[|\]', '', row[splits[0]:splits[1]]).replace('Error','_err')
+                        else:
+                            label=cols[row[splits[0]:splits[1]].strip()]
+
+                        if not label in outdat.keys() and row[splits[3]:splits[4]].strip()=='huber':
+                            outdat[label] = row[splits[1]:splits[2]].strip()
+                            outdat[label+'_err'] = row[splits[2]:splits[3]].strip()
+                        elif label in outdat.keys() and row[splits[3]:splits[4]].strip()!='huber':
+                            if row[splits[3]:splits[4]].strip()!='macdougall':
+                                spec+=['_'+row[splits[3]:splits[4]].strip()]
+                                #Adding extra stellar params with _user (no way to tell the source, e.g. spectra)
+                                outdat[label+'_'+row[splits[3]:splits[4]].strip()] = row[splits[1]:splits[2]].strip()
+                                outdat[label+'_err'+'_'+row[splits[3]:splits[4]].strip()] = row[splits[2]:splits[3]].strip()
+                outdat['spec']=None if len(spec)==0 else ','.join(list(np.unique(spec)))
+            elif sect[:9]=='MAGNITUDE':
+                labrow=sect.split('\n')[1]
+                boolarr=np.array([s==' ' for s in labrow])
+                splits=[0]+list(2+np.where(boolarr[:-3]*boolarr[1:-2]*~boolarr[2:-1]*~boolarr[3:])[0])+[len(labrow)]
+                for row in sect.split('\n')[2:]:
+                    if row[splits[0]:splits[1]].strip() not in cols:
+                        label=re.sub('\ |\/|\{|\}|\(|\)|\[|\]', '', row[splits[0]:splits[1]]).replace('Error','_err')
+                    else:
+                        label=cols[row[splits[0]:splits[1]].strip()]
+                    outdat[label] = row[splits[1]:splits[2]].strip()
+                    outdat[label+'_err'] = row[splits[2]:splits[3]].strip()
+
+        outdat=pd.Series(outdat,name=icid)
+
+        #Replacing err and err1/2 with em and ep
+        for col in outdat.index:
+            try:
+                outdat[col]=float(outdat[col])
+            except:
+                pass
+            if col.find('_err1')!=-1:
+                outdat=outdat.rename(index={col:'epos_'+col.replace('_err1','')})
+            elif col.find('_err2')!=-1:
+                outdat=outdat.rename(index={col:'eneg_'+col.replace('_err2','')})
+            elif col.find('_err')!=-1:
+                outdat['epos_'+col.replace('_err','')]=outdat[col]
+                outdat['eneg_'+col.replace('_err','')]=outdat[col]
+                outdat=outdat.rename(index={col:col.replace('_err','e')})
+        for col in outdat.index:
+            if 'radius' in col:
+                outdat=outdat.rename(index={col:col.replace('radius','rad')})
+            if col[-2:]=='em' and col[:-1] not in outdat.index and type(outdat[col])!=str:
+                #average of em and ep -> e
+                outdat[col[:-1]]=0.5*(abs(outdat[col])+abs(outdat[col[:-1]+'p']))
+        return outdat, kicinfo
+    elif kicinfo is not None:
+        return None, kicinfo
+    else:
+        return None, None
+
+
 def K2_lc(epic,coor=None,pers=None,durs=None,t0s=None, use_ppt=True):
     '''
     # Opens K2 lc
@@ -564,7 +730,7 @@ def K2_lc(epic,coor=None,pers=None,durs=None,t0s=None, use_ppt=True):
         cands+=['E']
     else:
         #Normal K2 observation:
-        df,_=starpars.GetExoFop(epic,"k2")
+        df,_=GetExoFop(epic,"k2")
         obs_table = Observations.query_object("EPIC "+str(int(epic)))
         cands=list(np.unique(obs_table[obs_table['obs_collection']=='K2']['sequence_number'].data.data).astype(str))
     if df is None:
@@ -1080,7 +1246,7 @@ def open_light_curve(ID,mission,coor=None,use_ppt=True,other_data=True,
     #from ..stellar import tess_stars2px_mod
     if coor is None:
         #Doing this to get coordinates:
-        df,_=starpars.GetExoFop(ID,mission)
+        df,_=GetExoFop(ID,mission)
         #Getting coordinates from df in order to search other surveys for ID/data:
         ra,dec=df['ra'],df['dec']
         if type(ra)==str and (ra.find(':')!=-1)|(ra.find('h')!=-1):
@@ -1670,11 +1836,6 @@ def run_from_scratch(ID, mission, tcen, tdur, ra=None, dec=None,
     # - Search for other transits and/or planets in the lightcurve
     # - Run the required Namaste model for all high-SNR planet candidates
     '''
-
-    #Gets stellar info
-    Rstar, rhostar, Teff, logg, src = starpars.getStellarInfo(ID, hdr, mission, overwrite=overwrite,
-                                                             fileloc=savenames[1].replace('_mcmc.pickle','_starpars.csv'),
-                                                             savedf=True)
 
     #Gets Lightcurve
     lc,hdr=open_light_curve(ID,mission,use_ppt=False)
