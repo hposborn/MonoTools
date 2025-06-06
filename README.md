@@ -2,7 +2,7 @@
 
 MonoTools is a package specific to modelling transiting exoplanets with unknown periods (Monos, Duos, Trios, etc).
 
-Full documentation is are taking shape at [readthedocs](https://monotools.readthedocs.io/en/pymc/).
+Full documentation is are taking shape at [readthedocs](https://monotools.readthedocs.io/en/new/).
 
 MonoTools.fit is an update to my [previous Namaste code](http://github.com/hposborn/Namaste) using the ["exoplanet" models of Dan Foreman-Mackey et al](http://github.com/dfm/exoplanet).
 
