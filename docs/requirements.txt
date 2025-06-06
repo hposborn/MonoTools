@@ -1,5 +1,5 @@
 sphinx==7.4.7
 nbsphinx==0.9.7
-sphinx-rtd-theme==3.0.3
+sphinx-rtd-theme==3.0.2
 myst_parser==3.0.1
 
