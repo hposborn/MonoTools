@@ -677,7 +677,7 @@ class monoModel():
             trans=np.tile(False,np.sum(self.lc.mask))
             for tc in tcens:
                 transix=abs(self.lc.time[self.lc.mask]-tc)<near_thresh*tdur
-                assert transix>0, "Cannot see any in-transit points for transit at epoch "+str(tc)
+                assert np.sum(transix)>0, "Cannot see any in-transit points for transit at epoch "+str(tc)
                 trans[transix]=True
                 days_in_known_transits+=[np.sum(np.array([cad.split('_')[1] for cad in self.lc.cadence[self.lc.mask][transix]]).astype(float))/86400]
 
