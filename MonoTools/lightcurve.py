@@ -804,7 +804,7 @@ class multilc(lc):
         print(priorities)
         if priorities is None:
             #Here we can list the priorities for Kepler/K2 and TESS:
-            priorities=["k1_120_pdc","k1_1800_pdc","k2_120_ev","k2_120_vand","k2_120_pdc","k2_1800_ev","k2_1800_vand","k2_1800_pdc","ts_20_pdc","ts_120_pdc","ts_600_pdc","ts_1800_pdc","ts_600_tica","ts_600_qlp","ts_1800_qlp","ts_1800_tica","ts_600_el","ts_1800_el"]
+            priorities=["k1_120_pdc","k1_1800_pdc","k2_120_ev","k2_120_vand","k2_120_pdc","k2_1800_ev","k2_1800_vand","k2_1800_pdc","ts_20_pdc","ts_120_pdc","ts_200_pdc","ts_600_pdc","ts_1800_pdc","ts_200_tica","ts_600_tica","ts_600_qlp","ts_200_qlp","ts_1800_qlp","ts_1800_tica"]
         #
         # Tidying up before stacking:
         if newlcs is not None and len(newlcs)>0:
