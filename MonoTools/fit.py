@@ -1462,7 +1462,7 @@ class monoModel():
                 itime[unqcad]=self.lc.time[mask&self.cad_indexes[unqcad]].astype(self.floattype)
                 iflux[unqcad]=self.lc.flux[mask&self.cad_indexes[unqcad]].astype(self.floattype)
                 ifluxerr[unqcad]=self.lc.flux_err[mask&self.cad_indexes[unqcad]].astype(self.floattype)        
-        print(iflux,self.unique_cads)
+        #print(iflux,self.unique_cads)
         with pm.Model() as gp_train_model:
             #####################################################
             #     Training GP kernel on out-of-transit data
