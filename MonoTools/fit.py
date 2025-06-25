@@ -4326,10 +4326,11 @@ class monoModel():
             for npl, pl in enumerate(plot_pers):
                 
                 ext=az.extract(self.trace.posterior,var_names=['logprob_marg_'+pl,'per_'+pl])
+                ext_mask=~np.any(np.isnan(np.vstack([ext['logprob_marg_'+pl],ext['per_'+pl]])),axis=0)
                 if pl in self.duos+self.ambigs:
                     #As we're using the nanmedian log10(prob)s for each period, we need to make sure their sums add to 1.0
-                    probs=logsumexp(np.log(extra_factor)+ext['logprob_marg_'+pl] - logsumexp(np.log(extra_factor)+ext['logprob_marg_'+pl]),axis=1)/np.log(10)
-                    pers = np.nanmedian(ext['per_'+pl],axis=1)
+                    probs=logsumexp(np.log(extra_factor)+ext['logprob_marg_'+pl][:,ext_mask] - logsumexp(np.log(extra_factor)+ext['logprob_marg_'+pl][:,ext_mask]),axis=1)/np.log(10)
+                    pers = np.nanmedian(ext['per_'+pl][:,ext_mask],axis=1)
                     pmax = np.nanmax(pers)*1.03 if pmax is None else pmax
                     pmin = np.nanmin(pers)*0.9 if pmin is None else pmin
                     
@@ -4372,42 +4373,42 @@ class monoModel():
                     #if 'logprob_marg_sum_'+pl in self.trace.posterior:
                     #    total_prob=logsumexp((self.trace.posterior['logprob_marg_'+pl]+self.trace.posterior['logprob_marg_sum_'+pl]).ravel())
                     #else:
-                    total_prob=logsumexp(ext['logprob_marg_'+pl].values.ravel())
-                    total_av_prob=logsumexp(np.nanmedian(ext['logprob_marg_'+pl],axis=0))
-                    pmax = np.nanmax(ext['per_'+pl].values.ravel()) if pmax is None else pmax
+                    total_prob=logsumexp(ext['logprob_marg_'+pl].values[:,ext_mask].ravel())
+                    total_av_prob=logsumexp(np.nanmedian(ext['logprob_marg_'+pl].values[:,ext_mask],axis=0))
+                    pmax = np.nanmax(ext['per_'+pl].values[:,ext_mask].ravel()) if pmax is None else pmax
                     pmin = 0.5*np.min(self.planets[pl]['per_gaps']['gap_starts']) if pmin is None else pmin
                     cols=[]
                     bins = np.exp(np.arange(np.log(pmin),np.log(pmax),0.1))
                     binprob = np.zeros(len(bins))
-                    for ngap in np.arange(self.planets[pl]['ngaps'])[np.argsort(np.nanmedian(ext['logprob_marg_'+pl],axis=1))]:
+                    for ngap in np.arange(self.planets[pl]['ngaps'])[np.argsort(np.nanmedian(ext['logprob_marg_'+pl].values[:,ext_mask],axis=1))]:
                         if self.planets[pl]['per_gaps']['gap_starts'][ngap]<pmax and self.planets[pl]['per_gaps']['gap_ends'][ngap]>pmin:
                             bins=np.arange(np.floor(self.planets[pl]['per_gaps']['gap_starts'][ngap])-0.5,
                                         np.clip(np.ceil(self.planets[pl]['per_gaps']['gap_ends'][ngap])+0.5,0.0,pmax),
                                         1.0)
-                            ncol=int(np.floor(np.clip(np.nanmedian(ext['logprob_marg_'+pl][:,ngap])-total_av_prob,-6,0)))
+                            ncol=int(np.floor(np.clip(np.nanmedian(ext['logprob_marg_'+pl].values[ngap,ext_mask])-total_av_prob,-6,0)))
                             #print(self.planets[pl]['per_gaps']['gap_starts'][ngap],
                             #      ncol,np.nanmedian(self.trace.posterior['logprob_marg_'+pl][:,ngap])-total_av_prob)
                             #print(ngap,np.exp(self.trace.posterior['logprob_marg_'+pl][:,ngap]-total_prob))
                             if ncol not in cols:
                                 cols+=[ncol]
                                 plt.bar(x=self.planets[pl]['per_gaps']['gap_mids'][ngap],
-                                        height=np.sum(np.exp(ext['logprob_marg_'+pl][ngap].values - total_prob)),
+                                        height=np.sum(np.exp(ext['logprob_marg_'+pl].values[ngap,ext_mask] - total_prob)),
                                         width=self.planets[pl]['per_gaps']['gap_widths'][ngap],lw=0.0,color=pal[6+ncol],label=coldic[ncol],alpha=0.8)
                                 # axes[npl].hist(ext['per_'+pl][:,ngap], bins=bins, edgecolor=sns.color_palette()[0],
                                 #     weights=np.exp(ext['logprob_marg_'+pl][:,ngap]-total_av_prob),
                                 #     color=pal[6+ncol],histtype="stepfilled",label=coldic[ncol])
                             else:
                                 plt.bar(x=self.planets[pl]['per_gaps']['gap_mids'][ngap],
-                                        height=np.sum(np.exp(ext['logprob_marg_'+pl][ngap].values - total_prob)),
+                                        height=np.sum(np.exp(ext['logprob_marg_'+pl].values[ngap,ext_mask] - total_prob)),
                                         width=self.planets[pl]['per_gaps']['gap_widths'][ngap],lw=0.0,color=pal[6+ncol],alpha=0.8)
                                 # axes[npl].hist(ext['per_'+pl][:,ngap], bins=bins, edgecolor=sns.color_palette()[0],
                                 #     weights=np.exp(ext['logprob_marg_'+pl][:,ngap]-total_av_prob),
                                 #     color=pal[6+ncol],histtype="stepfilled")
-                    kernel = gaussian_kde(np.log(ext['per_'+pl].values.ravel()),
-                                          weights = np.exp(ext['logprob_marg_'+pl].values.ravel() - total_prob))
+                    kernel = gaussian_kde(np.log(ext['per_'+pl].values[:,ext_mask].ravel()),
+                                          weights = np.exp(ext['logprob_marg_'+pl].values[:,ext_mask].ravel() - total_prob))
                     x = np.linspace(np.log(pmin),np.log(pmax),300) #restrict range to (0,1)
                     y = kernel(x)
-                    offset=np.average(kernel(np.log(self.planets[pl]['per_gaps']['gap_mids']))/np.sum(np.exp(ext['logprob_marg_'+pl].values - total_prob),axis=1))
+                    offset=np.average(kernel(np.log(self.planets[pl]['per_gaps']['gap_mids']))/np.sum(np.exp(ext['logprob_marg_'+pl].values[:,ext_mask] - total_prob),axis=1))
                     plt.fill_between(np.exp(x),np.tile(1e-12,len(y)),1.5*y/offset,alpha=0.6,color=mango[5],zorder=-5,label='KDE')
 
                     axes[npl].set_title("Mono - "+str(pl))
