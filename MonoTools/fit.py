@@ -613,20 +613,22 @@ class monoModel():
             return (time-tcens[0]-per*0.5)%per-per*0.5
         elif fit_ttv_polynomial and len(tcens)>2:
             assert not (per is None and ideal_pratio_spans is None), "If you do not have a period for a trio, you must specify a span pratio*(t[-1]-t[0]))`"
-            if per is not None:
+            if per is not None and ideal_pratio_spans is None:
                 exp_transn = np.round((np.array(tcens)-tcens[0])/per)
                 #exp_transtimes = tcens[0]+per*exp_transn
+                polyfit=np.polyfit(tcens,exp_transn,len(tcens))#At a given time, you are given a number, where exact number=transit (i.e. a phase)
+                return per*((np.polyval(polyfit,time)-0.5)%1-0.5)#time-np.array(poly_tcens)[:,None][np.argmin(np.column_stack([abs(time-tc) for tc in poly_tcens]),axis=1)][:,0]
             else:
                 exp_transn = np.hstack([0,ideal_pratio_spans[:,1]])
                 #exp_transtimes = tcens[0]+(tcens[-1]-tcens[0])*np.hstack([0,ideal_pratio_spans[:,1]])/ideal_pratio_spans[0,0]
-            linfit=np.polyfit(exp_transn,tcens,len(tcens))#
-            poly_tcens=np.polyval(linfit,exp_transn)
-            if np.max(tcens-poly_tcens)>max_ttv_amp:
-                # and np.max(np.polyval(linfit,time))<max_ttv_amp:
-                return self.make_phase(time,tcens,per,fit_ttv_polynomial=False,ideal_pratio_spans=ideal_pratio_spans)# Turning off fit_ttv_polynomial and returning "normal" linear fit
-            else:
-                #This gives the polynomial-derived t0s, which we can then find minimum distances to:
-                return time-np.array(poly_tcens)[:,None][np.argmin(np.column_stack([abs(time-tc) for tc in poly_tcens]),axis=1)][:,0]
+                linfit=np.polyfit(exp_transn,tcens,len(tcens))#
+                poly_tcens=np.polyval(linfit,exp_transn)
+                if np.max(tcens-poly_tcens)>max_ttv_amp:
+                    # and np.max(np.polyval(linfit,time))<max_ttv_amp:
+                    return self.make_phase(time,tcens,per,fit_ttv_polynomial=False,ideal_pratio_spans=ideal_pratio_spans)# Turning off fit_ttv_polynomial and returning "normal" linear fit
+                else:
+                    #This gives the polynomial-derived t0s, which we can then find minimum distances to:
+                    return time-np.array(poly_tcens)[:,None][np.argmin(np.column_stack([abs(time-tc) for tc in poly_tcens]),axis=1)][:,0]
 
             # if per is None:
             #     #n = (time - tcens[0])/(tcens[-1]-tcens[0])*ideal_pratio_spans[0,0]
@@ -693,6 +695,7 @@ class monoModel():
             phase=self.make_phase(self.lc.time[self.lc.mask], tcens, per)
             intr=abs(phase)<near_thresh*tdur
             days_in_tr=np.sum([float(self.lc.cadence[ncad].split('_')[1])/86400 for ncad in np.arange(len(self.lc.cadence))[self.lc.mask][intr]])
+            #print(per,days_in_tr,days_in_known_transits)
             check_pers_ix+=[days_in_tr<(1.0+coverage_thresh)*np.sum(days_in_known_transits)]
         return np.array(check_pers_ix)
 
@@ -791,7 +794,7 @@ class monoModel():
         self.planets[mono]['per_gaps']['start_loglik_polyvals']=np.vstack(starts)
         self.planets[mono]['per_gaps']['end_loglik_polyvals']=np.vstack(ends)
 
-    def add_ambiguous(self, pl_dic, name, maxint=None, perthresh=6e-4, **kwargs):
+    def add_ambiguous(self, pl_dic, name, maxint=None, perthresh=2e-4, **kwargs):
         """add_ambiguous Adds a transiting planet with more than two non-consecutive transits to planet properties dict
 
         Args:
@@ -815,7 +818,7 @@ class monoModel():
         pl_dic['maxperiod']=np.min(pairs)
         #Getting period ratios as a fraction of the total end-to-end span:
         pratios=pairs/pl_dic['span']
-        maxint=int(np.clip(pl_dic['span']/15,15,150)) if maxint is None else maxint
+        maxint=int(np.clip(pl_dic['span']/17.5,17.5,150)) if maxint is None else maxint
         #Checking these against some max integer fraction (24) and deriving closest ratio
         explore_pratios=np.stack([[[m,i_pratio,n,n/m,(pratios[i_pratio]-(n/m))**2*np.sqrt(n*m)] for n in range(1,maxint) for m in range(1,maxint) if n<m] for i_pratio in range(len(pratios))])
         #For each m which set of ns produce viable transits for each pratio?
@@ -850,6 +853,9 @@ class monoModel():
         pl_dic=self.compute_period_aliases(pl_dic,**kwargs)
         pl_dic['npers']=len(pl_dic['period_int_aliases'])
         assert pl_dic['npers']>0, "No plausible period aliases found - does lightcurve data eliminate all period aliases?"
+        
+        #Aliases ruled out need to be removed from the p_ratio array:
+        pl_dic['p_ratios'] = pl_dic['p_ratios'][:,:,np.isin(pl_dic['p_ratios'][0,0,:],pl_dic['period_int_aliases'])]
 
         pl_dic['ror']=np.sqrt(pl_dic['depth']) if not hasattr(pl_dic,'ror') else 0.01
 
@@ -1447,20 +1453,20 @@ class monoModel():
                 itime[unqcad]=binlc['time'][np.isfinite(binlc['flux'])].astype(self.floattype)
                 iflux[unqcad]=binlc['flux'][np.isfinite(binlc['flux'])].astype(self.floattype)
                 ifluxerr[unqcad]=binlc['flux_err'][np.isfinite(binlc['flux'])].astype(self.floattype)
-        elif len(self.lc.time[(~self.lc.in_trans['all'])&self.lc.mask])>max_len_lc:
-            #Randomly cutting odd/even points so as not to be over max length limit:
-            mask[mask][::int(np.ceil(np.sum((~self.lc.in_trans['all'])&self.lc.mask)/max_len_lc))]=False
+        else:
+            if len(self.lc.time[(~self.lc.in_trans['all'])&self.lc.mask])>max_len_lc:
+                #Randomly cutting odd/even points so as not to be over max length limit:
+                mask[mask][::int(np.ceil(np.sum((~self.lc.in_trans['all'])&self.lc.mask)/max_len_lc))]=False
             #print(np.sum(mask),"reduced from ",len(mask),"points")
             for unqcad in self.unique_cads:
                 itime[unqcad]=self.lc.time[mask&self.cad_indexes[unqcad]].astype(self.floattype)
                 iflux[unqcad]=self.lc.flux[mask&self.cad_indexes[unqcad]].astype(self.floattype)
-                ifluxerr[unqcad]=self.lc.flux_err[mask&self.cad_indexes[unqcad]].astype(self.floattype)
-
+                ifluxerr[unqcad]=self.lc.flux_err[mask&self.cad_indexes[unqcad]].astype(self.floattype)        
+        print(iflux,self.unique_cads)
         with pm.Model() as gp_train_model:
             #####################################################
             #     Training GP kernel on out-of-transit data
             #####################################################
-            
             self.log_flux_std={unqcad: np.log(np.nanmedian(abs(np.diff(iflux[unqcad])))) for unqcad in self.unique_cads}
             logs2={};phot_mean={}
             for unqcad in self.log_flux_std:
@@ -2165,11 +2171,16 @@ class monoModel():
                 self.trace.posterior['per_'+pl] = (('chain','draw','per_'+pl+'_dim_0'), (((1-ind_min[None,None,:])*np.random.random(sample_shapes)[:,:,None]+ind_min[None,None,:])**(1/self.per_index))*self.planets[pl]['per_gaps']['gap_starts'][None,None,:])
 
                 self.trace.posterior['av_t0_'+pl] = (('chain','draw'),self.trace.posterior['t0_'+pl].values)
-            elif pl in self.ambigs and self.model_ambig_ttv:
-                #Where we have TTVs, need to do some sort of linear best-fit using available t0s
-                pfit=np.polyfit(np.hstack([0,self.planets[pl]['ideal_pratio_span'][:,1]]), self.trace.posterior['t0_'+pl].stack(sample=("chain", "draw")).values, 1)
-                #print(pfit[0].shape,int(self.planets[pl]['npers']))#'av_t0_'+pl+'_dim_0',
-                self.trace.posterior['av_t0_'+pl] = (('chain', 'draw'), pfit[1].reshape(sample_shapes))
+            elif pl in self.ambigs:
+                if self.model_ambig_ttv:
+                    #Where we have TTVs, need to do some sort of linear best-fit using available t0s
+                    pfit=np.polyfit(np.hstack([0,self.planets[pl]['ideal_pratio_span'][:,1]]), self.trace.posterior['t0_'+pl].stack(sample=("chain", "draw")).values, 1)
+                    #print(pfit[0].shape,int(self.planets[pl]['npers']))#'av_t0_'+pl+'_dim_0',
+                    self.trace.posterior['av_t0_'+pl] = (('chain', 'draw'), pfit[1].reshape(sample_shapes))
+                    self.trace.posterior['per_'+pl] = (('chain','draw','per_'+pl+'_dim_0'), (pfit[0][:,None]*self.planets[pl]['ideal_pratio_span'][0,0]/self.planets[pl]['period_int_aliases'][None,:]).reshape(sample_shapes+(int(self.planets[pl]['npers']),)))
+                else:
+                    self.trace.posterior['av_t0_'+pl] = (('chain','draw'),self.trace.posterior['t0_'+pl].values[:,:,-1])
+                    self.trace.posterior['per_'+pl] = (('chain','draw','per_'+pl+'_dim_0'), ((self.trace.posterior['t0_'+pl].values[:,:,-1]-self.trace.posterior['t0_'+pl].values[:,:,0])/self.planets[pl]['ideal_pratio_span'][0,0]/self.planets[pl]['period_int_aliases'][None,:]).reshape(sample_shapes+(int(self.planets[pl]['npers']),)))
 
                 #av_tcens[pl] = pfit[0]
                 #The planet period here comes from the "ideal" period, so we have to adjust by going -> span and back to the individual aliases:
@@ -2181,7 +2192,15 @@ class monoModel():
                 #       sample_shapes+(int(self.planets[pl]['npers']),))
                 # print((pfit[0][:,None]*self.planets[pl]['ideal_pratio_span'][0,0]/self.planets[pl]['period_int_aliases'][None,:]).reshape(sample_shapes+(int(self.planets[pl]['npers']),)),
                 #       ((pfit[1][:,None]*self.planets[pl]['ideal_pratio_span'][0,0]/self.planets[pl]['period_int_aliases'][None,:]).reshape(sample_shapes+(int(self.planets[pl]['npers']),))).shape)
-                self.trace.posterior['per_'+pl] = (('chain','draw','per_'+pl+'_dim_0'), (pfit[0][:,None]*self.planets[pl]['ideal_pratio_span'][0,0]/self.planets[pl]['period_int_aliases'][None,:]).reshape(sample_shapes+(int(self.planets[pl]['npers']),)))
+            # elif pl in self.ambigs:
+            #     it0[pl][0] = pm.Normal("t0_"+pl+'_0',mu=self.planets[pl]['tcens'][0],sigma=self.planets[pl]['tdur']*self.timing_sigma*self.planets[pl]['tdur'])
+            #     it0[pl][-1] = pm.Normal("t0_"+pl+'_'+str(len(self.planets[pl]['tcens'])-1),mu=self.planets[pl]['tcens'][-1],sigma=self.planets[pl]['tdur']*self.timing_sigma*self.planets[pl]['tdur'])
+            #     #Deriving t0s given the initial and final transit, and the ratio:
+            #     for n in np.arange(1,len(self.planets[pl]['tcens'])-1):
+            #         it0[pl][n]=pm.Deterministic("t0_"+pl+'_'+str(n), it0[pl][0]+(it0[pl][-1]-it0[pl][0])*self.planets[pl]['ideal_pratio_span'][n-1,1]/self.planets[pl]['ideal_pratio_span'][n-1,0])
+
+            #     #Not TTV modelling
+            #     self.trace.posterior['per_'+pl] = (('chain','draw','per_'+pl+'_dim_0'), (pfit[0][:,None]*self.planets[pl]['ideal_pratio_span'][0,0]/self.planets[pl]['period_int_aliases'][None,:]).reshape(sample_shapes+(int(self.planets[pl]['npers']),)))
             if pl in self.monos:
                 gap_width_priors[pl] = self.planets[pl]['per_gaps']['gap_probs']
             else:
@@ -4966,8 +4985,12 @@ class monoModel():
         #if Texp is None:
         #    print("* WARNING - MUST SET EXPOSURE TIME (Texp) FOR REAL OBSERVATIONS. USING 1SEC HERE *")
         #    Texp=1
-
+        
+        
         next_vernal = 2459659.14792+np.ceil((Time.now().jd-2459659.14792)/365.25)*365.25
+        old_vernal = 2459659.14792
+        old_peak = old_vernal + (old_radec.ra.deg/360 - 0.5)*365.25
+
         #print(next_vernal)
         if t_start is None:
             import datetime
@@ -4976,23 +4999,31 @@ class monoModel():
             #RA is defined as 0 for the Sun at the vernal equinox.
             #Therefore their RA, converted to fractional days and shifted by half a year, gives the time of opposition.
             
-            end_next_obs   = next_vernal-365.25+(old_radec.ra.deg/360-0.5)*365.25+90
-            start_next_obs = next_vernal+(old_radec.ra.deg/360-0.5)*365.25-90
+            last_obs_peak = old_peak+365.25*np.floor((Time.now().jd-old_peak)/365.25)
+            next_obs_peak = old_peak+365.25*np.ceil((Time.now().jd-old_peak)/365.25)
+            # end_next_obs   = next_vernal-365.25+(old_radec.ra.deg/360-0.5)*365.25+90
+            # start_next_obs = next_vernal+(old_radec.ra.deg/360-0.5)*365.25-90
 
-            if today < end_next_obs:
-                #observable now?
+            if today < (last_obs_peak + 65) and today > last_obs_peak + 30:
+                #Not long left this year - start now and go until end of next window
                 t_start= today
-                t_end  = end_next_obs
-            else:
-                t_start = start_next_obs
-                t_end  = end_next_obs+365.25
+                t_end  = next_obs_peak + 65
+            elif today < (last_obs_peak + 65):
+                #Lots of time this year - finish after this window
+                t_start= today
+                t_end  = last_obs_peak + 65
+            elif today < (next_obs_peak + 65):
+                #Will start now and go until end of next window
+                t_start= today
+                t_end  = next_obs_peak + 65
         if t_end is None:
             #Using date 60d after it's at opposition in 2022:
             t_end = next_vernal-(old_radec.ra.deg/360)*365.25+60
-
+        
         #We always need an array of all possible transits/aliases also saved to file to check:
         all_trans = self.predict_future_transits(t_start-self.lc.jd_base,t_end-self.lc.jd_base, check_TESS=avoid_TESS)
         all_trans.to_csv(self.savenames[0]+outfilesuffix.replace("_ORs","").replace(".csv","_list_all_trans.csv"))
+
 
         if not hasattr(self,'savenames'):
             self.get_savename(how='save')
