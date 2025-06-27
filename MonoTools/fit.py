@@ -2180,7 +2180,7 @@ class monoModel():
                     self.trace.posterior['per_'+pl] = (('chain','draw','per_'+pl+'_dim_0'), (pfit[0][:,None]*self.planets[pl]['ideal_pratio_span'][0,0]/self.planets[pl]['period_int_aliases'][None,:]).reshape(sample_shapes+(int(self.planets[pl]['npers']),)))
                 else:
                     self.trace.posterior['av_t0_'+pl] = (('chain','draw'),self.trace.posterior['t0_'+pl].values[:,:,-1])
-                    self.trace.posterior['per_'+pl] = (('chain','draw','per_'+pl+'_dim_0'), ((self.trace.posterior['t0_'+pl].values[:,:,-1]-self.trace.posterior['t0_'+pl].values[:,:,0])/self.planets[pl]['ideal_pratio_span'][0,0]/self.planets[pl]['period_int_aliases'][None,:]).reshape(sample_shapes+(int(self.planets[pl]['npers']),)))
+                    self.trace.posterior['per_'+pl] = (('chain','draw','per_'+pl+'_dim_0'), ((self.trace.posterior['t0_'+pl].values[:,:,-1]-self.trace.posterior['t0_'+pl].values[:,:,0])[:,:,None]/(self.planets[pl]['ideal_pratio_span'][0,0]/self.planets[pl]['period_int_aliases'])[None,None,:]).reshape(sample_shapes+(int(self.planets[pl]['npers']),)))
 
                 #av_tcens[pl] = pfit[0]
                 #The planet period here comes from the "ideal" period, so we have to adjust by going -> span and back to the individual aliases:
