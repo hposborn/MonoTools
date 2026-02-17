@@ -1128,7 +1128,7 @@ class multilc(lc):
                 sect_obs=tools.observed(int(id))
             #print({key:sect_obs[key] for key in epoch.index})
             #print(epoch.index,sect_obs.keys())
-            epochs=[key for key in epoch.index if sect_obs[key]]
+            epochs=[key for key in epoch.index if sect_obs.get(key, None)]
 
             if epochs==[]:
                 #NO EPOCHS OBSERVABLE APPARENTLY. USING THE EPOCHS ON EXOFOP/TIC8

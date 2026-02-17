@@ -931,7 +931,7 @@ def observed(tic,radec=None,maxsect=96):
     #from tesspoint import tess_stars2px_function_entry as tess_stars2px
     result = tess_stars2px.tess_stars2px_function_entry(tic, radec.ra.deg, radec.dec.deg)
     sectors = result[3]
-    out_dic={s:True if s in sectors else False for s in np.arange(maxsect)}
+    out_dic={s:True if s in sectors else False for s in np.arange(1, maxsect + 1, 1)}
     #print(out_dic)
     return out_dic
 
