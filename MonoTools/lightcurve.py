@@ -145,6 +145,26 @@ class lc():
                     delattr(self,ikey)
                 self.timeseries.remove(ikey)
 
+    def remove_cadence(self,cadence_name):
+        """Remove specific cadence from all dict/list/arrays in the object class"""
+        assert cadence_name in self.cadence_list
+        for ikey in [ts for ts in self.timeseries if 'cadence' not in ts]:
+            if 'bin_' in ikey:
+                setattr(self,ikey,getattr(self,ikey)[self.bin_cadence!=cadence_name])
+            else:
+                setattr(self,ikey,getattr(self,ikey)[self.cadence!=cadence_name])
+        if hasattr(self,'in_trans'):
+            setattr(self,'in_trans',{key:self.in_trans[key][self.cadence!=cadence_name] for key in self.in_trans})
+        if hasattr(self,'near_trans'):
+            setattr(self,'near_trans',{key:self.near_trans[key][self.cadence!=cadence_name] for key in self.in_trans})
+        
+        setattr(self,'bin_cadence',getattr(self,'bin_cadence')[self.bin_cadence!=cadence_name])
+        setattr(self,'cadence',getattr(self,'cadence')[self.cadence!=cadence_name])
+
+        if cadence_name in self.mask_cadences:
+            _=self.mask_cadences.remove(cadence_name)
+        _=self.cadence_list.pop(self.cadence_list.index(cadence_name))
+
     def change_jd_base(self, new_jd_base):
         """Change timing epoch
 
@@ -258,7 +278,7 @@ class lc():
             self.timeseries+=['flux_mask']
         #For corot cadences, we'll cut regions from the SAA
         for corotcad in [cad for cad in self.cadence_list if 'co_' in cad]:
-            ix=np.in1d(self.cadence,corotcad)
+            ix=np.isin(self.cadence,corotcad)
             self.flux_mask[ix] = tools.cut_high_regions(self.flux[ix],self.flux_mask[ix],std_thresh=4.5,n_pts=25,n_loops=2)
 
         if np.sum(self.flux_mask)>0:
@@ -367,6 +387,7 @@ class lc():
             sigmaclip (float, optional): Significance of anomalies from the mean above which we clip. Defaults to 3..
             flattype (str, optional): Either use a 'bspline' (which fits smooth splines while iterating away anomalies/transits/etc)
                                       Or a 'polystep' (which uses out-of-box polynomials to smooth data without influencing transit depth). Defaults to 'bspline'.
+                                      Or a 'gp' (which trains a GP on data). Defaults to 'bspline'.
             stepsize (float, optional): [description]. Defaults to 0.15.
             reflect (bool, optional): [description]. Defaults to True.
             polydegree (int, optional): [description]. Defaults to 3.
@@ -507,7 +528,7 @@ class lc():
                                             stepcent=stepcent,d=polydegree,ni=maxiter,sigclip=sigmaclip)
                         splines[its][newbox] = np.polyval(baseline,timearr[newbox]-stepcent)
                         flats[its][newbox] = getattr(self,its)[newbox] - splines[its][newbox]
-                        print(stepcent,baseline,np.ptp(splines[its][newbox]))
+                        #print(stepcent,baseline,np.ptp(splines[its][newbox]))
             setattr(self,its+'_spline',splines[its])
             setattr(self,its+'_flat',flats[its])
             self.timeseries+=[its+'_flat',its+'_spline']
@@ -585,7 +606,7 @@ class lc():
         else:
             #Must use cad_mask as this excludes duplicates
             mask=self.cad_mask.astype(bool)
-            print("mask_sum",np.sum(mask),"masked:",np.sum(~mask))
+            #print("mask_sum",np.sum(mask),"masked:",np.sum(~mask))
         
         bintime=[]
         time_bools=np.zeros(len(self.time))
@@ -618,7 +639,7 @@ class lc():
 
         #Now doing cadence:
         digis={}
-        bin_cads=np.empty(len(getattr(self,'bin'+binsuffix+'_time')),dtype='U17')
+        bin_cads=np.empty(len(getattr(self,'bin'+binsuffix+'_time')),dtype='U18')
         for j in np.arange(1,1+np.max(time_bools)).astype(int):
             if np.sum(bintime_bools==j)==np.sum(time_bools==j):
                 bin_cads[bintime_bools==j]=self.cadence[time_bools==j]
@@ -685,7 +706,7 @@ class lc():
         import seaborn as sns
         sns.set_palette('viridis')
         if 'flux_flat' in timeseries and not hasattr(self,'flux_flat'):
-            print("Flattening", hasattr(self,'flux_flat'))
+            #print("Flattening", hasattr(self,'flux_flat'))
             self.flatten(**kwargs)
 
         if plot_ephem is not None:
@@ -701,7 +722,7 @@ class lc():
             if (int(self.cadence[0].split('_')[1])*1440)>20 and total_time<500:
                 #Plotting only real points as "binned points" style:
                 ax.plot(self.time[ix],yoffset*it+getattr(self,itimeseries)[ix],'.',alpha=0.8,markersize=3.0,color='C'+str(it),label=itimeseries)
-            elif (int(self.cadence[0].split('_')[1])*1400)>20 and total_time>500:
+            elif (int(self.cadence[0].split('_')[1])*1400)>=20 and total_time>500:
                 #So much data that we should bin it back down (to 2-hour bins)
                 if not hasattr(self,'bin2_'+itimeseries):
                     self.bin(timeseries=[itimeseries], binsize=1/12,binsuffix='2')
@@ -712,6 +733,7 @@ class lc():
                 #Plotting real points as fine scatters and binned points above:
                 if not bin_only:
                     ax.plot(self.time[ix],yoffset*it+getattr(self,itimeseries)[ix],'.k',markersize=0.75,alpha=0.25)
+                #print("Plotting binned values",int(self.cadence[0].split('_')[1])*1400,yoffset*it+getattr(self,"bin_"+itimeseries)[::40])
                 ax.plot(self.bin_time,yoffset*it+getattr(self,"bin_"+itimeseries),'.',alpha=0.8,markersize=3.0,color='C'+str(it),label=itimeseries)
             ax.set_ylabel("Relative Flux ["+self.flx_system+"]")
             ax.set_xlabel("Time [BJD-"+str(int(self.jd_base))+"]")
@@ -740,7 +762,7 @@ class multilc(lc):
     mylc.
     """
     def __init__(self,id,mission,radec=None, load=True, do_search=True,flx_system='ppt',
-                 jd_base=2457000.,savefileloc=None,extralc=None,update_tess_file=True,**kwargs):
+                 jd_base=2457000.,savefileloc=None, extralc=None, update_tess_file=True,**kwargs):
         """AI is creating summary for __init__
 
         Args:
@@ -801,10 +823,10 @@ class multilc(lc):
             priorities (list, optional): Which lightcurve sources take priority in the case that they overlap in timing?
                                          This is required in the case that lightcurves are overlapping... Defaults to None.
         """
-        print(priorities)
+        #print(priorities)
         if priorities is None:
             #Here we can list the priorities for Kepler/K2 and TESS:
-            priorities=["k1_120_pdc","k1_1800_pdc","k2_120_ev","k2_120_vand","k2_120_pdc","k2_1800_ev","k2_1800_vand","k2_1800_pdc","ts_20_pdc","ts_120_pdc","ts_200_pdc","ts_600_pdc","ts_1800_pdc","ts_200_tica","ts_600_tica","ts_600_qlp","ts_200_qlp","ts_1800_qlp","ts_1800_tica"]
+            priorities=["k1_120_pdc","k1_1800_pdc","k2_120_ev","k2_120_vand","k2_120_pdc","k2_1800_ev","k2_1800_vand","k2_1800_pdc","ts_20_pdc","ts_120_pdc","ts_200_pdc","ts_600_pdc","ts_1800_pdc","ts_200_tica","ts_200_qlp","ts_200_tasoc","ts_200_tglc","ts_600_qlp","ts_600_tica","ts_600_tasoc","ts_600_tglc","ts_1800_tglc","ts_1800_tasoc","ts_1800_qlp","ts_1800_tica"]
         #
         # Tidying up before stacking:
         if newlcs is not None and len(newlcs)>0:
@@ -1024,9 +1046,34 @@ class multilc(lc):
 
         if self.all_ids['tess'] is not None and self.all_ids['tess'] is not {} and 'search' in self.all_ids['tess'] and self.all_ids['tess']['search'] is not None:
             for sector in self.all_ids['tess']['search']:
-                searchlist=['spoc_20','spoc_120','spoc_200','spoc_600','spoc_1800','qlp_200','qlp_600','qlp_1800'] if all_pipelines else ['all']
-                for search in searchlist:
-                    all_lcs+=[self.get_tess_lc(sector,search=search,**kwargs)]
+                #searchlist=['spoc_20','spoc_120','spoc_200','spoc_600','spoc_1800','qlp_200','qlp_600','qlp_1800','tasoc_200','tasoc_600','tasoc_1800'] if all_pipelines else ['all']
+                searchlist=['spoc','qlp','tasoc','tglc']
+                if not all_pipelines:
+                    sectlc=None
+                    #Searching along list until we find a lightcurve:
+                    i_s=0
+                    while sectlc is None and i_s<len(searchlist):
+                        #print(i_s, searchlist)
+                        if searchlist[i_s]=='spoc':
+                            #Trying TPF
+                            sectlc=self.get_tess_lc(sector,src=searchlist[i_s],tpf=True,**kwargs)
+                            #And then trying FFI:
+                            if sectlc is None:
+                                sectlc=self.get_tess_lc(sector,src=searchlist[i_s],tpf=False,**kwargs)
+                        else:
+                            sectlc=self.get_tess_lc(sector,src=searchlist[i_s],tpf=False,**kwargs)
+                        i_s+=1
+                    if i_s<len(searchlist):
+                        all_lcs+=[sectlc]
+                else:
+                    #Adding all lightcurves:
+                    for search in searchlist:
+                        if search=='spoc':
+                            #Getting both TPF and FFI for SPOC:
+                            all_lcs+=[self.get_tess_lc(sector,src=search,tpf=True,**kwargs)]
+                            all_lcs+=[self.get_tess_lc(sector,src=search,tpf=False,**kwargs)]
+                        else:
+                            all_lcs+=[self.get_tess_lc(sector,src=search,tpf=False,**kwargs)]
         if self.all_ids['k2'] is not None and self.all_ids['k2'] is not {} and 'search' in self.all_ids['k2'] and self.all_ids['k2']['search'] is not None:
             for campaign in self.all_ids['k2']['search']:
                 searchlist=['ev','vand','pdc'] if all_pipelines else ['all']
@@ -1066,7 +1113,7 @@ class multilc(lc):
         elif id is None and 'k2' in self.all_ids:
             id = self.all_ids['k2']['id']
         assert id is not None
-
+        from astroquery.mast import Observations
         if len(str(int(id)))==8 and str(int(id))[:2]=='60':
             #Engineering campaign, so we don't have a proper EPIC here.
             df=None
@@ -1080,7 +1127,6 @@ class multilc(lc):
                 cands=[]
             cands+=['E']
         else:
-            from astroquery.mast import Observations
             #Normal K2 observation:
             df,_=tools.GetExoFop(id,"k2")
             obs_table = Observations.query_object("EPIC "+str(int(id)))
@@ -1117,7 +1163,7 @@ class multilc(lc):
         most_recent_sect = int(np.ceil((Time(datetime.now().strftime("%Y-%m-%d")).jd-2458325.29278)/27.295))
         epoch=pd.read_csv(tools.MonoData_tablepath+"/tess_lc_locations.csv",index_col=0)
         if most_recent_sect>np.max(np.array(list(epoch.index))) and self.update_tess_file:
-            print(most_recent_sect,np.max(np.array(list(epoch.index))))
+            #print(most_recent_sect,np.max(np.array(list(epoch.index))))
             for newsec in np.arange(np.max(np.array(list(epoch.index))),most_recent_sect+1,1):
                 epoch=tools.update_lc_locs(epoch,newsec)
         
@@ -1189,7 +1235,7 @@ class multilc(lc):
                 df=df.loc[df["ID"]==self.all_ids["corot"]]
             return df
     
-    def get_tess_lc(self,sector,search=['all'],use_fast=True,use_eleanor=False,**kwargs):
+    def get_tess_lc(self,sector,src,tpf=True,use_fast=True,use_eleanor=False,**kwargs):
         """Access TESS lightcurve for given sector
 
         Args:
@@ -1210,7 +1256,9 @@ class multilc(lc):
         h = httplib2.Http()
         strtid=str(int(self.all_ids['tess']['id'])).zfill(16)
         epoch=pd.read_csv(tools.MonoData_tablepath+"/tess_lc_locations.csv",index_col=0)
-        if ('all' in search or 'spoc_20' in search) and use_fast:
+
+        #Start at FAST
+        if src=='spoc' and use_fast and tpf:
             searched+=['te_20_spoc_'+str(sector)]
             type='fast-lc'
             fitsloc="https://archive.stsci.edu/missions/tess/tid/s"+str(sector).zfill(4)+"/"+strtid[:4]+"/"+strtid[4:8] + \
@@ -1220,34 +1268,76 @@ class multilc(lc):
             if int(resp[0]['status']) < 400:
                 with fits.open(fitsloc,show_progress=False) as hdus:
                     return self.read_from_file(hdus,fitsloc,mission='tess',sect=str(sector),src='spoc',**kwargs)
-        if ('all' in search or 'spoc_120' in search):
+        #Now at TPF
+        if src=='spoc' and tpf:
             type='lc'
-            fitsloc="https://archive.stsci.edu/missions/tess/tid/s"+str(sector).zfill(4)+"/"+strtid[:4]+"/"+strtid[4:8] + \
-                    "/"+strtid[-8:-4]+"/"+strtid[-4:]+"/tess"+str(int(epoch.loc[sector,'date']))+"-s"+str(int(sector)).zfill(4)+"-" + \
-                    strtid+"-"+str(int(epoch.loc[sector,'runid'])).zfill(4)+"-s_"+type+".fits"
+            fitsloc="https://archive.stsci.edu/missions/tess/tid/s"+str(sector).zfill(4)+"/"+strtid[:4]+"/"+strtid[4:8] + "/"+strtid[-8:-4]+"/"+strtid[-4:]+"/tess"+str(int(epoch.loc[sector,'date']))+"-s"+str(int(sector)).zfill(4)+"-" + strtid+"-"+str(int(epoch.loc[sector,'runid'])).zfill(4)+"-s_"+type+".fits"
             searched+=['te_120_spoc_'+str(sector)]
             resp = h.request(fitsloc, 'HEAD')
             if int(resp[0]['status']) < 400:
                 with fits.open(fitsloc,show_progress=False) as hdus:
                     return self.read_from_file(hdus,fitsloc,mission='tess',sect=str(sector),src='spoc',**kwargs)
-        cad='1800' if sector<=26 else '600'
-        if ('all' in search or 'spoc_1800' in search or 'spoc_600' in search or 'spoc_200' in search):
+        
+        #Now getting FFI lightcurves:
+        if sector<=26:
+            cad='1800'
+        elif sector>=56:
+            cad='200'
+        else:
+            cad='600'
+        if src=='spoc':
             #Getting spoc 30min data:
-            fitsloc='https://mast.stsci.edu/api/v0.1/Download/file?uri=mast:HLSP/tess-spoc/s'+str(int(sector)).zfill(4) + \
-                    "/target/"+strtid[:4]+"/"+strtid[4:8]+"/"+strtid[8:12]+"/"+strtid[12:] + \
-                    "/hlsp_tess-spoc_tess_phot_"+strtid+"-s"+str(int(sector)).zfill(4)+"_tess_v1_lc.fits"
+            fitsloc='https://mast.stsci.edu/api/v0.1/Download/file?uri=mast:HLSP/tess-spoc/s'+str(int(sector)).zfill(4) +   "/target/"+strtid[:4]+"/"+strtid[4:8]+"/"+strtid[8:12]+"/"+strtid[12:] + "/hlsp_tess-spoc_tess_phot_"+strtid+"-s"+str(int(sector)).zfill(4)+"_tess_v1_lc.fits"
             resp = h.request(fitsloc, 'HEAD')
             
             searched+=['te_'+cad+'_spoc_'+str(sector)]
             if int(resp[0]['status']) < 400:
                 with fits.open(fitsloc,show_progress=False) as hdus:
                     return self.read_from_file(hdus,fitsloc,mission='tess',sect=str(sector),src='spoc',**kwargs)
+        if src=='tasoc':
+            from .tools import observed_full
+            res=observed_full(self.all_ids['tess']['id'],self.radec)
+            ncam   = res[4][res[3]==int(sector)]
+            nccd   = res[5][res[3]==int(sector)]
+            fitsloc="https://mast.stsci.edu/api/v0.1/Download/file?uri=mast:HLSP/tasoc/s"+str(int(sector)).zfill(4)+\
+                     "/c"+str(cad).zfill(4)+"/"+strtid[:4]+"/"+strtid[4:8]+"/"+strtid[8:12]+"/"+strtid[12:16]+\
+                     "/hlsp_tasoc_tess_ffi_tic"+strtid[5:]+"-s"+str(int(sector)).zfill(4)+"-cam"+str(int(ncam))+"-ccd"+str(int(nccd))+"-c"+str(cad).zfill(4)+"_tess_v05_cbv-lc.fits"
+            
+            #fitsloc="https://mast.stsci.edu/api/v0.1/Download/file?uri=mast:HLSP/tasoc/s0001/c1800/0000/0003/2508/1244/hlsp_tasoc_tess_ffi_tic00325081244-s0001-cam2-ccd1-c1800_tess_v05_cbv-lc.fits 
+            #fitsloc='https://mast.stsci.edu/api/v0.1/Download/file?uri=mast:HLSP/tess-spoc/s'+str(int(sector)).zfill(4) +   "/target/"+strtid[:4]+"/"+strtid[4:8]+"/"+strtid[8:12]+"/"+strtid[12:] + "/hlsp_tess-spoc_tess_phot_"+strtid+"-s"+str(int(sector)).zfill(4)+"_tess_v1_lc.fits"
+            resp = h.request(fitsloc, 'HEAD')
+            
+            searched+=['te_'+cad+'_tasoc_'+str(sector)]
+            #print(fitsloc, int(resp[0]['status']))
+            if int(resp[0]['status']) < 400:
+                with fits.open(fitsloc,show_progress=False) as hdus:
+                    return self.read_from_file(hdus, fitsloc, mission='tess', sect=str(sector), src='tasoc', **kwargs)
+        if src=='tglc':
+            from .tools import observed_full
+            res    = observed_full(self.all_ids['tess']['id'],self.radec)
+            ncam   = res[4][res[3]==int(sector)]
+            nccd   = res[5][res[3]==int(sector)]
+            gaiaid = str(int(self.all_ids['tess']['data']['GAIA'])).zfill(21)
+            fitsloc='https://mast.stsci.edu/api/v0.1/Download/file?uri=mast:HLSP/tglc/s'+str(int(sector)).zfill(4) + \
+                    "/cam"+str(int(ncam))+"-ccd"+str(int(nccd))+"/"+gaiaid[:4]+"/"+gaiaid[4:8]+"/"+gaiaid[8:12]+"/"+gaiaid[12:16] + \
+                    "/hlsp_tglc_tess_ffi_gaiaid-"+str(int(self.all_ids['tess']['data']['GAIA'])) + \
+                    "-s"+str(int(sector)).zfill(4)+"-cam"+str(int(ncam))+"-ccd"+str(int(nccd))+"_tess_v1_llc.fits"
+            #print(fitsloc)
+            resp = h.request(fitsloc, 'HEAD')
+            
+            searched+=['te_'+cad+'_tglc_'+str(sector)]
+            #print(fitsloc, int(resp[0]['status']))
+            if int(resp[0]['status']) < 400:
+                with fits.open(fitsloc,show_progress=False) as hdus:
+                    return self.read_from_file(hdus, fitsloc, mission='tess', sect=str(sector), src='tglc',**kwargs)
 
-        if ('all' in search or 'qlp_1800' in search or 'qlp_600' in search or 'qlp_200' in search):
+            #hlsp_tglc_tess_ffi_gaiaid-6395607011309867520-s0001-cam2-ccd1_tess_v1_llc.fits
+        
+        if src=='qlp':
             #QLP orbit files stored in folder:
             orbits=[7+sector*2,8+sector*2]
             qlpfiles=['/'.join(self.savefileloc.split('/')[:-1])+"/orbit-"+str(int(orbits[n]))+"_qlplc.h5" for n in range(2)]
-            print(qlpfiles)
+            #print(qlpfiles)
             import h5py
             if os.path.isfile(qlpfiles[0]) and os.path.isfile(qlpfiles[1]):
                 f1=h5py.File(qlpfiles[0])
@@ -1263,6 +1353,7 @@ class multilc(lc):
                     with fits.open(fitsloc,show_progress=False) as hdus:
                         return self.read_from_file(hdus,fitsloc,mission='tess',src='qlpfts',sect=str(sector),**kwargs)
             searched+=['te_'+cad+'_qlp_'+str(sector)]
+
         # if ('all' in search or 'eleanor_1800' in search or 'eleanor_600' in search) and use_eleanor:
         #     import eleanor
         #     print("Loading Eleanor Lightcurve")
@@ -1483,7 +1574,7 @@ class multilc(lc):
         """
         #Masking any cadences we don't want:
         """
-        self.cad_mask=~np.in1d(self.cadence, self.mask_cadences)
+        self.cad_mask=~np.isin(self.cadence, self.mask_cadences)
         if 'cad_mask' not in self.timeseries:
             self.timeseries+=['cad_mask']
 
@@ -1632,6 +1723,7 @@ class multilc(lc):
                     #logging.debug("no file type for "+str(f))
                     return None
             elif f[0][0].header['TELESCOP'].lower()=='tess':
+                #print(f[0][0].header['ORIGIN'])
                 if 'ORIGIN' in f[0][0].header and f[0][0].header['ORIGIN']=='MIT/QLP':
                     fs='elec' if int(sect)<56 else 'norm1'
                     fluxnames={'raw_flux':['SAP_FLUX'],
@@ -1660,7 +1752,34 @@ class multilc(lc):
                                 src='qlp',mission='tess', jd_base=2457000, flx_system=fs, sect=sect, 
                                 cent1=np.hstack([fi[1].data['SAP_X'] for fi in f]), cent2=np.hstack([fi[1].data['SAP_Y'] for fi in f]))
                     return ilc
-
+                elif f[0][0].header['ORIGIN']=='TASOC/Aarhus':
+                    c1=np.hstack([fi[1].data['MOM_CENTR1'] for fi in f]);c2=np.hstack([fi[1].data['MOM_CENTR2'] for fi in f])
+                    ilc.load_lc(np.hstack([fi[1].data['TIME'] for fi in f]), 
+                                        fluxes={'flux':np.hstack([fi[1].data['FLUX_CORR'] for fi in f]),
+                                                'raw_flux':np.hstack([fi[1].data['FLUX_RAW'] for fi in f]),
+                                                'bg_flux':np.hstack([fi[1].data['FLUX_BKG'] for fi in f])},
+                                        flux_errs= {'flux_err':np.hstack([fi[1].data['FLUX_CORR_ERR'] for fi in f]),
+                                                    'raw_flux_err':np.hstack([fi[1].data['FLUX_RAW_ERR'] for fi in f]),
+                                                    'bg_flux_err':np.hstack([np.sqrt(fi[1].data['FLUX_BKG']) for fi in f])},
+                                        src='tasoc',mission='tess', jd_base=2457000, flx_system='ppm', sect=sect, cent1=c1, cent2=c2,
+                                        quality=np.hstack([fi[1].data['QUALITY'] for fi in f]))
+                    return ilc
+                
+                elif f[0][0].header['ORIGIN']=='UCSB/TGLC':
+                    fx=np.hstack([fi[1].data['cal_aper_flux'] for fi in f])
+                    c1=np.zeros(len(f));c2=np.zeros(len(f))
+                    ilc.load_lc(np.hstack([fi[1].data['time    '] for fi in f]), 
+                                        fluxes={'flux':fx,
+                                                'psf_flux':np.hstack([fi[1].data['cal_psf_flux'] for fi in f]),
+                                                'raw_flux':np.hstack([fi[1].data['aperture_flux'] for fi in f]),
+                                                'bg_flux':np.hstack([fi[1].data['background'] for fi in f])},
+                                        flux_errs ={'flux_err':np.hstack([np.sqrt(fi[1].data['aperture_flux']) for fi in f]),
+                                                    'psf_flux_err':np.hstack([np.sqrt(fi[1].data['psf_flux']) for fi in f]),
+                                                    'raw_flux_err':np.hstack([np.sqrt(fi[1].data['aperture_flux']) for fi in f]),
+                                                    'bg_flux_err':np.hstack([np.sqrt(fi[1].data['background']) for fi in f])},
+                                        src='tglc',mission='tess', jd_base=2457000, flx_system='norm1', sect=sect, cent1=None, cent2=None,
+                                        quality=np.hstack([fi[1].data['TGLC_flags'] for fi in f]))
+                    return ilc
                 else:
                     if ~np.isnan(np.nanmedian(np.hstack([fi[1].data['PSF_CENTR2'] for fi in f]))):
                         c1=np.hstack([fi[1].data['PSF_CENTR1'] for fi in f]);c2=np.hstack([fi[1].data['PSF_CENTR2'] for fi in f])
@@ -1676,7 +1795,6 @@ class multilc(lc):
                                         src='pdc',mission='tess', jd_base=2457000, flx_system='elec', sect=sect, cent1=c1, cent2=c2,
                                         quality=np.hstack([fi[1].data['QUALITY'] for fi in f]))
                     return ilc
-
             elif f[0][0].header['TELESCOP'].lower()=='corot':
                 if f[0][0].header['FILENAME'][9:12]=='MON':
                     ilc.load_lc(np.hstack([fi[1].data['DATEHEL'] for fi in f]), 
@@ -1933,7 +2051,7 @@ class multilc(lc):
         import seaborn as sns
         sns.set_palette('viridis')
         if 'flux_flat' in timeseries and not hasattr(self,'flux_flat'):
-            print("flattening")
+            #print("flattening")
             self.flatten(**kwargs)
                 
         for cad in self.init_plot_info['ordered_cadences']:
@@ -1963,7 +2081,7 @@ class multilc(lc):
                     #Plotting only real points as "binned points" style:
                     #print(itimeseries,cad,subplots.keys(),ix)
                     subplots[cad].plot(self.time[ix],yoffset*it+(getattr(self,itimeseries)[ix]-norm_sub)*norm_mult,'.',alpha=0.8,markersize=3.0,color='C'+str(it),label=itimeseries)
-                elif (self.init_plot_info['fine_cuts'][cad]['cadence']*1440)>20 and self.init_plot_info['total_time']>500:
+                elif (self.init_plot_info['fine_cuts'][cad]['cadence']*1440)>=20 and self.init_plot_info['total_time']>500:
                     #So much data that we should bin it back down (to 2-hour bins)
                     self.bin(timeseries=[itimeseries], binsize=1/12,binsuffix='2',use_masked=plot_masked)
                     bin_ix2=(self.bin2_cadence==cad)*np.isfinite(getattr(self,"bin2_"+itimeseries))
@@ -1972,7 +2090,7 @@ class multilc(lc):
                     subplots[cad].plot(self.bin2_time[bin_ix2],yoffset*it+(getattr(self,"bin2_"+itimeseries)[bin_ix2]-norm_sub)*norm_mult,
                                        '.',alpha=0.8,markersize=3.0,color='C'+str(it),label=itimeseries)
                 else:
-                    #print(cad,itimeseries,np.sum(bin_ix),len(self.bin_time[bin_ix]),np.nanmedian(yoffset*it+(getattr(self,"bin_"+itimeseries)[bin_ix]-norm_sub)*norm_mult))
+                    #print("Plotting real points", cad,itimeseries,np.sum(bin_ix),len(self.bin_time[bin_ix]),np.nanmedian(yoffset*it+(getattr(self,"bin_"+itimeseries)[bin_ix]-norm_sub)*norm_mult))
                     #Plotting real points as fine scatters and binned points above:
                     if not bin_only:
                         subplots[cad].plot(self.time[ix],yoffset*it+(getattr(self,itimeseries)[ix]-norm_sub)*norm_mult,'.k',markersize=0.75,alpha=0.25)
@@ -2084,7 +2202,7 @@ class multilc(lc):
                 subplots[cad]=figure(height=int(plot_height/self.init_plot_info['plot_rows']),
                                      width=int(plot_width/24*np.diff(self.init_plot_info['fine_cuts'][cad]['n_plot_col'])[0]))
             #fig.add_subplot(gs[self.init_plot_info['fine_cuts'][cad]['n_plot_row'],self.init_plot_info['fine_cuts'][cad]['n_plot_col'][0]:self.init_plot_info['fine_cuts'][cad]['n_plot_col'][1]])
-        print("binning:",timeseries)
+        #print("binning:",timeseries)
         self.remove_binned_arrs()
         self.bin(timeseries=timeseries,binsize=binsize,**kwargs)
         for it, itimeseries in enumerate(timeseries):

@@ -16,6 +16,7 @@ from astropy.io import fits
 from astropy.io import ascii
 from scipy.signal import savgol_filter
 from scipy import interpolate
+from scipy.stats import truncnorm
 
 import astropy.units as u
 from astropy.units import cds
@@ -59,6 +60,8 @@ import celerite2.pymc
 import arviz as az
 from pytensor import tensor
 
+from scipy.stats import norm,truncnorm
+
 class monoModel():
     """The core MonoTools model class
 
@@ -92,6 +95,7 @@ class monoModel():
                        'train_GP':True,         # train_GP - bool - Train the GP using out-of-transit photometry
                        'fit_no_flatten':False,  # fit_no_flatten - bool - If no GP, by default we spline-flatten the lightcurve. Use fit_no_flatten to turn this off
                        'constrain_LD':True,     # constrain_LD - bool - Use constrained LDs from model or unconstrained?
+                       'transform_LD':True,     # transform_LD - bool - Transform from U to Q for sampling (Kipping reparameterisation)
                        'ld_mult':3.,            # ld_mult - float - How much to multiply theoretical LD param uncertainties
                        'use_L2':False,           # use_L2 - bool - Fit for "second light" (i.e. a binary or planet+blend)
                        'FeH':0.0,               # FeH - float - Stellar FeH
@@ -147,6 +151,10 @@ class monoModel():
         
         if lc is None or type(lc) is not lightcurve.multilc:
             lc = lightcurve.multilc(ID,mission)
+        if hasattr(lc,'mask_cadences'):
+            for cad in lc.mask_cadences:
+                #Making sure we don't have spurious cadences for the same TESS data.
+                lc.remove_cadence(cad)
         self.lc=lc
         setattr(lc,'near_trans', {'all':np.tile(False, len(lc.time))})# if not hasattr(lc,'near_trans') else lc.near_trans)
         setattr(lc,'in_trans', {'all':np.tile(False, len(lc.time))})# if not hasattr(lc,'in_trans') else lc.in_trans)
@@ -209,7 +217,7 @@ class monoModel():
         else:
             return False
 
-    def save_model_to_file(self, savefile=None, limit_size=False):
+    def save_model_to_file(self, savefile=None, limit_size=False, **kwargs):
         """Save a monoModel object direct to file.
 
         Args:
@@ -220,6 +228,8 @@ class monoModel():
             if not hasattr(self,'savenames'):
                 self.get_savename(how='save')
             savefile=self.savenames[0]+'_model.pickle'
+
+        self.save_model_timeseries(**kwargs)
         if hasattr(self,'trace'):
             try:
                 self.trace.to_netcdf(self.savenames[0]+'_trace.nc')
@@ -242,7 +252,7 @@ class monoModel():
         #     self.init_trans_to_plot()
 
         #     #And let's clip gp and lightcurves and pseudo-variables from the trace:
-        #     remvars=[var for var in self.trace.posterior if (('gp_' in var or '_gp' in var or 'light_curve' in var) and np.product(self.trace.posterior[var].shape)>6*len(self.trace.posterior['Rs'])) or '__' in var]
+        #     remvars=[var for var in self.trace.posterior if (('gp_' in var or '_gp' in var or 'light_curve' in var) and np.prod(self.trace.posterior[var].shape)>6*len(self.trace.posterior['Rs'])) or '__' in var]
         #     for key in remvars:
         #         #Permanently deleting these values from the trace.
         #         self.trace.remove_values(key)
@@ -452,7 +462,7 @@ class monoModel():
             for gp in range(len(pl_dic['per_gaps']['gap_widths'])):
                 if pl_dic['per_gaps']['gap_widths'][gp]/pl_dic['per_gaps']['gap_starts'][gp]>max_fraction_increase:
                     startendarr=np.exp(np.linspace(np.log(pl_dic['per_gaps']['gap_starts'][gp]),np.log(pl_dic['per_gaps']['gap_ends'][gp]),int(np.ceil(np.exp(np.log(pl_dic['per_gaps']['gap_widths'][gp]/pl_dic['per_gaps']['gap_starts'][gp])-np.log(max_fraction_increase)))+1)))
-                    print(np.exp(np.log(pl_dic['per_gaps']['gap_widths'][gp]/pl_dic['per_gaps']['gap_starts'][gp])-np.log(max_fraction_increase)),startendarr)
+                    if self.debug: print(np.exp(np.log(pl_dic['per_gaps']['gap_widths'][gp]/pl_dic['per_gaps']['gap_starts'][gp])-np.log(max_fraction_increase)),startendarr)
                     #Splitting into N gaps:
                     mod_per_gaps['gap_starts']+=list(startendarr[:-1])
                     mod_per_gaps['gap_ends']+=list(startendarr[1:])
@@ -572,7 +582,7 @@ class monoModel():
             gap_start_ends (array): Period gap start and ends, with each gap start/end forming a tuple entry to the array
             rmsseries (array): Array of binned times and RMS scatter for each time at the implied duration, as calculated by `compute_rms_series`
         """
-
+        
         rmsseries = self.compute_rms_series(tdur,**kwargs)
 
         dist_from_t0=abs(tcen-rmsseries[:,0])
@@ -586,15 +596,14 @@ class monoModel():
         gaps=np.where(np.diff(dist_from_t0)>(0.9*tdur))[0]
         if len(gaps)>0:
             #Looping from minimum distance from transit to gap, to maximum distance from transit to end-of-lc
-            checkpers=np.arange(dist_from_t0[gaps[0]]-tdur,np.max(dist_from_t0)+tdur,tdur*0.166)
-            checkpers_ix=self.check_periods_have_gaps(checkpers,tdur,[tcen],**kwargs).astype(int) #Seeing if each period has data coverage
+            checkpers = np.hstack([0, np.arange(dist_from_t0[gaps[0]]-tdur, np.max(dist_from_t0)+tdur,tdur/6), np.max([max_per,np.max(dist_from_t0)+tdur])])
+            checkpers_ix = np.hstack([0,self.check_periods_have_gaps(checkpers[1:-1],tdur,[tcen],**kwargs).astype(int),0]) #Seeing if each period has data coverage
 
             #Creating an array of tuples which form start->end of specific gaps:
-            starts=checkpers[:-1][np.diff(checkpers_ix)==1.0]
-            #Because the above array ends beyond the max lc extent, we need to add the max period to this array:
-            ends=np.hstack((checkpers[1:][np.diff(checkpers_ix)==-1.0],max_per))
-            #print(starts,ends)
-            gap_start_ends=np.array([(starts[n],ends[n]) for n in range(len(starts))])
+            #0->1 = start of "gap", diff==1.0; 1->0 = end of gap, diff==-1
+            starts=checkpers[1:][np.diff(checkpers_ix)==1.0]-tdur/12
+            ends=checkpers[:-1][np.diff(checkpers_ix)==-1.0]+tdur/12
+            gap_start_ends=np.column_stack((starts,ends))#np.array([(starts[n],ends[n]) for n in range(len(starts))])
         else:
             gap_start_ends=np.array([(np.max(dist_from_t0),max_per[pl])])
         return gap_start_ends,rmsseries
@@ -619,7 +628,7 @@ class monoModel():
                 polyfit=np.polyfit(tcens,exp_transn,len(tcens))#At a given time, you are given a number, where exact number=transit (i.e. a phase)
                 return per*((np.polyval(polyfit,time)-0.5)%1-0.5)#time-np.array(poly_tcens)[:,None][np.argmin(np.column_stack([abs(time-tc) for tc in poly_tcens]),axis=1)][:,0]
             else:
-                exp_transn = np.hstack([0,ideal_pratio_spans[:,1]])
+                exp_transn = np.hstack([0,ideal_pratio_spans[0]])
                 #exp_transtimes = tcens[0]+(tcens[-1]-tcens[0])*np.hstack([0,ideal_pratio_spans[:,1]])/ideal_pratio_spans[0,0]
                 linfit=np.polyfit(exp_transn,tcens,len(tcens))#
                 poly_tcens=np.polyval(linfit,exp_transn)
@@ -661,7 +670,6 @@ class monoModel():
             array: Boolean array specifying which of the input period list is observed.
         """
         #
-
         
         trans=np.tile(False,np.sum(self.lc.mask))
         days_in_known_transits=[]
@@ -692,10 +700,12 @@ class monoModel():
         #Looping through periods
         
         for per in pers:
-            phase=self.make_phase(self.lc.time[self.lc.mask], tcens, per)
+            phase=self.make_phase(self.lc.time[self.lc.mask], tcens, per=per, fit_ttv_polynomial=False)
+
             intr=abs(phase)<near_thresh*tdur
-            days_in_tr=np.sum([float(self.lc.cadence[ncad].split('_')[1])/86400 for ncad in np.arange(len(self.lc.cadence))[self.lc.mask][intr]])
-            #print(per,days_in_tr,days_in_known_transits)
+            #print(self.lc.cadence[self.lc.mask][intr][::50],self.lc.time[self.lc.mask][intr][::50])
+            days_in_tr=np.sum([float(icad.split('_')[1])/86400 for icad in self.lc.cadence[self.lc.mask][intr]])
+            #print(per,days_in_tr,days_in_known_transits, np.sum(days_in_known_transits))
             check_pers_ix+=[days_in_tr<(1.0+coverage_thresh)*np.sum(days_in_known_transits)]
         return np.array(check_pers_ix)
 
@@ -717,15 +727,21 @@ class monoModel():
         #P_min = np.max(np.hstack((self.compute_period_gaps(pl_dic['tcen'],dur=pl_dic['tdur']),
         #                          self.compute_period_gaps(pl_dic['tcen_2'],dur=pl_dic['tdur']))))
         #print(P_min,np.ceil(pl_dic['period']/P_min),np.ceil(pl_dic['period']/P_min))
-        if 'p_ratios' not in pl_dic and 'period' in pl_dic:
-            check_pers_ints = np.arange(1,np.ceil(pl_dic['period']/10),1.0)
-        elif 'p_ratios' not in pl_dic and 'span' in pl_dic:
-            check_pers_ints = np.arange(1,np.ceil(pl_dic['span']/10),1.0)
+        if self.debug: print(pl_dic)
+        if 'p_ratios' not in pl_dic and 'period' in pl_dic and pl_dic['period'] is not None and not np.isnan(pl_dic['period']):
+            check_pers_ints = np.arange(1,np.ceil(pl_dic['period']/10),1.0).astype(int)
+        elif 'p_ratios' not in pl_dic and 'span' in pl_dic and pl_dic['span'] is not None and not np.isnan(pl_dic['span']):
+            check_pers_ints = np.arange(1,np.ceil(pl_dic['span']/10),1.0).astype(int)
+        elif 'p_ratios' not in pl_dic and 'span' not in pl_dic and len(pl_dic['tcens'])==2:
+            pl_dic['span']=np.max(pl_dic['tcens'])-np.min(pl_dic['tcens'])
+            check_pers_ints = np.arange(1,np.ceil(pl_dic['span']/10),1.0).astype(int)
         else:
             check_pers_ints=pl_dic['p_ratios'][0,0,:]#All valid "m" parameters 
         #pl_dic['period']=pl_dic['maxperiod'] if 'period' not in pl_dic else pl_dic['period']
-
+        
+        #print(pl_dic['span']/check_pers_ints)
         check_pers_ix = self.check_periods_have_gaps(pl_dic['span']/check_pers_ints, pl_dic['tdur'], pl_dic['tcens'],**kwargs)
+        if self.debug: print(check_pers_ints,check_pers_ix)
 
         pl_dic['period_int_aliases']=check_pers_ints[check_pers_ix]
         if len(pl_dic['period_int_aliases'])==0:
@@ -733,6 +749,7 @@ class monoModel():
         else:
             pl_dic['period_aliases']=pl_dic['span']/pl_dic['period_int_aliases']
             pl_dic['P_min']=np.min(pl_dic['period_aliases'])
+        pl_dic['orbit_type']='multi'
         return pl_dic
 
     def calc_gap_edge_likelihoods(self,mono,n_check=100,**kwargs):
@@ -791,10 +808,12 @@ class monoModel():
                 ends+=[np.polyfit(end_gaps[logliks[int(n_check*0.5):-1]<0]-pmax,logliks[int(n_check*0.5):-1][logliks[int(n_check*0.5):-1]<0],1)]
             else:
                 ends+=[np.array([0.0,0.0])]
+
+        pl_dic['orbit_type']='mono'
         self.planets[mono]['per_gaps']['start_loglik_polyvals']=np.vstack(starts)
         self.planets[mono]['per_gaps']['end_loglik_polyvals']=np.vstack(ends)
 
-    def add_ambiguous(self, pl_dic, name, maxint=None, perthresh=2e-4, **kwargs):
+    def add_ambiguous(self, pl_dic, name, maxint=None, max_ttv_hrs_per_year=1, **kwargs):
         """add_ambiguous Adds a transiting planet with more than two non-consecutive transits to planet properties dict
 
         Args:
@@ -804,6 +823,7 @@ class monoModel():
                 depth: ratio
             name (str): Planet name (i.e. '01', 'b', or 'Malcolm')
             maxint (int): Maximum integer to which to search for a close period for the three transits
+            max_ttv_hrs_per_year (float): Maximum TTV offset (in hrs per year) used to find best-matching period aliases.
             perthresh (float): Threshold in period ratios above which we suggest they are identical. Default = 0.06% (45mins on a 50d period)
         """
         assert name not in self.planets
@@ -811,49 +831,65 @@ class monoModel():
         if len(pl_dic['tcens'])==2:
             self.add_duo()
         pl_dic['tcens']=np.sort(pl_dic['tcens'])
+
         pl_dic['span']=np.ptp(pl_dic['tcens'])
-        pairs=pl_dic['tcens'][1:]-pl_dic['tcens'][:-1]
+
+        #min_period()
+        if hasattr(self,'lc'):
+            min_per=tools.calc_min_periods(pl_dic['tcens'],self.lc.time[self.lc.mask],0.8*pl_dic['tdur'])
+        else:
+            min_per=15
+        per_matches = tools.calc_ambig_periods(pl_dic['tcens'], minp=min_per, max_ttv_hrs_per_year=max_ttv_hrs_per_year)
+        assert per_matches is not None, "Cannot find matching transits. Check using `tools.calc_ambig_periods(tcens)` first"
+    
+        pl_dic['maxperiod']=np.max(per_matches['p'])
         
-        pl_dic['maxperiod_pair']=np.argmin(pairs)
-        pl_dic['maxperiod']=np.min(pairs)
-        #Getting period ratios as a fraction of the total end-to-end span:
-        pratios=pairs/pl_dic['span']
-        maxint=int(np.clip(pl_dic['span']/17.5,17.5,150)) if maxint is None else maxint
-        #Checking these against some max integer fraction (24) and deriving closest ratio
-        explore_pratios=np.stack([[[m,i_pratio,n,n/m,(pratios[i_pratio]-(n/m))**2*np.sqrt(n*m)] for n in range(1,maxint) for m in range(1,maxint) if n<m] for i_pratio in range(len(pratios))])
-        #For each m which set of ns produce viable transits for each pratio?
-        #explore_pratios[np.argmin(explore_pratios[:,2,:],axis=]
-        explore_pratios = explore_pratios[explore_pratios[:,:,4]<perthresh,:]
-        #Checking each m as a unique way to divide the span
-        assert len(explore_pratios.shape)>0 and explore_pratios.shape[0]>len(pairs), "Period implied by transits must be close to integer ratio but cut on period ratios ("+str(np.round(100*perthresh,3))+"%) removes more check periods than ratios"
+        #Adding period ratios to dict:
+        pl_dic['p_ratios'] = np.stack([np.vstack([per_matches['n_0_'+str(n)],per_matches['n_0_'+str(len(pl_dic['tcens'])-1)]]) for n in np.arange(len(pl_dic['tcens'])-1,0,-1)],axis=1) 
+        # pairs=pl_dic['tcens'][1:]-pl_dic['tcens'][:-1]
+        # pl_dic['maxperiod_pair']=np.argmin(pairs)
+        # pl_dic['maxperiod']=np.min(pairs)
+        # #Getting period ratios as a fraction of the total end-to-end span:
+        # pratios=pairs/pl_dic['span']
+        # maxint=int(np.clip(pl_dic['span']/17.5,17.5,150)) if maxint is None else maxint
+        # #Checking these against some max integer fraction (24) and deriving closest ratio
+        # explore_pratios=np.stack([[[m,i_pratio,n,n/m,(pratios[i_pratio]-(n/m))**2*np.sqrt(n*m)] for n in range(1,maxint) for m in range(1,maxint) if n<m] for i_pratio in range(len(pratios))])
+        # #For each m which set of ns produce viable transits for each pratio?
+        # #explore_pratios[np.argmin(explore_pratios[:,2,:],axis=]
+        # explore_pratios = explore_pratios[explore_pratios[:,:,4]<perthresh,:]
+        # #Checking each m as a unique way to divide the span
+        # assert len(explore_pratios.shape)>0 and explore_pratios.shape[0]>len(pairs), "Period implied by transits must be close to integer ratio but cut on period ratios ("+str(np.round(100*perthresh,3))+"%) removes more check periods than ratios"
         
         #Now, we have some period ratios of pairs vs span - we must also check they are all mutually intelligible - i.e. the m parameter is identical
-        pl_dic['p_ratios']=[]
-        for m in np.unique(explore_pratios[:,0]):
-            if np.sum(explore_pratios[:,0]==m)==len(pairs):
-                #print(m, "passes with n=",explore_pratios[explore_pratios[:,0]==m,2])
-                pl_dic['p_ratios']+=[np.column_stack([explore_pratios[explore_pratios[:,0]==m,0],np.cumsum(explore_pratios[explore_pratios[:,0]==m,2])])]
-            #else:
-            #    print(m, "only ",np.sum(explore_pratios[:,0]==m),"fits - n=",explore_pratios[explore_pratios[:,0]==m,2])
-        pl_dic['p_ratios']=np.dstack(pl_dic['p_ratios'])#new format - columns of [[m,n_t0],[m,n_t1],[m,n_tn]] stacked for each possible alias.
-        #pl_dic['p_ratios']=np.vstack([explore_pratios[np.argmin(explore_pratios[:,3,i],axis=2),:2,i] for i in range(len(pl_dic['tcens']))])
+        # pl_dic['p_ratios']=[]
+        # for m in np.unique(explore_pratios[:,0]):
+        #     if np.sum(explore_pratios[:,0]==m)==len(pairs):
+        #         #print(m, "passes with n=",explore_pratios[explore_pratios[:,0]==m,2])
+        #         pl_dic['p_ratios']+=[np.column_stack([explore_pratios[explore_pratios[:,0]==m,0],np.cumsum(explore_pratios[explore_pratios[:,0]==m,2])])]
+        #     #else:
+        #     #    print(m, "only ",np.sum(explore_pratios[:,0]==m),"fits - n=",explore_pratios[explore_pratios[:,0]==m,2])
+        # pl_dic['p_ratios']=np.dstack(pl_dic['p_ratios'])#new format - columns of [[m,n_t0],[m,n_t1],[m,n_tn]] stacked for each possible alias.
+        # #pl_dic['p_ratios']=np.vstack([explore_pratios[np.argmin(explore_pratios[:,3,i],axis=2),:2,i] for i in range(len(pl_dic['tcens']))])
         
-        # In the case that the max implied period is not actually possible (e.g. a 2/11 ratio) we need the new max period.
-        #for rat in pl_dic['p_ratios']:
-        #    if pl_dic['p_ratio_21'][0]<pl_dic['p_ratio_32'][0]
-        #   pl_dic['maxperiod']/rat[0]
-        pl_dic['maxperiod']=pl_dic['span']/np.min(pl_dic['p_ratios'][0,0,:])
+        # # In the case that the max implied period is not actually possible (e.g. a 2/11 ratio) we need the new max period.
+        # #for rat in pl_dic['p_ratios']:
+        # #    if pl_dic['p_ratio_21'][0]<pl_dic['p_ratio_32'][0]
+        # #   pl_dic['maxperiod']/rat[0]
+        # pl_dic['maxperiod']=pl_dic['span']/np.min(pl_dic['p_ratios'][0,0,:])
+        
+        
         
         if 'period' not in pl_dic:
             pl_dic['period']=pl_dic['maxperiod']
 
         if 'period_err' not in pl_dic or not np.isfinite(pl_dic['period_err']):
             pl_dic['period_err'] = 0.1666*pl_dic['tdur']
-        #Calculating P_min and the integer steps
+        # #Calculating P_min and the integer steps
+        # print(pl_dic)
         pl_dic=self.compute_period_aliases(pl_dic,**kwargs)
         pl_dic['npers']=len(pl_dic['period_int_aliases'])
         assert pl_dic['npers']>0, "No plausible period aliases found - does lightcurve data eliminate all period aliases?"
-        
+
         #Aliases ruled out need to be removed from the p_ratio array:
         pl_dic['p_ratios'] = pl_dic['p_ratios'][:,:,np.isin(pl_dic['p_ratios'][0,0,:],pl_dic['period_int_aliases'])]
 
@@ -887,9 +923,21 @@ class monoModel():
         #pl_dic['boolean_tcen_zero_index'] = np.any(abs(self.lc.time[:,None]-pl_dic['tcens'][None,:])<3*pl_dic['tdur'],axis=1).astype(int)
         pl_dic['boolean_tcen_prox_index'] = np.argmin(abs(self.lc.time[:,None]-pl_dic['tcens'][None,:]),axis=1)
         pl_dic['boolean_tcen_prox_index'] = np.column_stack([pl_dic['boolean_tcen_prox_index']==tc for tc in range(len(pl_dic['tcens']))])
+        pl_dic['orbit_type']='ambig'
 
         self.planets[name]=pl_dic
         self.ambigs+=[name]
+
+    def compute_circ_period(self,pl):
+        assert pl in self.planets, "must have intialised planet"
+        assert 'tdur' in self.planets[pl] and 'depth' in self.planets[pl], "must have tdur and depth for planet"
+        assert hasattr(self,'rhostar'), "must have intialised stellar parameters"
+        self.planets[pl]['b']=0.4 if 'b' not in self.planets[pl] else self.planets[pl]['b']
+        vrel = 2*np.sqrt((1+self.planets['depth']**0.5)**2 - self.planets[pl]['b']**2)/self.planets['tdur']
+        self.planets[pl]['p_circ_est']=18226*self.rhostar[0]*vrel**-3
+        if pl in self.duos or pl in self.ambigs:
+            self.planets[pl]['p_circ_est_alias_index']=np.argmin(abs(self.planets[pl]['period_aliases']**(1/3)-self.planets[pl]['p_circ_est']**(1/3)))
+            self.planets[pl]['p_circ_est_alias'] = self.planets[pl]['period_aliases'][self.planets[pl]['p_circ_est_alias_index']]
 
     def add_duo(self, pl_dic, name,**kwargs):
         """add_duo Adds a transiting planet with two non-consecutive transits to planet properties dict
@@ -942,7 +990,7 @@ class monoModel():
         pl_dic['boolean_tcen_zero_index'] = np.any(abs(self.lc.time[:,None]-pl_dic['tcens'][None,:])<3*pl_dic['tdur'], axis=1).astype(int)
         pl_dic['boolean_tcen_prox_index'] = np.argmin(abs(self.lc.time[:,None]-pl_dic['tcens'][None,:]), axis=1)
         pl_dic['boolean_tcen_prox_index'] = np.column_stack([pl_dic['boolean_tcen_prox_index']==tc for tc in range(len(pl_dic['tcens']))])
-
+        pl_dic['orbit_type']='duo'
         self.planets[name]=pl_dic
         self.duos+=[name]
     
@@ -954,7 +1002,7 @@ class monoModel():
             Teff (list, optional): Stellar effective Temperature in K in format [value, neg_err, pos_err]. Defaults to np.array([5227,100,100]).
             logg (list, optional): Stellar logg in cgs in format [value, neg_err, pos_err]. Defaults to np.array([4.3,1.0,1.0]).
             FeH (float, optional): Stellar log Metallicity. Defaults to 0.0.
-            rhostar (list, optional): Stellar density in rho_sol (1.411gcm^-3) in format [value, neg_err, pos_err]. Defaults to None.
+            rhostar (list, optional): Stellar density in rho_sol (1.40978gcm^-3) in format [value, neg_err, pos_err]. Defaults to None.
             Mstar (float or list, optional): Stellar mass in Msol either as a float or in format [value, neg_err, pos_err]. Defaults to None.
         """
         self.update(**kwargs)
@@ -1210,7 +1258,7 @@ class monoModel():
                 if 'bin' not in key and "bin_"+key in self.lc.timeseries:
                     setattr(self.lc, key, getattr(self.lc, "bin_"+key))
                 elif 'bin' not in key:
-                    print(key,"not binned? Removing.")
+                    if self.debug: print(key,"not binned? Removing.")
                     if 'mask' in key:
                         setattr(self.lc,key,np.tile(True,len(self.lc.bin_time)))
             self.lc.remove_binned_arrs()
@@ -1278,6 +1326,9 @@ class monoModel():
             self.model_lcs[unqcad]['time_masked']=self.model_lcs[unqcad]['time'][self.model_lcs[unqcad]['mask']]
             self.model_lcs[unqcad]['flux_masked']=self.model_lcs[unqcad]['flux'][self.model_lcs[unqcad]['mask']]
             self.model_lcs[unqcad]['flux_err_masked']=self.model_lcs[unqcad]['flux_err'][self.model_lcs[unqcad]['mask']]
+        
+        #Only taking as limbdark parameters those which have in-transit points:
+        self.transit_limbdarks=np.unique([limbdarkdic[unqcad.split('_')[0]] for unqcad in self.unique_cads if np.any(self.model_lcs[unqcad]['near_trans'])])
 
         #Updating the boolean_tcen_prox_index for each new masked fluxes:
         for pl in self.ambigs+self.duos+self.monos:
@@ -1305,6 +1356,7 @@ class monoModel():
             use_GP (bool, optional): Use GPs to co-fit light curve? Defaults to True
             train_GP (bool, optional): Train the lightcurve GP on out-of-transit data before sampling? Defaults to True
             constrain_LD (bool, optional): Use constrained LDs from model or unconstrained? Defaults to True
+            transform_LD (bool, optional): Whether to transform LDs from u to q
             ld_mult (float, optional): How much to multiply theoretical LD param uncertainties. Defaults to 3.
             use_L2 (bool, optional): Fit for "second light" (i.e. a binary or planet+blend). Defaults to False
             FeH (float, optional): Stellar FeH. Defaults to 0.0
@@ -1381,7 +1433,8 @@ class monoModel():
                     self.planets[pl]['ideal_pcirc_noaliases'] = 2278*self.rhostar[0]*self.planets[pl]['tdur']**3*((1+self.planets[pl]['depth']**0.5)**2-self.planets[pl]['b']**2)**(-3/2)
                 else:
                     self.planets[pl]['ideal_pcirc_noaliases'] = 2278*self.rhostar[0]*self.planets[pl]['tdur']**3*((1+self.planets[pl]['depth']**0.5)**2-0.4**2)**(-3/2) #Have to make an assumption on b. ~0.4 is most likely
-                self.planets[pl]['ideal_pcirc'] = self.planets[pl]['period_aliases'][np.argmin(abs(np.log(self.planets[pl]['ideal_pcirc_noaliases'])-np.log(self.planets[pl]['period_aliases'])))] #Have to make an assumption on b. ~0.4 is most likely
+                self.planets[pl]['ideal_pcirc_ind']=np.argmin(abs(np.log(self.planets[pl]['ideal_pcirc_noaliases'])-np.log(self.planets[pl]['period_aliases'])))
+                self.planets[pl]['ideal_pcirc'] = self.planets[pl]['period_aliases'][self.planets[pl]['ideal_pcirc_ind']] #Have to make an assumption on b. ~0.4 is most likely
                 if pl in self.ambigs:
                     #For trios (if we don't model TTVs) we need to initialise the integer spans required which best match the assumed period
                     self.planets[pl]['ideal_pratio_span'] = self.planets[pl]['p_ratios'][:,:,np.argmin(abs(np.log(self.planets[pl]['ideal_pcirc_noaliases'])-np.log(self.planets[pl]['period_aliases'])))]
@@ -1610,47 +1663,6 @@ class monoModel():
         #                          index_col=0)
         #Rewriting infinite or nan values as <-300:
 
-    def init_multinest(self):
-        """Initialises a multinest model. Using pyTransit as the backend"""
-        return None
-        # from pytransit import RoadRunnerModel
-        # tm = RoadRunnerModel('quadratic')
-        # tm.set_data(times)
-        
-        # #Need to reevaluate such that it can take tdur and b (without P, e or omega)
-        # #How -> from b, and Rp/Rs calculate stellar chord l
-        # #From tdur and stellar density, calculate P and a/Rs
-        
-        # b = a_Rs*np.cos(i)
-        
-        # #If long period and circular:
-        # chord/Rs = 2*np.sqrt((1+ror)**2-b**2) #Scaled to stellar radius
-        # v / Rs = (chord / Rs)/tdur #Scaled to stellar radius
-        # (2*np.pi)/P = v/a # = omega # Angluar velocity
-        
-        # (a/Rs)/P = (v/Rs)/(2*np.pi)
-        # (a/Rs)/P = (chord / Rs)/tdur/(2*np.pi)
-
-        # #Assume circular - Would need to define Ms?
-        # a = (G*Ms)**(1/3)*P**(2/3)/(4*np.pi**2)**(1/3)
-        # P = np.sqrt(4*np.pi**2*a**3)/np.sqrt(G*Ms)
-        # a_Rs = np.sqrt(4*np.pi**2*a**3)/np.sqrt(G*Ms) * (chord / Rs)/tdur/(2*np.pi)
-        # i = np.arccos(a_Rs/b)
-        # #If we only have a/Rs and Ms can we define P?
-        # P = (2*np.pi*a/Rs)/(v/Rs)
-        # P = (2*np.pi*a/Rs)/((chord / Rs)/tdur)
-
-        # tm.evaluate(ror=[0.10, 0.12], 
-        #             ldc=[[0.2, 0.1], [0.5, 0.1]],
-        #             t0=[0.0, 0.01], 
-        #             p=[1, 1],
-        #             a_Rs=[3.0, 2.9], 
-        #             i=[.5*pi, .5*pi],
-        #             e=[0,0],
-        #             omega=[np.pi,np.pi])
-        #Need to do prior transforms and loglikelihood model
-        #How to do vectorisable transit models?
-
 
     def init_pymc_fast(self, start=None, ld_mult=1.75):
         """Initialising a fast model.
@@ -1665,36 +1677,62 @@ class monoModel():
         with pm.Model() as self.pymc_fast_model:
             if self.debug: print("Forming pymc fast model with: monos:",self.monos,"multis:",self.multis,"duos:",self.duos,"trios:",self.ambigs)
 
+            self.model_params={}
             ######################################
             #   Intialising Stellar Params:
             ######################################
             #Using log rho because otherwise the distribution is not normal:
             # NOT NECESSARY IN FAST
             
-            Rs = pm.Normal("Rs", mu=self.Rstar[0], sigma=np.average(abs(self.Rstar[1:])), initval=self.Rstar[0])
-            rhostar = pm.Normal("rhostar", mu=self.rhostar[0], sigma=np.average(abs(self.rhostar[1:])), initval=self.rhostar[0])
+            self.model_params['Rs'] = pm.Normal("Rs", mu=self.Rstar[0], sigma=np.average(abs(self.Rstar[1:])), initval=self.Rstar[0])
+            self.model_params['rhostar'] = pm.TruncatedNormal("rhostar", mu=self.rhostar[0], sigma=np.average(abs(self.rhostar[1:])), initval=self.rhostar[0],lower=1e-3)
             # Ms = pm.Deterministic("Ms",rhostar*Rs**3)
 
             # The 2nd light (not third light as companion light is not modelled)
             # This quantity is in delta-mag
             if self.use_L2:
-                deltamag_contam = {mis:pm.Uniform("deltamag_contam_"+mis, lower=-10.0, upper=10.0) for mis in self.unique_limbdarks}
-                mult = {mis:pm.Deterministic("mult_"+mis,(1+2.511**(-1*deltamag_contam[mis]))) for mis in self.unique_limbdarks} #Factor to multiply normalised lightcurve by
+                self.model_params['deltamag_contam'] = {mis:pm.Uniform("deltamag_contam_"+mis, lower=-10.0, upper=10.0) for mis in self.transit_limbdarks}
+                self.model_params['mult'] = {mis:pm.Deterministic("mult_"+mis,(1+2.511**(-1*self.model_params['deltamag_contam'][mis]))) for mis in self.transit_limbdarks} #Factor to multiply normalised lightcurve by
             else:
-                mult = {mis:1.0 for mis in self.unique_limbdarks}
+                self.model_params['mult'] = {mis:1.0 for mis in self.transit_limbdarks}
 
             ######################################
             #     Initialising dictionaries
             ######################################
-            logrors={};rors={};rpls={};bs={};taus={};reparam_taus={};mintaus={};logtdurs={};tdurs={};u_star={};q_star={}#;dist_in_transits={};a_Rs={}vels={};logvels={};incls={}
-            t0s={pl:{} for pl in self.planets};#t0s is special as it may have variable length
+            self.model_params['logrors']={};self.model_params['rors']={};self.model_params['rpls']={};self.model_params['bs']={};self.model_params['tdurs']={}
+            self.model_params['u_star']={};self.model_params['deps']={}#;dist_in_transits={};a_Rs={}vels={};logvels={};incls={}
+            self.model_params['t0s']={pl:{} for pl in self.planets};#t0s is special as it may have variable length
             self.n_margs={}
             if len(self.ambigs)>0 and not self.model_ambig_ttv:
                 it0={pl:[[] for i in range(len(self.planets[pl]['tcens']))] for pl in self.ambigs}
             if len(self.multis)>0:
-                pers={}
+                self.model_params['pers']={}
                 if not self.assume_circ:
-                    omegas={};eccs={}
+                    self.model_params['omegas']={};self.model_params['eccs']={}
+            
+            # Initialising limb darkening
+            for mis in self.transit_limbdarks:
+                if self.constrain_LD and self.transform_LD:
+                    if 'q_star' not in self.model_params:
+                        self.model_params['q_star']={}
+                    ld_dists=self.get_lds(n_samples=1200,mission=mis)
+                    trans_ld_dists=np.column_stack(tools.u_to_q(ld_dists.T))
+                    #Doing the Kipping transformation
+                    self.model_params['q_star'][mis] = pm.TruncatedNormal("q_star_"+mis,
+                                                     mu=np.nanmedian(trans_ld_dists,axis=0),
+                                                     sigma=np.clip(ld_mult*np.nanstd(trans_ld_dists,axis=0),0.1,1.0), shape=2, 
+                                                     lower=np.tile(1e-5,2), upper=np.tile(1.0-1e-5,2), initval=np.clip(np.nanmedian(trans_ld_dists,axis=0),0,1))
+                    self.model_params['u_star'][mis] = pm.Deterministic("u_star_"+mis, pm.math.stack([2*pm.math.sqrt(self.model_params['q_star'][mis][0])*self.model_params['q_star'][mis][1], 
+                                                                  pm.math.sqrt(self.model_params['q_star'][mis][0])*(1 - 2*self.model_params['q_star'][mis][1])]))
+                elif self.constrain_LD:
+                    ld_dists=self.get_lds(n_samples=1200,mission=mis)
+                    self.model_params['u_star'][mis] = pm.TruncatedNormal("u_star_"+mis, 
+                                                    mu=np.nanmedian(ld_dists,axis=0),
+                                                    sigma=np.clip(ld_mult*np.nanstd(ld_dists,axis=0),0.06,1.0), shape=2,
+                                                    lower=np.tile(1e-5,2),upper=np.tile(1.0-1e-5,2))
+
+                else:
+                    self.model_params['u_star'][mis] = xo.distributions.QuadLimbDark("u_star_"+mis, initval=np.array([0.3, 0.2]))
 
             ######################################
             #     Initialising All params
@@ -1702,71 +1740,102 @@ class monoModel():
 
             for pl in self.planets:
                 if pl not in self.duos+self.ambigs:
-                    t0s[pl] = pm.Normal("t0_"+pl,mu=self.planets[pl]['tcen'],sigma=self.planets[pl]['tdur']*self.timing_sigma)
+                    self.model_params['t0s'][pl] = pm.Normal("t0_"+pl,mu=self.planets[pl]['tcen'],sigma=self.planets[pl]['tdur']*self.timing_sigma)
                     # t0s[pl] = pm.TruncatedNormal("t0_"+pl,mu=self.planets[pl]['tcen'],
                     #                         sigma=self.planets[pl]['tdur']*self.timing_sigma*self.planets[pl]['tdur'],
                     #                         upper=self.planets[pl]['tcen']+self.planets[pl]['tdur']*0.33,
                     #                         lower=self.planets[pl]['tcen']-self.planets[pl]['tdur']*0.33,
                     #                         initval=self.planets[pl]['tcen'])
-                elif pl in self.duos or pl in self.ambigs and self.model_ambig_ttv:
-                    t0s[pl] = pm.Normal("t0_"+pl,mu=self.planets[pl]['tcens'],sigma=np.tile(self.planets[pl]['tdur']*self.timing_sigma,len(self.planets[pl]['tcens'])),shape=len(self.planets[pl]['tcens']))
+                elif pl in self.duos or (pl in self.ambigs and self.model_ambig_ttv):
+                    self.model_params['t0s'][pl] = pm.Normal("t0_"+pl,mu=self.planets[pl]['tcens'],sigma=np.tile(self.planets[pl]['tdur']*self.timing_sigma,len(self.planets[pl]['tcens'])),shape=len(self.planets[pl]['tcens']))
                     # t0s[pl] = pm.TruncatedNormal("t0_"+pl,mu=self.planets[pl]['tcens'],
                     #                         sigma=self.planets[pl]['tdur']*self.timing_sigma,
                     #                         upper=self.planets[pl]['tcens']+self.planets[pl]['tdur']*0.33,
                     #                         lower=self.planets[pl]['tcens']-self.planets[pl]['tdur']*0.33,
                     #                         shape=len(self.planets[pl]['tcens']))#initval=self.planets[pl]['tcens'],
                 elif pl in self.ambigs and not self.model_ambig_ttv:
+                    if not hasattr(self.model_params,'it0'):
+                        self.model_params['it0']={pl:[[] for i in range(len(self.planets[pl]['tcens']))] for pl in self.ambigs}
                     #Deriving intermediate transit times
-                    it0[pl][0] = pm.Normal("t0_"+pl+'_0',mu=self.planets[pl]['tcens'][0],sigma=self.planets[pl]['tdur']*self.timing_sigma*self.planets[pl]['tdur'])
-                    it0[pl][-1] = pm.Normal("t0_"+pl+'_'+str(len(self.planets[pl]['tcens'])-1),mu=self.planets[pl]['tcens'][-1],sigma=self.planets[pl]['tdur']*self.timing_sigma*self.planets[pl]['tdur'])
+                    self.model_params['it0'][pl][0] = pm.Normal("t0_"+pl+'_0',mu=self.planets[pl]['tcens'][0],sigma=self.planets[pl]['tdur']*self.timing_sigma*self.planets[pl]['tdur'])
+                    self.model_params['it0'][pl][-1] = pm.Normal("t0_"+pl+'_'+str(len(self.planets[pl]['tcens'])-1),mu=self.planets[pl]['tcens'][-1],sigma=self.planets[pl]['tdur']*self.timing_sigma*self.planets[pl]['tdur'])
                     #Deriving t0s given the initial and final transit, and the ratio:
                     for n in np.arange(1,len(self.planets[pl]['tcens'])-1):
-                        it0[pl][n]=pm.Deterministic("t0_"+pl+'_'+str(n), it0[pl][0]+(it0[pl][-1]-it0[pl][0])*self.planets[pl]['ideal_pratio_span'][n-1,1]/self.planets[pl]['ideal_pratio_span'][n-1,0])
+                        self.model_params['it0'][pl][n]=pm.Deterministic("t0_"+pl+'_'+str(n), self.model_params['it0'][pl][0]+(self.model_params['it0'][pl][-1]-self.model_params['it0'][pl][0])*self.planets[pl]['ideal_pratio_span'][n-1,1]/self.planets[pl]['ideal_pratio_span'][n-1,0])
                     #Stacking for a final t0 list:
-                    t0s[pl] = pm.Deterministic("t0_"+pl, pm.math.stack([it0[pl][i] for i in range(len(self.planets[pl]['tcens']))]))
+                    self.model_params['t0s'][pl] = pm.Deterministic("t0_"+pl, pm.math.stack([self.model_params['it0'][pl][i] for i in range(len(self.planets[pl]['tcens']))]))
 
                 if pl in self.multis:
-                    pers[pl] = pm.Normal("per_"+pl, mu=self.planets[pl]['period'], sigma=self.planets[pl]['period_err'])
+                    self.model_params['pers'][pl] = pm.Normal("per_"+pl, mu=self.planets[pl]['period'], sigma=self.planets[pl]['period_err'])
+                    if not self.assume_circ:
+                        self.model_params['omegas'][pl]=pmx.angle("omega_"+pl)
+                        self.model_params['eccs'][pl]=self.set_ecc_dist(pl) #Thrown all complex initialisation of eccentricity priors to a separate function
+                #Initialising b for potential direct depth modelling:
+                
+                    
 
+        
                 #############################################
                 #     Initialising shared planet params
                 #############################################
-                logrors[pl]=pm.Normal("logror_"+pl,mu=np.log(self.planets[pl]['ror']), sigma=0.75)
-                # logrors[pl]=pm.TruncatedNormal("logror_"+pl,mu=np.log(self.planets[pl]['ror']), sigma=0.75, 
-                #                                     lower=np.log(0.001), upper=np.log(self.maxdep**0.5+int(self.use_L2)),
-                #                                     initval=np.log(self.planets[pl]['ror']))
-                rors[pl]=pm.Deterministic("ror_"+pl,pm.math.exp(logrors[pl]))
-                rpls[pl]=pm.Deterministic("rpl_"+pl,109.2*rors[pl]*Rs)
+                if 'logror' in self.fit_params:
+                    if 'logror' not in self.model_params:
+                        self.model_params['logrors']={}
+                    self.model_params['logrors'][pl]=pm.Normal("logror_"+pl,mu=np.log(1.2*self.planets[pl]['ror']), sigma=0.5)
+                    self.model_params['rors'][pl]=pm.Deterministic("ror_"+pl,pm.math.exp(self.model_params['logrors'][pl]))
+
+                    if pl in self.multis or (('reparam_tau' not in self.fit_params) and ('reparam_tau4' not in self.fit_params)):
+                        self.model_params['bs'][pl] = xo.distributions.ImpactParameter("b_"+pl, ror=self.model_params['rors'][pl], initval=self.planets[pl]['b'])
+                        #self.model_params['bs'][pl] = pm.Uniform("b_"+pl,lower=0,upper=1,initval=self.planets[pl]['b'])
+                        #if 'logror' in self.marginal_params and pl not in self.multis:
+                        # The Espinoza (2018) parameterization for the joint radius ratio and
+
+                elif 'logdep' in self.fit_params:
+                    #Here, we need b to derive Rp/Rs from depth, and we cannot use the Espinoza reparameterisation:
+                    self.model_params['bs'][pl] = pm.Uniform("b_"+pl,lower=0,upper=1,initval=self.planets[pl]['b'])
+                    if 'logdeps' not in self.model_params:
+                        self.model_params['logdeps']={}
+                        self.model_params['deps']={}
+                    assert len(self.transit_limbdarks)==1, "Can only model depth directly if transits are in a single band/mission"
+                    assert ('reparam_tau' not in self.fit_params) and ('reparam_tau4' not in self.fit_params), "Cannot model depth while also using tau reparameterisation which relies on combination of b & rp/rs"
+                    self.model_params['logdeps'][pl]=pm.Normal("logdep_"+pl,mu=np.log(self.planets[pl]['depth']), sigma=0.5)
+                    self.model_params['deps'][pl]=pm.Deterministic("dep_"+pl,pm.math.exp(self.model_params['logdeps'][pl]))
+                    #I_diskav = 1 - ustar[0]/3 - ustar[1]/6;  mu = pm.math.sqrt(1-b**2);   I_b = 1 - ustar[0]*(1 - mu) - ustar[1]*(1 - mu)**2;  depth = ror**2*I_b/I_diskav
+                    self.model_params['rors'][pl] = pm.Deterministic("ror_"+pl,pm.math.sqrt(self.model_params['deps'][pl]*(1 - self.model_params['u_star'][self.transit_limbdarks[0]][0]/3 - self.model_params['u_star'][self.transit_limbdarks[0]][1]/6)/(1 - self.model_params['u_star'][self.transit_limbdarks[0]][0]*(1 - pm.math.sqrt(1-self.model_params['bs'][pl]**2)) - self.model_params['u_star'][self.transit_limbdarks[0]][1]*(1 - pm.math.sqrt(1-self.model_params['bs'][pl]**2))**2)))
+                
+                self.model_params['rpls'][pl]=pm.Deterministic("rpl_"+pl,109.2*self.model_params['rors'][pl]*self.model_params['Rs'])
                 #Estimating mass using simple polynomial:
                 # logmassests[pl]=pm.Deterministic("logmassest_"+pl, 5.75402469 - (rpls[pl]<=12.2)*(rpls[pl]>=1.58)*(4.67363091 -0.38348534*rpls[pl]) - \
                 #                                              (rpls[pl]<1.58)*(5.81943841-3.81604756*pm.math.log(rpls[pl])))
 
                 # Reparameterisation of b -> tau as otherwise b and tdur are highly correlated
+                if ('reparam_tau' in self.fit_params or 'reparam_tau4' in self.fit_params) and 'taus' not in self.model_params:
+                    self.model_params['taus']={}
+                    self.model_params['min_taus']={}
+                    self.model_params['reparam_taus']={}
+
                 if pl not in self.multis and 'reparam_tau' in self.fit_params:
                     # Tau is the fraction of transit in ingress/egress
                     # This is a reparameterisation which varies  to match the 
-                    reparam_taus[pl] = pm.Uniform("reparam_tau_"+pl, lower=0, upper=1)
-                    mintaus[pl] = pm.Deterministic("mintau_"+pl, 2*rors[pl]/(rors[pl]+1))
+                    self.model_params['reparam_taus'][pl] = pm.Uniform("reparam_tau_"+pl, lower=0, upper=1)
+                    self.model_params['min_taus'][pl] = pm.Deterministic("mintau_"+pl, 2*self.model_params['rors'][pl]/(self.model_params['rors'][pl]+1))
                     #(1-(RpRs + 1)**(-2))+(np.linspace(0,1,100)**4*(RpRs + 1)**(-2))
-                    taus[pl]= pm.Deterministic("tau_"+pl,mintaus[pl] + ((reparam_taus[pl])**4*(1-mintaus[pl]))) # minimum Tau is related to 1 - (1 + rp/rs)^2
-                    bs[pl] = pm.Deterministic("b_"+pl,np.sqrt(((1-rors[pl])**2 - ((1-taus[pl])**2*(1+rors[pl])**2))/(1-(1-taus[pl])**2)))
+                    self.model_params['taus'][pl]= pm.Deterministic("tau_"+pl,self.model_params['min_taus'][pl] + ((self.model_params['reparam_taus'][pl])**4*(1-self.model_params['min_taus'][pl]))) # minimum Tau is related to 1 - (1 + rp/rs)^2
+                    self.model_params['bs'][pl] = pm.Deterministic("b_"+pl,np.sqrt(((1-self.model_params['rors'][pl])**2 - ((1-self.model_params['taus'][pl])**2*(1+self.model_params['rors'][pl])**2))/(1-(1-self.model_params['taus'][pl])**2)))
                 elif pl not in self.multis and 'reparam_tau4' in self.fit_params:
                     # Tau is the fraction of transit in ingress/egress
                     # This is a reparameterisation which varies to match the uniformity of b
-                    reparam_taus[pl] = pm.Uniform("reparam_tau_"+pl, lower=0, upper=1)
-                    mintaus[pl] = pm.Deterministic("mintau_"+pl, 2*rors[pl]/(rors[pl]+1))
+                    self.model_params['reparam_taus'][pl] = pm.Uniform("reparam_tau_"+pl, lower=0, upper=1)
+                    self.model_params['min_taus'][pl] = pm.Deterministic("mintau_"+pl, 2*self.model_params['rors'][pl]/(self.model_params['rors'][pl]+1))
                     #(1-(RpRs + 1)**(-2))+(np.linspace(0,1,100)**4*(RpRs + 1)**(-2))
-                    taus[pl]= pm.Deterministic("tau_"+pl,mintaus[pl] + (reparam_taus[pl]*(1-mintaus[pl]))) # minimum Tau is related to 1 - (1 + rp/rs)^2
-                    bs[pl] = pm.Deterministic("b_"+pl,np.sqrt(((1-rors[pl])**2 - ((1-taus[pl])**2*(1+rors[pl])**2))/(1-(1-taus[pl])**2)))
-                else:
-                    bs[pl] = pm.Uniform("b_"+pl,lower=0,upper=1)
-                    #bs[pl] = pm.Uniform("b_"+pl,lower=0,upper=1,initval=0.5)# xo.distributions.ImpactParameter("b_"+pl,ror=rors[pl])
-
+                    self.model_params['taus'][pl]= pm.Deterministic("tau_"+pl,self.model_params['min_taus'][pl] + (self.model_params['reparam_taus'][pl]*(1-self.model_params['min_taus'][pl]))) # minimum Tau is related to 1 - (1 + rp/rs)^2
+                    self.model_params['bs'][pl] = pm.Deterministic("b_"+pl,np.sqrt(((1-rors[pl])**2 - ((1-self.model_params['taus'][pl])**2*(1+self.model_params['rors'][pl])**2))/(1-(1-self.model_params['taus'][pl])**2)))
+                
                 if 'tdur' in self.fit_params and pl not in self.multis:
                     tdursigma=0.33 if 'tdur_err' not in self.planets[pl] else self.planets[pl]['tdur_err']/self.planets[pl]['tdur']
                     #logtdurs[pl] = pm.Normal("logtdur_"+pl,mu=np.log(self.planets[pl]['tdur']), sigma=tdursigma)
                     #tdurs[pl] = pm.Deterministic("tdur_"+pl,pm.math.exp(logtdurs[pl]))
-                    tdurs[pl] = pm.Normal("tdur_"+pl,mu=self.planets[pl]['tdur'], sigma=tdursigma)
+                    self.model_params['tdurs'][pl] = pm.Normal("tdur_"+pl,mu=self.planets[pl]['tdur'], sigma=tdursigma)
 
                 
             print("initialised planet info")
@@ -1782,34 +1851,21 @@ class monoModel():
             # self.unique_limbdarks=np.unique([limbdarkdic[m] for m in self.limbdark_dic])
 
             #Single mission
-            for mis in self.unique_limbdarks:
-                if self.constrain_LD:
-                    ld_dists=self.get_lds(n_samples=1200,mission=mis)
-                    trans_ld_dists=np.column_stack(tools.u_to_q(ld_dists.T))
-                    #Doing the Kipping transformation
-                    q_star[mis] = pm.TruncatedNormal("q_star_"+mis,
-                                                     mu=np.nanmedian(trans_ld_dists,axis=0),
-                                                     sigma=np.clip(ld_mult*np.nanstd(trans_ld_dists,axis=0),0.1,1.0), shape=2, 
-                                                     lower=0.0, upper=1.0, initval=np.clip(np.nanmedian(trans_ld_dists,axis=0),0,1))
-                    u_star[mis] = pm.Deterministic("u_star_"+mis, pm.math.stack([2*pm.math.sqrt(q_star[mis][0])*q_star[mis][1], 
-                                                                  pm.math.sqrt(q_star[mis][0])*(1 - 2*q_star[mis][1])]))
-                else:
-                    u_star[mis] = xo.distributions.QuadLimbDark("u_star_"+mis, initval=np.array([0.3, 0.2]))
             
             if not hasattr(self,'flux_stds'):
                 # observed 
                 self.flux_stds = {unqcad:np.sqrt(np.clip(np.nanmedian(abs(np.diff(self.lc.flux[self.lc.mask*self.cad_indexes[unqcad]])))**2 - np.nanmedian(self.model_lcs[unqcad]['flux_err_masked'])**2,0.1,50)) for unqcad in self.unique_cads}
                 gptrainmiss=list(self.flux_stds.keys())[np.argmin(list(self.flux_stds.values()))] #Using lowest std to train global GP...
             #Log scatter and local photometric means - per _cadence_
-            log_jitters = {};phot_means={}
+            self.model_params['log_jitters'] = {};self.model_params['phot_means']={}
             for unqcad in self.unique_cads:
                 if self.model_jitter:
-                    log_jitters[unqcad] = pm.Normal("log_jitter_"+unqcad, mu = np.log(self.flux_stds[unqcad])-1, sigma = 1)
+                    self.model_params['log_jitters'][unqcad] = pm.Normal("log_jitter_"+unqcad, mu = np.log(self.flux_stds[unqcad])-1, sigma = 1)
                 else:
                     #Deriving expected jitter and therefore new mean. Taking the measured flux std 
                     self.model_lcs[unqcad]['flux_err_masked_jittered'] = self.model_lcs[unqcad]['flux_err_masked']#np.sqrt(self.model_lcs[unqcad]['flux_err_masked']**2+(0.5*self.flux_stds[unqcad])**2)
                 if self.model_phot_mean:
-                    phot_means[unqcad]  = pm.Normal("phot_mean_"+unqcad,mu=np.median(self.model_lcs[unqcad]['flux_masked']),  sigma=np.std(self.model_lcs[unqcad]['flux_masked']))
+                    self.model_params['phot_means'][unqcad]  = pm.Normal("phot_mean_"+unqcad,mu=np.median(self.model_lcs[unqcad]['flux_masked']),  sigma=np.std(self.model_lcs[unqcad]['flux_masked']))
             
             if self.use_GP:
                 ######################################
@@ -1818,7 +1874,7 @@ class monoModel():
                 if self.debug: print(np.isnan(self.model_time),np.isnan(self.model_flux),np.isnan(self.model_flux_err))
                 if self.train_GP:
                     #Using histograms from the output of the previous GP training as priors for the true model.
-                    vars=[var for var in self.gp_init_trace.posterior if '__' not in var and np.product(self.gp_init_trace.posterior[var].shape)<5*len(self.gp_init_trace.posterior.chain)*len(self.gp_init_trace.posterior.draw)]
+                    vars=[var for var in self.gp_init_trace.posterior if '__' not in var and np.prod(self.gp_init_trace.posterior[var].shape)<5*len(self.gp_init_trace.posterior.chain)*len(self.gp_init_trace.posterior.draw)]
                     ext_gp_init_trace=az.extract(self.gp_init_trace.posterior,var_names=vars)
                     if self.gp_prior_interp:
                         minmaxs={var:np.percentile(ext_gp_init_trace[var].values,[0.5,99.5]).astype(self.floattype) for var in vars}
@@ -1830,186 +1886,204 @@ class monoModel():
                 if hasattr(self, 'periodic_kernel') and self.periodic_kernel is not None:
                     if self.train_GP:
                         #Taking trained values from out-of-transit to use as inputs to GP:
-                        periodic_w0=pm.Interpolated("periodic_w0", x_points=np.linspace(minmaxs["periodic_w0"][0],minmaxs["periodic_w0"][1],201)[1::2],pdf_points=hists["periodic_w0"])
-                        periodic_logpower=pm.Interpolated("periodic_logpower", x_points=np.linspace(minmaxs["periodic_logpower"][0],minmaxs["periodic_logpower"][1],201)[1::2],pdf_points=hists["periodic_logpower"])
-                        ampl_mult_logc=pm.Interpolated("ampl_mult_logc", x_points=np.linspace(minmaxs["ampl_mult_logc"][0],minmaxs["ampl_mult_logc"][1],201)[1::2],pdf_points=hists["ampl_mult_logc"])
-                        ampl_mult_loga=pm.Interpolated("ampl_mult_loga", x_points=np.linspace(minmaxs["ampl_mult_loga"][0],minmaxs["ampl_mult_loga"][1],201)[1::2],pdf_points=hists["ampl_mult_loga"])
-                        gpvars+=[periodic_w0,periodic_logpower,ampl_mult_logc,ampl_mult_loga]
+                        self.model_params['periodic_w0']=pm.Interpolated("periodic_w0", x_points=np.linspace(minmaxs["periodic_w0"][0],minmaxs["periodic_w0"][1],201)[1::2],pdf_points=hists["periodic_w0"])
+                        self.model_params['periodic_logpower']=pm.Interpolated("periodic_logpower", x_points=np.linspace(minmaxs["periodic_logpower"][0],minmaxs["periodic_logpower"][1],201)[1::2],pdf_points=hists["periodic_logpower"])
+                        self.model_params['ampl_mult_logc']=pm.Interpolated("ampl_mult_logc", x_points=np.linspace(minmaxs["ampl_mult_logc"][0],minmaxs["ampl_mult_logc"][1],201)[1::2],pdf_points=hists["ampl_mult_logc"])
+                        self.model_params['ampl_mult_loga']=pm.Interpolated("ampl_mult_loga", x_points=np.linspace(minmaxs["ampl_mult_loga"][0],minmaxs["ampl_mult_loga"][1],201)[1::2],pdf_points=hists["ampl_mult_loga"])
+                        gpvars+=[self.model_params[var] for var in 'periodic_w0,periodic_logpower,ampl_mult_logc,ampl_mult_loga'.split(',')]
                         #Normal kernal
                         if self.gp_prior_interp and 'w0' in minmaxs:
-                            phot_w0=pm.Interpolated("phot_w0", x_points=np.linspace(minmaxs["w0"][0],minmaxs["w0"][1],201)[1::2],pdf_points=hists["w0"])
-                            gpvars+=[phot_w0]
+                            self.model_params['phot_w0']=pm.Interpolated("phot_w0", x_points=np.linspace(minmaxs["w0"][0],minmaxs["w0"][1],201)[1::2],pdf_points=hists["w0"])
+                            gpvars+=[self.model_params['phot_w0']]
                         elif self.gp_prior_interp and 'log_w0' in minmaxs:
-                            phot_log_w0=pm.Interpolated("phot_log_w0", x_points=np.linspace(minmaxs["log_w0"][0],minmaxs["log_w0"][1],201)[1::2],pdf_points=hists["log_w0"])
-                            gpvars+=[phot_log_w0]
+                            self.model_params['phot_log_w0']=pm.Interpolated("phot_log_w0", x_points=np.linspace(minmaxs["log_w0"][0],minmaxs["log_w0"][1],201)[1::2],pdf_points=hists["log_w0"])
+                            gpvars+=[self.model_params['phot_log_w0']]
                         elif 'w0' in meds:
-                            phot_w0=pm.Normal("phot_w0", mu=meds["w0"],sigma=sds["w0"])
-                            gpvars+=[phot_w0]
+                            self.model_params['phot_w0']=pm.Normal("phot_w0", mu=meds["w0"],sigma=sds["w0"])
+                            gpvars+=[self.model_params['phot_w0']]
                         elif 'log_w0' in meds:
-                            phot_log_w0=pm.Normal("phot_log_w0", mu=meds["log_w0"],sigma=sds["log_w0"])
-                            phot_w0=pm.Deterministic("phot_w0",pm.math.exp(phot_log_w0))
-                            gpvars+=[phot_log_w0]
+                            self.model_params['phot_log_w0']=pm.Normal("phot_log_w0", mu=meds["log_w0"],sigma=sds["log_w0"])
+                            self.model_params['phot_w0']=pm.Deterministic("phot_w0",pm.math.exp(self.model_params['phot_log_w0']))
+                            gpvars+=[self.model_params['phot_log_w0']]
                         if self.gp_prior_interp and 'sigma' in minmaxs:
-                            phot_sigma=pm.Interpolated("phot_sigma", x_points=np.linspace(minmaxs["sigma"][0],minmaxs["sigma"][1],201)[1::2],pdf_points=hists["sigma"])
-                            gpvars+=[phot_sigma]
+                            self.model_params['phot_sigma']=pm.Interpolated("phot_sigma", x_points=np.linspace(minmaxs["sigma"][0],minmaxs["sigma"][1],201)[1::2],pdf_points=hists["sigma"])
+                            gpvars+=[self.model_params['phot_sigma']]
                         elif 'sigma' in meds:
-                            phot_sigma=pm.Normal("phot_sigma", mu=meds["sigma"],sigma=sds["sigma"])
-                            gpvars+=[phot_sigma]
+                            self.model_params['phot_sigma']=pm.Normal("phot_sigma", mu=meds["sigma"],sigma=sds["sigma"])
+                            gpvars+=[self.model_params['phot_sigma']]
                         elif self.gp_prior_interp and 'log_sigma' in minmaxs:
-                            phot_log_sigma=pm.Interpolated("phot_log_sigma", x_points=np.linspace(minmaxs["log_sigma"][0],minmaxs["log_sigma"][1],201)[1::2],pdf_points=hists["log_sigma"])
-                            phot_sigma=pm.Deterministic("phot_sigma",pm.math.exp(phot_sigma))
-                            gpvars+=[phot_log_sigma]
+                            self.model_params['phot_log_sigma']=pm.Interpolated("phot_log_sigma", x_points=np.linspace(minmaxs["log_sigma"][0],minmaxs["log_sigma"][1],201)[1::2],pdf_points=hists["log_sigma"])
+                            self.model_params['phot_sigma']=pm.Deterministic("phot_sigma",pm.math.exp(self.model_params['phot_sigma']))
+                            gpvars+=[self.model_params['phot_log_sigma']]
                         if self.gp_prior_interp and "periodic_logQ" in minmaxs:
-                            phot_log_Q=pm.Interpolated("phot_log_Q", x_points=np.linspace(minmaxs["periodic_logQ"][0],minmaxs["periodic_logQ"][1],201)[1::2],pdf_points=hists["periodic_logQ"])
-                            phot_Q=pm.Deterministic("phot_Q",pm.math.exp(phot_sigma))
-                            gpvars+=[phot_log_Q]
+                            self.model_params['phot_log_Q']=pm.Interpolated("phot_log_Q", x_points=np.linspace(minmaxs["periodic_logQ"][0],minmaxs["periodic_logQ"][1],201)[1::2],pdf_points=hists["periodic_logQ"])
+                            self.model_params['phot_Q']=pm.Deterministic("phot_Q",pm.math.exp(self.model_params['phot_sigma']))
+                            gpvars+=[self.model_params['phot_log_Q']]
                         elif 'log_sigma' in meds:
-                            phot_log_sigma=pm.Normal("phot_log_sigma", mu=meds["log_sigma"],sigma=sds["log_sigma"])
-                            phot_sigma=pm.Deterministic("phot_sigma",pm.math.exp(phot_sigma))
-                            gpvars+=[phot_log_sigma]
+                            self.model_params['phot_log_sigma']=pm.Normal("phot_log_sigma", mu=meds["log_sigma"],sigma=sds["log_sigma"])
+                            self.model_params['phot_sigma']=pm.Deterministic("phot_sigma",pm.math.exp(self.model_params['phot_sigma']))
+                            gpvars+=[self.model_params['phot_log_sigma']]
                         elif "periodic_logQ" in meds:
-                            phot_log_Q=pm.Normal("phot_log_Q", mu=meds["periodic_logQ"],sigma=sds["periodic_logQ"])
-                            phot_Q=pm.Deterministic("phot_Q",pm.math.exp(phot_sigma))
-                            gpvars+=[phot_log_Q]
+                            self.model_params['phot_log_Q']=pm.Normal("phot_log_Q", mu=meds["periodic_logQ"],sigma=sds["periodic_logQ"])
+                            self.model_params['phot_Q']=pm.Deterministic("phot_Q",pm.math.exp(phot_sigma))
+                            gpvars+=[self.model_params['phot_log_Q']]
                     else:
                         #Building a periodic kernel with amplitude modified by a third kernel term (i.e. allowing amplitude to vary with time)
-                        periodic_w0=pm.Normal("periodic_w0",mu=(2*np.pi)/self.periodic_kernel['period'],sigma=(2*np.pi)/self.periodic_kernel['period_err'])
-                        periodic_logpower=pm.Normal("periodic_logpower",mu=self.periodic_kernel['logamp'],sigma=self.periodic_kernel['logamp_err'])
+                        self.model_params['periodic_w0']=pm.Normal("periodic_w0",mu=(2*np.pi)/self.periodic_kernel['period'],sigma=(2*np.pi)/self.periodic_kernel['period_err'])
+                        self.model_params['periodic_logpower']=pm.Normal("periodic_logpower",mu=self.periodic_kernel['logamp'],sigma=self.periodic_kernel['logamp_err'])
                         if "periodic_Q" in self.periodic_kernel:
-                            phot_log_Q=np.log(self.periodic_kernel['periodic_Q'])
+                            self.model_params['phot_log_Q']=np.log(self.periodic_kernel['periodic_Q'])
                         else:
-                            phot_log_Q=pm.Normal("periodic_kernel",mu=2,sigma=2)
-                            gpvars+=[phot_log_Q]
-                        phot_Q=pm.Deterministic("phot_Q",pm.math.exp(phot_log_Q))
-                        ampl_mult_logc=pm.Normal("ampl_mult_logc",mu=3,sigma=2,initval=5)
-                        ampl_mult_loga=pm.Normal("ampl_mult_loga",mu=-1,sigma=2,initval=-1)
+                            self.model_params['phot_log_Q']=pm.Normal("periodic_kernel",mu=2,sigma=2)
+                            gpvars+=[self.model_params['phot_log_Q']]
+                        self.model_params['phot_Q']=pm.Deterministic("phot_Q",pm.math.exp(self.model_params['phot_log_Q']))
+                        self.model_params['ampl_mult_logc']=pm.Normal("ampl_mult_logc",mu=3,sigma=2,initval=5)
+                        self.model_params['ampl_mult_loga']=pm.Normal("ampl_mult_loga",mu=-1,sigma=2,initval=-1)
                         #Normal kernel:
-                        phot_w0, phot_sigma = tools.iteratively_determine_GP_params(self.pymc_fast_model,time=self.model_lcs[unqcad]['time_masked'],
+                        self.model_params['phot_w0'], self.model_params['phot_sigm'] = tools.iteratively_determine_GP_params(self.pymc_fast_model,time=self.model_lcs[unqcad]['time_masked'],
                                                                                     flux=self.model_lcs[unqcad]['flux_masked'], 
                                                                                     flux_err=self.model_lcs[unqcad]['flux_err_masked'],
                                                                                     tdurs=[self.planets[pl]['tdur'] for pl in self.planets], debug=self.debug)
-                        gpvars+=[periodic_w0,periodic_logpower,ampl_mult_logc,ampl_mult_loga,phot_w0, phot_sigma]
+                        gpvars+=[self.model_params[var] for var in 'periodic_w0,periodic_logpower,ampl_mult_logc,ampl_mult_loga,phot_w0,phot_sigma'.split(',')]
 
-                    kernel = pymc_terms.SHOTerm(sigma=phot_sigma, w0=phot_w0, Q=1/np.sqrt(2))
-                    ampl_mult_kernel=pymc_terms.RealTerm(a=pm.math.exp(ampl_mult_loga),c=pm.math.exp(ampl_mult_logc))
-                    periodic_kernel = pymc_terms.SHOTerm(S0=pm.math.exp(periodic_logpower)/(periodic_w0**4), w0=periodic_w0, Q=pm.math.exp(phot_Q))
+                    kernel = pymc_terms.SHOTerm(sigma=self.model_params['phot_sigma'], w0=self.model_params['phot_w0'], Q=1/np.sqrt(2))
+                    ampl_mult_kernel=pymc_terms.RealTerm(a=pm.math.exp(self.model_params['ampl_mult_loga']),c=pm.math.exp(self.model_params['ampl_mult_logc']))
+                    periodic_kernel = pymc_terms.SHOTerm(S0=pm.math.exp(self.model_params['periodic_logpower'])/(self.model_params['periodic_w0']**4), w0=self.model_params['periodic_w0'], Q=self.model_params['phot_Q'])
                 elif hasattr(self, 'rotation_kernel') and self.rotation_kernel is not None:
                     #Building a periodic kernel with amplitude modified by a third kernel term (i.e. allowing amplitude to vary with time)
                     if self.train_GP:
                         if self.gp_prior_interp:
-                            rotation_period=pm.Interpolated("rotation_period", x_points=np.linspace(minmaxs["rotation_period"][0],minmaxs["rotation_period"][1],201)[1::2],pdf_points=hists["rotation_period"])
-                            rotation_logamp=pm.Interpolated("rotation_logamp", x_points=np.linspace(minmaxs["rotation_logamp"][0],minmaxs["rotation_logamp"][1],201)[1::2],pdf_points=hists["rotation_logamp"])
-                            rotation_logQ0=pm.Interpolated("rotation_logQ0", x_points=np.linspace(minmaxs["rotation_logQ0"][0],minmaxs["rotation_logQ0"][1],201)[1::2],pdf_points=hists["rotation_logQ0"])
-                            rotation_logdeltaQ=pm.Interpolated("rotation_logdeltaQ", x_points=np.linspace(minmaxs["rotation_logdeltaQ"][0],minmaxs["rotation_logdeltaQ"][1],201)[1::2],pdf_points=hists["rotation_logdeltaQ"])
-                            rotation_mix=pm.Interpolated("rotation_mix", x_points=np.linspace(minmaxs["rotation_mix"][0],minmaxs["rotation_mix"][1],201)[1::2],pdf_points=hists["rotation_mix"])
+                            self.model_params['rotation_period']=pm.Interpolated("rotation_period", x_points=np.linspace(minmaxs["rotation_period"][0],minmaxs["rotation_period"][1],201)[1::2],pdf_points=hists["rotation_period"])
+                            self.model_params['rotation_logamp']=pm.Interpolated("rotation_logamp", x_points=np.linspace(minmaxs["rotation_logamp"][0],minmaxs["rotation_logamp"][1],201)[1::2],pdf_points=hists["rotation_logamp"])
+                            self.model_params['rotation_logQ0']=pm.Interpolated("rotation_logQ0", x_points=np.linspace(minmaxs["rotation_logQ0"][0],minmaxs["rotation_logQ0"][1],201)[1::2],pdf_points=hists["rotation_logQ0"])
+                            self.model_params['rotation_logdeltaQ']=pm.Interpolated("rotation_logdeltaQ", x_points=np.linspace(minmaxs["rotation_logdeltaQ"][0],minmaxs["rotation_logdeltaQ"][1],201)[1::2],pdf_points=hists["rotation_logdeltaQ"])
+                            self.model_params['rotation_mix']=pm.Interpolated("rotation_mix", x_points=np.linspace(minmaxs["rotation_mix"][0],minmaxs["rotation_mix"][1],201)[1::2],pdf_points=hists["rotation_mix"])
                         else:
-                            rotation_period=pm.Normal("rotation_period", mu=meds["rotation_period"],sigma=sds["rotation_period"])
-                            rotation_logamp=pm.Normal("rotation_logamp", mu=meds["rotation_logamp"],sigma=sds["rotation_logamp"])
-                            rotation_logQ0=pm.Normal("rotation_logQ0", mu=meds["rotation_logQ0"],sigma=sds["rotation_logQ0"])
-                            rotation_logdeltaQ=pm.Normal("rotation_logdeltaQ", mu=meds["rotation_logdeltaQ"],sigma=sds["rotation_logdeltaQ"])
-                            rotation_mix=pm.Normal("rotation_mix", mu=meds["rotation_mix"],sigma=sds["rotation_mix"])
+                            self.model_params['rotation_period']=pm.Normal("rotation_period", mu=meds["rotation_period"],sigma=sds["rotation_period"])
+                            self.model_params['rotation_logamp']=pm.Normal("rotation_logamp", mu=meds["rotation_logamp"],sigma=sds["rotation_logamp"])
+                            self.model_params['rotation_logQ0']=pm.Normal("rotation_logQ0", mu=meds["rotation_logQ0"],sigma=sds["rotation_logQ0"])
+                            self.model_params['rotation_logdeltaQ']=pm.Normal("rotation_logdeltaQ", mu=meds["rotation_logdeltaQ"],sigma=sds["rotation_logdeltaQ"])
+                            self.model_params['rotation_mix']=pm.Normal("rotation_mix", mu=meds["rotation_mix"],sigma=sds["rotation_mix"])
 
                     else:
-                        rotation_period=pm.Normal("rotation_period",mu=self.rotation_kernel['period'],sigma=self.rotation_kernel['period_err'])
-                        rotation_logamp=pm.Normal("rotation_logamp",mu=self.rotation_kernel['logamp'],sigma=self.rotation_kernel['sigma_logamp'])
+                        self.model_params['rotation_period']=pm.Normal("rotation_period",mu=self.rotation_kernel['period'],sigma=self.rotation_kernel['period_err'])
+                        self.model_params['rotation_logamp']=pm.Normal("rotation_logamp",mu=self.rotation_kernel['logamp'],sigma=self.rotation_kernel['sigma_logamp'])
                         if 'logQ0' in self.rotation_kernel and 'sigma_logQ0' in self.rotation_kernel:
-                            rotation_logQ0=pm.Normal("rotation_logQ0",mu=self.rotation_kernel['logQ0'],sigma=self.rotation_kernel['sigma_logQ0'])
+                            self.model_params['rotation_logQ0']=pm.Normal("rotation_logQ0",mu=self.rotation_kernel['logQ0'],sigma=self.rotation_kernel['sigma_logQ0'])
                         else:
-                            rotation_logQ0=pm.Normal("rotation_logQ0",mu=1.0,sigma=5)
+                            self.model_params['rotation_logQ0']=pm.Normal("rotation_logQ0",mu=1.0,sigma=5)
                         if 'logdeltaQ0' in self.rotation_kernel and 'sigma_logdeltaQ' in self.rotation_kernel:
-                            rotation_logdeltaQ=pm.Normal("rotation_logdeltaQ", mu=self.rotation_kernel['logdeltaQ0'], sigma=self.rotation_kernel['sigma_logdeltaQ'])
+                            self.model_params['rotation_logdeltaQ']=pm.Normal("rotation_logdeltaQ", mu=self.rotation_kernel['logdeltaQ0'], sigma=self.rotation_kernel['sigma_logdeltaQ'])
                         else:
-                            rotation_logdeltaQ=pm.Normal("rotation_logdeltaQ", mu=2.,sigma=10.)
-                        rotation_mix=pm.Uniform("rotation_mix",lower=0,upper=1.0)
-                    gpvars+=[rotation_period,rotation_logamp,rotation_logQ0,rotation_logdeltaQ,rotation_mix]
+                            self.model_params['rotation_logdeltaQ']=pm.Normal("rotation_logdeltaQ", mu=2.,sigma=10.)
+                        self.model_params['rotation_mix']=pm.Uniform("rotation_mix",lower=0,upper=1.0)
+                    gpvars+=[self.model_params[var] for var in 'rotation_period,rotation_logamp,rotation_logQ0,rotation_logdeltaQ,rotation_mix'.split(',')]
                     #'sigma', 'Q0', 'dQ', and 'f'
-                    rotational_kernel = pymc_terms.RotationTerm(sigma=pm.math.exp(rotation_logamp), period=rotation_period, 
-                                                                  Q0=pm.math.exp(rotation_logQ0), dQ=pm.math.exp(rotation_logdeltaQ), f=rotation_mix)
+                    rotational_kernel = pymc_terms.RotationTerm(sigma=pm.math.exp(self.model_params['rotation_logamp']), period=self.model_params['rotation_period'], 
+                                                                  Q0=pm.math.exp(self.model_params['rotation_logQ0']), dQ=pm.math.exp(self.model_params['rotation_logdeltaQ']), f=self.model_params['rotation_mix'])
                 else:
                     if self.train_GP:
                         #Taking trained values from out-of-transit to use as inputs to GP:
                         if self.gp_prior_interp and 'w0' in minmaxs:
-                            phot_w0=pm.Interpolated("phot_w0", x_points=np.linspace(minmaxs["w0"][0],minmaxs["w0"][1],201)[1::2],pdf_points=hists["w0"])
-                            gpvars+=[phot_w0]
+                            self.model_params['phot_w0']=pm.Interpolated("phot_w0", x_points=np.linspace(minmaxs["w0"][0],minmaxs["w0"][1],201)[1::2],pdf_points=hists["w0"])
+                            gpvars+=[self.model_params['phot_w0']]
                         elif self.gp_prior_interp and 'log_w0' in minmaxs:
-                            phot_log_w0=pm.Interpolated("phot_log_w0", x_points=np.linspace(minmaxs["log_w0"][0],minmaxs["log_w0"][1],201)[1::2],pdf_points=hists["log_w0"])
-                            phot_w0=pm.Deterministic("phot_w0",pm.math.exp(phot_log_w0))
-                            gpvars+=[phot_log_w0]
+                            self.model_params['phot_log_w0']=pm.Interpolated("phot_log_w0", x_points=np.linspace(minmaxs["log_w0"][0],minmaxs["log_w0"][1],201)[1::2],pdf_points=hists["log_w0"])
+                            self.model_params['phot_w0']=pm.Deterministic("phot_w0",pm.math.exp(self.model_params['phot_log_w0']))
+                            gpvars+=[self.model_params['phot_log_w0']]
                         elif 'w0' in meds:
-                            phot_w0=pm.Normal("phot_w0",mu=meds["w0"],sigma=sds["w0"])
-                            gpvars+=[phot_w0]
+                            self.model_params['phot_w0']=pm.Normal("phot_w0",mu=meds["w0"],sigma=sds["w0"])
+                            gpvars+=[self.model_params['phot_w0']]
                         elif 'log_w0' in meds:
-                            phot_log_w0=pm.Normal("phot_log_w0",mu=meds["log_w0"],sigma=sds["log_w0"])
-                            phot_w0=pm.Deterministic("phot_w0",pm.math.exp(phot_log_w0))
-                            gpvars+=[phot_log_w0]
+                            self.model_params['phot_log_w0']=pm.Normal("phot_log_w0",mu=meds["log_w0"],sigma=sds["log_w0"])
+                            self.model_params['phot_w0']=pm.Deterministic("phot_w0",pm.math.exp(self.model_params['phot_log_w0']))
+                            gpvars+=[self.model_params['phot_log_w0']]
                         if self.gp_prior_interp and 'sigma' in minmaxs:
                             phot_sigma=pm.Interpolated("phot_sigma", x_points=np.linspace(minmaxs["sigma"][0],minmaxs["sigma"][1],201)[1::2],pdf_points=hists["sigma"])
                             gpvars+=[phot_sigma]
                         elif self.gp_prior_interp and 'log_sigma' in minmaxs:
-                            phot_log_sigma=pm.Interpolated("phot_log_sigma", x_points=np.linspace(minmaxs["log_sigma"][0],minmaxs["log_sigma"][1],201)[1::2],pdf_points=hists["log_sigma"])
-                            phot_sigma=pm.Normal("phot_log_sigma",mu=meds['log_sigma'],sigma=sds['log_sigma'])
-                            gpvars+=[phot_log_sigma]
+                            self.model_params['phot_log_sigma']=pm.Interpolated("phot_log_sigma", x_points=np.linspace(minmaxs["log_sigma"][0],minmaxs["log_sigma"][1],201)[1::2],pdf_points=hists["log_sigma"])
+                            self.model_params['phot_sigma']=pm.Normal("phot_log_sigma",mu=meds['log_sigma'],sigma=sds['log_sigma'])
+                            gpvars+=[self.model_params['phot_log_sigma']]
                         elif 'sigma' in meds:
-                            phot_sigma=pm.Normal("phot_sigma",mu=meds['sigma'],sigma=sds['sigma'])
-                            gpvars+=[phot_sigma]
+                            self.model_params['phot_sigma']=pm.Normal("phot_sigma",mu=meds['sigma'],sigma=sds['sigma'])
+                            gpvars+=[self.model_params['phot_sigma']]
                         elif 'log_sigma' in meds:
-                            phot_log_sigma=pm.Normal("phot_log_sigma",mu=meds['log_sigma'],sigma=sds['log_sigma'])
-                            phot_sigma=pm.Deterministic("phot_sigma",pm.math.exp(phot_sigma))
-                            gpvars+=[phot_log_sigma]
+                            self.model_params['phot_log_sigma']=pm.Normal("phot_log_sigma",mu=meds['log_sigma'],sigma=sds['log_sigma'])
+                            self.model_params['phot_sigma']=pm.Deterministic("phot_sigma",pm.math.exp(self.model_params['phot_sigma']))
+                            gpvars+=[self.model_params['phot_log_sigma']]
                     else:
                         # Transit jitter & GP parameters
                         #log_jitters = pm.Normal("log_jitters", mu=np.log(np.var(y[m])), sigma=10)
-                        phot_w0, phot_sigma = tools.iteratively_determine_GP_params(self.pymc_fast_model,time=self.model_lcs[gptrainmiss]['time'],
+                        self.model_params['phot_w0'], self.model_params['phot_sigma'] = tools.iteratively_determine_GP_params(self.pymc_fast_model,time=self.model_lcs[gptrainmiss]['time'],
                                                                                     flux=self.model_lcs[gptrainmiss]['flux'], flux_err=self.model_lcs[gptrainmiss]['flux_err'],
                                                                                     tdurs=[self.planets[pl]['tdur'] for pl in self.planets], debug=self.debug)
-                    kernel = pymc_terms.SHOTerm(sigma=phot_sigma, w0=phot_w0, Q=1/np.sqrt(2))
+                    kernel = pymc_terms.SHOTerm(sigma=self.model_params['phot_sigma'], w0=self.model_params['phot_w0'], Q=1/np.sqrt(2))
 
             #####################################################
             #  Multiplanet lightcurve model & derived parameters
             #####################################################
-            orbits={}
-            light_curves={unqcad:{} for unqcad in self.unique_cads}
+            self.model_params['orbits']={}
+            self.model_params['light_curves']={unqcad:{} for unqcad in self.unique_cads}
             
             for pl in self.planets:
                 if pl in self.multis:
                     #pl, Rs, rho_S, per, t0, b, tdur
                     #pl, Rs, t0, b, tdur
-                    orbits[pl] = xo.orbits.KeplerianOrbit(r_star=Rs, period=pers[pl], t0=t0s[pl], b=bs[pl], rho_star=rhostar*1.40978)
+                    self.model_params['orbits'][pl] = xo.orbits.KeplerianOrbit(r_star=self.model_params['Rs'], period=self.model_params['pers'][pl], t0=self.model_params['t0s'][pl], b=self.model_params['bs'][pl], rho_star=self.model_params['rhostar']*1.40978)
                     for unqcad in self.unique_cads:
                         if np.any(self.model_lcs[unqcad]['near_trans']):
-                            light_curves[unqcad][pl]=pm.Deterministic(pl+"_light_curves_"+unqcad,
-                                                                    xo.LimbDarkLightCurve(u_star[self.limbdark_dict[unqcad]]).get_light_curve(
-                                                                            orbit=orbits[pl], r=rpls[pl]/109.2,
+                            self.model_params['light_curves'][unqcad][pl]=pm.Deterministic(pl+"_light_curves_"+unqcad,
+                                                                    xo.LimbDarkLightCurve(self.model_params['u_star'][self.limbdark_dict[unqcad]]).get_light_curve(
+                                                                            orbit=self.model_params['orbits'][pl], r=self.model_params['rpls'][pl]/109.2,
                                                                             t=self.model_lcs[unqcad]['time'].astype(self.floattype),
-                                                                            ).flatten()/(self.lc.flx_unit*mult[self.limbdark_dict[unqcad]]))     
+                                                                            ).flatten()/(self.lc.flx_unit*self.model_params['mult'][self.limbdark_dict[unqcad]]))     
                             #                                                 texp=self.texp_dict[unqcad]
                         else:
-                            light_curves[unqcad][pl]=pt.tensor.tile(0,len(self.model_lcs[unqcad]['time']))
-                elif pl in self.duos+self.ambigs:
+                            self.model_params['light_curves'][unqcad][pl]=pt.tensor.tile(0,len(self.model_lcs[unqcad]['time']))
+                elif pl in self.duos or (pl in self.ambigs and not self.model_ambig_ttv):
                     maxper_span=1 if pl in self.duos else self.planets[pl]['p_ratios'][0,0,0]
-                    orbits[pl] = tools.DuoOrbit(r_star=Rs, t0s=t0s[pl], b=bs[pl], duration=tdurs[pl], maxper_span=maxper_span)
+                    self.model_params['orbits'][pl] = tools.DuoOrbit(r_star=self.model_params['Rs'], t0s=self.model_params['t0s'][pl], b=self.model_params['bs'][pl], duration=self.model_params['tdurs'][pl], maxper_span=maxper_span, ror=self.model_params['rors'][pl])
                     for unqcad in self.unique_cads:
                         if np.any(self.model_lcs[unqcad]['near_trans']):
-                            light_curves[unqcad][pl]=pm.Deterministic(pl+"_light_curves_"+unqcad,
-                                                                      xo.LimbDarkLightCurve(u_star[self.limbdark_dict[unqcad]]).get_light_curve(
-                                                                            orbit=orbits[pl], r=rpls[pl]/109.2,
+                            self.model_params['light_curves'][unqcad][pl]=pm.Deterministic(pl+"_light_curves_"+unqcad,
+                                                                      xo.LimbDarkLightCurve(self.model_params['u_star'][self.limbdark_dict[unqcad]]).get_light_curve(
+                                                                            orbit=self.model_params['orbits'][pl], r=self.model_params['rpls'][pl]/109.2,
                                                                             t=self.model_lcs[unqcad]['time'],# - pm.math.dot(self.planets[pl]['model_boolean_tcen_prox_index'][unqcad].astype(np.int8), t0s[pl]))
-                                                                            ).flatten()/(self.lc.flx_unit*mult[self.limbdark_dict[unqcad]]))
+                                                                            ).flatten()/(self.lc.flx_unit*self.model_params['mult'][self.limbdark_dict[unqcad]]))
                             #                                                texp=self.texp_dict[unqcad]
                         else:
-                            light_curves[unqcad][pl]=pt.tensor.tile(0,len(self.model_lcs[unqcad]['time']))
+                            self.model_params['light_curves'][unqcad][pl]=pt.tensor.tile(0,len(self.model_lcs[unqcad]['time']))
+                elif pl in self.ambigs and self.model_ambig_ttv:
+                    #self.compute_circ_period(pl)
+                    maxper_span=1 if pl in self.duos else self.planets[pl]['p_ratios'][0,0,0]
+                    #print(t0s[pl].eval(),
+                    #      np.hstack([0,self.planets[pl]['p_ratios'][:,1,self.planets[pl]['ideal_pcirc_ind']]]).astype(int))
+                    self.model_params['orbits'][pl] = xo.orbits.TTVOrbit(r_star=self.model_params['Rs'], transit_times=[self.model_params['t0s'][pl]],
+                                                    transit_inds=[np.hstack([0,self.planets[pl]['p_ratios'][:,1,self.planets[pl]['ideal_pcirc_ind']]]).astype(int)],
+                                                    b=self.model_params['bs'][pl], duration=self.model_params['tdurs'][pl])#,period=self.planets[pl]['ideal_pcirc'] )#, maxper_span=maxper_span)
+                    for unqcad in self.unique_cads:
+                        if np.any(self.model_lcs[unqcad]['near_trans']):
+                            self.model_params['light_curves'][unqcad][pl]=pm.Deterministic(pl+"_light_curves_"+unqcad,
+                                                                      xo.LimbDarkLightCurve(self.model_params['u_star'][self.limbdark_dict[unqcad]]).get_light_curve(
+                                                                            orbit=self.model_params['orbits'][pl], r=self.model_params['rpls'][pl]/109.2,
+                                                                            t=self.model_lcs[unqcad]['time'],# - pm.math.dot(self.planets[pl]['model_boolean_tcen_prox_index'][unqcad].astype(np.int8), t0s[pl]))
+                                                                            ).flatten()/(self.lc.flx_unit*self.model_params['mult'][self.limbdark_dict[unqcad]]))
+                            #                                                texp=self.texp_dict[unqcad]
+                        else:
+                            self.model_params['light_curves'][unqcad][pl]=pt.tensor.tile(0,len(self.model_lcs[unqcad]['time']))
                 elif pl in self.monos:
-                    orbits[pl] = tools.SingleOrbit(r_star=Rs, t0=t0s[pl], b=bs[pl], duration=tdurs[pl])
+                    self.model_params['orbits'][pl] = tools.SingleOrbit(r_star=self.model_params['Rs'], t0=self.model_params['t0s'][pl], b=self.model_params['bs'][pl], duration=self.model_params['tdurs'][pl])
                     for unqcad in self.unique_cads:
                         if np.any(self.model_lcs[unqcad]['near_trans']):
-                            light_curves[unqcad][pl]=pm.Deterministic(pl+"_light_curves_"+unqcad,
-                                                                      xo.LimbDarkLightCurve(u_star[self.limbdark_dict[unqcad]]).get_light_curve(
-                                                                            orbit=orbits[pl], r=rpls[pl]/109.2,
+                            self.model_params['light_curves'][unqcad][pl]=pm.Deterministic(pl+"_light_curves_"+unqcad,
+                                                                      xo.LimbDarkLightCurve(self.model_params['u_star'][self.limbdark_dict[unqcad]]).get_light_curve(
+                                                                            orbit=self.model_params['orbits'][pl], r=self.model_params['rpls'][pl]/109.2,
                                                                             t=self.model_lcs[unqcad]['time'],# - pm.math.dot(self.planets[pl]['model_boolean_tcen_prox_index'][unqcad].astype(np.int8), t0s[pl]))
-                                                                            ).flatten()/(self.lc.flx_unit*mult[self.limbdark_dict[unqcad]]))
+                                                                            ).flatten()/(self.lc.flx_unit*self.model_params['mult'][self.limbdark_dict[unqcad]]))
                             #                                                texp=self.texp_dict[unqcad]
                         else:
-                            light_curves[unqcad][pl]=pt.tensor.tile(0,len(self.model_lcs[unqcad]['time']))
+                            self.model_params['light_curves'][unqcad][pl]=pt.tensor.tile(0,len(self.model_lcs[unqcad]['time']))
 
             # if not self.use_GP:
             #     #Calculating some extra info to speed up the loglik calculation
@@ -2026,48 +2100,48 @@ class monoModel():
             
             #marg_all_lc_model = pm.Deterministic("marg_all_lc_model",
             #                                        pm.math.sum([light_curves[pl] for pl in self.planets],axis=0))
-            sum_lightcurves={}
+            self.model_params['sum_lightcurves']={}
             for unqcad in self.unique_cads:
                 if np.any(self.model_lcs[unqcad]['near_trans']):
-                    sum_lightcurves[unqcad] = pm.math.sum([light_curves[unqcad][pl] for pl in self.planets],axis=0)
+                    self.model_params['sum_lightcurves'][unqcad] = pm.math.sum([self.model_params['light_curves'][unqcad][pl] for pl in self.planets],axis=0)
                 else:
-                    sum_lightcurves[unqcad] = pt.tensor.tile(0,len(self.model_lcs[unqcad]['time']))
+                    self.model_params['sum_lightcurves'][unqcad] = pt.tensor.tile(0,len(self.model_lcs[unqcad]['time']))
 
             if self.use_GP:
-                marglclogliks = {}
-                gp_preds = {}
+                self.model_params['marglclogliks'] = {}
+                self.model_params['gp_preds'] = {}
 
                 for unqcad in self.unique_cads:
                     if hasattr(self,'periodic_kernel') and self.periodic_kernel is not None:
-                        self.gp[unqcad] = celerite2.pymc.GaussianProcess(kernel+ampl_mult_kernel*periodic_kernel,self.model_lcs[unqcad]['time_masked'],
-                                                                    diag = self.model_lcs[unqcad]['flux_err_masked']**2 + pm.math.exp(log_jitters[unqcad])**2, quiet=True,
-                                                                    mean = phot_means[unqcad] + sum_lightcurves[unqcad][self.model_lcs[unqcad]['mask']])#transitmodels)
+                        self.gp[unqcad] = celerite2.pymc.GaussianProcess(kernel+self.model_params['ampl_mult_kernel']*periodic_kernel,self.model_lcs[unqcad]['time_masked'],
+                                                                    diag = self.model_lcs[unqcad]['flux_err_masked']**2 + pm.math.exp(self.model_params['log_jitters'][unqcad])**2, quiet=True,
+                                                                    mean = self.model_params['phot_means'][unqcad] + self.model_params['sum_lightcurves'][unqcad][self.model_lcs[unqcad]['mask']])#transitmodels)
                     elif hasattr(self,'rotation_kernel') and self.rotation_kernel is not None:
                         self.gp[unqcad] = celerite2.pymc.GaussianProcess(rotational_kernel,self.model_lcs[unqcad]['time_masked'],
-                                                                    diag=self.model_lcs[unqcad]['flux_err_masked']**2 + pm.math.exp(log_jitters[unqcad])**2, quiet=True,
-                                                                    mean = phot_means[unqcad] + sum_lightcurves[unqcad][self.model_lcs[unqcad]['mask']])#transitmodels)
+                                                                    diag=self.model_lcs[unqcad]['flux_err_masked']**2 + pm.math.exp(self.model_params['log_jitters'][unqcad])**2, quiet=True,
+                                                                    mean = self.model_params['phot_means'][unqcad] + self.model_params['sum_lightcurves'][unqcad][self.model_lcs[unqcad]['mask']])#transitmodels)
                     else:
                         self.gp[unqcad] = celerite2.pymc.GaussianProcess(kernel,self.model_lcs[unqcad]['time_masked'],
-                                                                    diag=self.model_lcs[unqcad]['flux_err_masked']**2 + pm.math.exp(log_jitters[unqcad])**2, quiet=True,
-                                                                    mean = phot_means[unqcad] + sum_lightcurves[unqcad][self.model_lcs[unqcad]['mask']]) #transitmodels)
+                                                                    diag=self.model_lcs[unqcad]['flux_err_masked']**2 + pm.math.exp(self.model_params['log_jitters'][unqcad])**2, quiet=True,
+                                                                    mean = self.model_params['phot_means'][unqcad] + self.model_params['sum_lightcurves'][unqcad][self.model_lcs[unqcad]['mask']]) #transitmodels)
 
-                    marglclogliks[unqcad]=pm.Deterministic("marglcloglik_"+unqcad, self.gp[unqcad].marginal("gp_llk_"+unqcad, observed = self.model_lcs[unqcad]['flux_masked']))
-                    gp_preds[unqcad]=pm.Deterministic("gp_pred_"+unqcad, self.gp[unqcad].predict(self.model_lcs[unqcad]['flux_masked'],
+                    self.model_params['marglclogliks'][unqcad]=pm.Deterministic("marglcloglik_"+unqcad, self.gp[unqcad].marginal("gp_llk_"+unqcad, observed = self.model_lcs[unqcad]['flux_masked']))
+                    self.model_params['gp_preds'][unqcad]=pm.Deterministic("gp_pred_"+unqcad, self.gp[unqcad].predict(self.model_lcs[unqcad]['flux_masked'],
                                                                                 t=self.model_lcs[unqcad]['time'],
                                                                                 return_var=False, include_mean=False))
             else:
-                marglclogliks={}
+                self.model_params['marglclogliks']={}
                 
                 for unqcad in self.unique_cads:
-                    mu=sum_lightcurves[unqcad][self.model_lcs[unqcad]['mask']]+phot_means[unqcad] if self.model_phot_mean else sum_lightcurves[unqcad][self.model_lcs[unqcad]['mask']]
-                    sigma=(self.model_lcs[unqcad]['flux_err_masked']**2 + pm.math.exp(log_jitters[unqcad])**2)**0.5 if self.model_jitter else self.model_lcs[unqcad]['flux_err_masked_jittered']
-                    marglclogliks[unqcad] = pm.Normal("marglcloglik_"+unqcad,  mu=mu, sigma=sigma, 
+                    mu=self.model_params['sum_lightcurves'][unqcad][self.model_lcs[unqcad]['mask']]+self.model_params['phot_means'][unqcad] if self.model_phot_mean else self.model_params['sum_lightcurves'][unqcad][self.model_lcs[unqcad]['mask']]
+                    sigma=(self.model_lcs[unqcad]['flux_err_masked']**2 + pm.math.exp(self.model_params['log_jitters'][unqcad])**2)**0.5 if self.model_jitter else self.model_lcs[unqcad]['flux_err_masked_jittered']
+                    self.model_params['marglclogliks'][unqcad] = pm.Normal("marglcloglik_"+unqcad,  mu=mu, sigma=sigma, 
                                                       observed=self.model_lcs[unqcad]['flux_masked'])
 
             for pl in self.multis:
-                vx, vy, vz=orbits[pl].get_relative_velocity(t0s[pl])
-                tdurs[pl]=pm.Deterministic("tdur_"+pl,
-                            (2*Rs*pm.math.sqrt( (1+rors[pl])**2 - bs[pl]**2)) / pm.math.sqrt(vx**2 + vy**2) )
+                self.model_params['vx'], self.model_params['vy'], self.model_params['vz']=self.model_params['orbits'][pl].get_relative_velocity(self.model_params['t0s'][pl])
+                self.model_params['tdurs'][pl]=pm.Deterministic("tdur_"+pl,
+                            (2*self.model_params['Rs']*pm.math.sqrt( (1+self.model_params['rors'][pl])**2 - self.model_params['bs'][pl]**2)) / pm.math.sqrt(self.model_params['vx']**2 + self.model_params['vy']**2) )
 
             # Fit for the maximum a posteriori parameters, I've found that I can get
             # a better solution by trying different combinations of parameters in turn
@@ -2077,61 +2151,72 @@ class monoModel():
             ################################################
             #Setting up optimization depending on what planet models we have:
             if self.step_initialise:
-                initvars1=[];initvars2=[];initvars3=[];initvars4=[]
+                initvars={'init':[]}
+                initvars.update({pl+"_timing":[self.model_params['rhostar']] for pl in self.planets})
+                initvars.update({pl+"_shape":[self.model_params['rhostar'],self.model_params['Rs']] for pl in self.planets})
+                opt_order=['init']+[pl+"_timing" for pl in self.planets]+[pl+"_shape" for pl in self.planets]+['allpl']
                 if self.model_jitter:
-                    initvars1+=[log_jitters[cad] for cad in self.unique_cads]
-                    initvars2+=[log_jitters[cad] for cad in self.unique_cads]#P,t0
-                    initvars3+=[log_jitters[cad] for cad in self.unique_cads]
-                    initvars4+=[log_jitters[cad] for cad in self.unique_cads]#r,b,P
+                    for i in initvars:
+                        #Adding jitter to all
+                        initvars[i]+=[self.model_params['log_jitters'][cad] for cad in self.unique_cads]
                 for pl in self.planets:
-                    initvars1+=[logrors[pl]];initvars2+=[logrors[pl]];initvars4+=[logrors[pl]]
+                    if 'logror' in self.fit_params:
+                        initvars[pl+"_timing"]+=[self.model_params['logrors'][pl]]
+                        initvars[pl+"_shape"]+=[self.model_params['logrors'][pl]]
+                    elif 'logdep' in self.fit_params:
+                        initvars[pl+"_timing"]+=[self.model_params['logdeps'][pl]]
+                        initvars[pl+"_shape"]+=[self.model_params['logdeps'][pl]]
                     if pl in self.ambigs and not self.model_ambig_ttv:
-                        initvars2+=[it0[pl][0],it0[pl][-1]]
+                        initvars[pl+"_timing"]+=[self.model_params['it0'][pl][0],self.model_params['it0'][pl][-1]]
                     else:
-                        initvars2+=[t0s[pl]]
+                        initvars[pl+"_timing"]+=[self.model_params['t0s'][pl]]
                     if 'b' in self.fit_params or pl in self.multis:
-                        initvars4+=[bs[pl]]
+                        initvars[pl+"_shape"]+=[self.model_params['bs'][pl]]
                     elif ('reparam_tau' in self.fit_params or 'reparam_tau4' in self.fit_params) and pl not in self.multis:
-                        initvars2+=[reparam_taus[pl]]
-                        initvars4+=[reparam_taus[pl]]
+                        initvars[pl+"_shape"]+=[self.model_params['reparam_taus'][pl]]
                     if pl not in self.multis:
-                        initvars1+=[tdurs[pl]];initvars4+=[tdurs[pl]]
-                    else:
-                        initvars1+=[tdurs[pl]];initvars4+=[tdurs[pl]]
+                        initvars[pl+"_timing"]+=[self.model_params['tdurs'][pl]]
+                        initvars[pl+"_shape"]+=[self.model_params['tdurs'][pl]]
                     if pl in self.multis:
-                        initvars1+=[bs[pl],rhostar]
-                        initvars2+=[pers[pl]];initvars4+=[pers[pl]]
-                
+                        initvars[pl+"_timing"]+=[self.model_params['pers'][pl]]
+                        initvars[pl+"_shape"]+=[self.model_params['bs'][pl]]
+                        if not self.assume_circ:
+                            initvars[pl+"_shape"]+=[self.model_params['eccs'][pl],self.model_params['omegas'][pl]]
+                initvars["allpl"] = [] #Getting all shape+timing for all planets, while ignoring duplications:
+                for t in [[i for i in initvars[pl+"_shape"]+initvars[pl+"_timing"]] for pl in self.planets]:
+                    if t not in initvars['allpl']:
+                        initvars["allpl"]+=[t]
+                initvars["allpl"]=initvars["allpl"][0]
                 #print(gpvars)
                 if self.use_GP:
-                    initvars3+=gpvars
+                    initvars['gp']=gpvars
+                    opt_order=[opt_order[0]]+['gp']+opt_order[1:]
                 elif self.model_phot_mean:
                     # if self.local_spline:
                     #     initvars3+=[self.spline_params['splines_'+pl+'_'+str(int(n))] for pl in self.planets for n in range(3) if 'splines_'+pl+'_'+str(int(n)) in self.spline_params]
-                    initvars3+=[phot_means[cad] for cad in self.unique_cads]
-                initvars5=initvars2+initvars3+[Rs]
-                for mis in self.unique_limbdarks:
-                    initvars5+=[q_star[mis]]
+                    initvars['init']+=[self.model_params['phot_means'][cad] for cad in self.unique_cads]
+                for mis in self.transit_limbdarks:
+                    if self.transform_LD:
+                        initvars['allpl']+=[self.model_params['q_star'][mis]]
+                    else:
+                        initvars['allpl']+=[self.model_params['u_star'][mis]]
                 
                 ################################################
                 #                  Optimising:
                 ################################################
+                map_soln = pmx.optimize(vars=initvars['init'])
+                for opt_name in opt_order[1:]:
+                    #print(initvars[opt_name])
+                    if self.debug: print("before "+opt_name+" optimisation",self.pymc_modelcheck_initial_point())
+                    map_soln = pmx.optimize(start=map_soln, vars=initvars[opt_name])
+                    #For planets, we do a final shape+timing combined fit here:
+                    if '_shape' in opt_name:
+                        combvars=initvars[opt_name]+[v for v in initvars[opt_name.replace("shape","timing")] if v not in initvars[opt_name]]
+                        #print(combvars)
+                        map_soln = pmx.optimize(start=map_soln, vars=combvars)
 
-                if self.debug: print("before",self.pymc_modelcheck_initial_point())
-                #pm.find_MAP(start=start)
-                if self.debug: print("before",self.pymc_modelcheck_initial_point())
-                map_soln = pmx.optimize(vars=initvars1)
-                map_soln = pmx.optimize(start=map_soln, vars=initvars2)
-                if self.use_GP or self.model_phot_mean:
-                    map_soln = pmx.optimize(start=map_soln, vars=initvars3)
-                map_soln = pmx.optimize(start=map_soln, vars=initvars4)
-                #Doing everything except the marginalised periods:
-                map_soln = pmx.optimize(start=map_soln, vars=initvars5)
                 map_soln = pmx.optimize(start=map_soln)
-                #map_soln = pmx.optimize(start=map_soln, vars=initvars1)
-                #map_soln = pmx.optimize(start=start, vars=[logs2])
-
-                if self.debug: print("after",self.pymc_modelcheck_initial_point())
+                if self.debug: print("after all optimisations",self.pymc_modelcheck_initial_point())
             else:
                 if self.debug: print("before",self.pymc_modelcheck_initial_point())
                 map_soln = pm.find_MAP()#initval="prior")
@@ -2141,15 +2226,96 @@ class monoModel():
             # for pl in self.monos+self.duos+self.ambigs:
             #     if abs(np.log(self.init_soln['tdur_'+pl]/self.planets[pl]['tdur']))>0.2:
             #         print(pl,"20%  discrepant transit duration")
+    
+    def set_ecc_dist(self, pl):
+        if "bern" in self.ecc_prior or "auto" in self.ecc_prior:
+            #Default is Bern model derived eccentricity (which is radius-dependent):
+            info=pd.read_csv(os.path.join(MonoData_tablepath,"bernmodel_eccentricity_fits.csv"),index_col=0)
+            assert len(self.planets)>0 and hasattr(self, 'Rstar'), "Must have intialised planetary orbits and stellar parameters"
+            medrad = np.nanmedian([self.planets[pl]['depth']**0.5*self.Rstar[0] for pl in self.planets])
+            ix=np.searchsorted(np.array([0,2,6,25]),medrad)
+            bern_file_prefixes={'bernmodel_both':'both_','bernmodel_sing':'singles_','bernmodel_mult':'multis_'}
+            row = info.loc[bern_file_prefixes[self.ecc_prior.lower()]+["1-2","2-6.0","6.0-15"][ix+1]]
+            return pm.Beta("ecc_"+pl, alpha=row['beta_a'], beta=row['beta_b'])
 
-    def assess_period_from_posterior(self,**kwargs):
-        """Doing preriod assessment from transit shape _after_ transit fits"""
+        if self.ecc_prior.lower()=='kipping':
+            return xo.distributions.eccentricity.kipping13("ecc_"+pl,shape=self.n_margs[pl],fixed=True)
+            #eccs[pl] = BoundedBeta("ecc_"+pl, alpha=0.867,beta=3.03,
+            #                             initval=0.05,shape=self.n_margs[pl])
+        elif self.ecc_prior.lower()=='vaneylen':
+            # The eccentricity prior distribution from Van Eylen for multiplanets (lower-e than single planets)
+            return xo.distributions.eccentricity.vaneylen19("ecc_"+pl,shape=self.n_margs[pl],fixed=True)
+            #pm.Bound(pm.Weibull, lower=1e-5,
+            #                         upper=1-1e-5)("ecc_"+pl,alpha=0.049,beta=2,initval=0.05,
+            #                                       shape=self.n_margs[pl])
+        elif self.ecc_prior.lower()=='uniform':
+            return pm.Uniform("ecc_"+pl,lower=1e-5, upper=1-1e-5,
+                                        shape=self.n_margs[pl])
+
+
+    def prune_posterior(self,check_vars=['t0','b','ror'], sigma_thresh=4, perform_prune=True, overwrite=False):
+        """Removing problematic chains for each variable
+
+        Args:
+            vars (list) - list of variables for each planet to check
+            sigma_thresh (float) - threshold for cutting
+        """
+        from scipy.stats import norm
+        thresh_is={}
+        thresh_loos={}
+        ivarlist={}
+        if not hasattr(self,'trace_chains') or overwrite:
+            self.pruned_chains_values=[]
+        prune_list=[]
+        for nchain in np.arange(self.trace.posterior.dims['chain']):
+            ivarlist[nchain]=[]
+            thresh_is[nchain]=[]
+            thresh_loos[nchain]=[]
+            loo_ix=np.arange(self.trace.posterior.dims['chain'])!=nchain
+            for var in check_vars:
+                ivars=[var+'_'+pl for pl in self.planets] if var+'_'+list(self.planets.keys())[0] in self.trace.posterior else [var]
+                for ivar in ivars:
+                    if len(self.trace.posterior[ivar].dims)>2:
+                        #We have multiple params here
+                        for ndim in range(len(self.trace.posterior[ivar][self.trace.posterior[ivar].dims[2]])):
+                            ivarlist[nchain]+=[ivar+"_"+str(ndim)]
+                            thresh_is[nchain]+=[np.nanpercentile(self.trace.posterior[ivar][nchain,:,ndim],100*norm(0,1).cdf([-1*sigma_thresh,0,sigma_thresh]))]
+                            thresh_loos[nchain]+=[np.nanpercentile(self.trace.posterior[ivar][loo_ix,:,ndim],100*norm(0,1).cdf([-1*sigma_thresh,0,sigma_thresh]))]
+                    else:
+                        ivarlist[nchain]+=[ivar]
+                        thresh_is[nchain]+=[np.nanpercentile(self.trace.posterior[ivar][nchain,:],100*norm(0,1).cdf([-1*sigma_thresh,0,sigma_thresh]))]
+                        thresh_loos[nchain]+=[np.nanpercentile(self.trace.posterior[ivar][loo_ix,:],100*norm(0,1).cdf([-1*sigma_thresh,0,sigma_thresh]))]
+            thresh_is[nchain]=np.vstack(thresh_is[nchain])
+            thresh_loos[nchain]=np.vstack(thresh_loos[nchain])
+            #If the -2 sigma value of chain i is still greater than the +2sigma value of the other chains, or vice versa, we have an issue
+            if np.any((thresh_is[nchain][:,2]<thresh_loos[nchain][:,0])|(thresh_is[nchain][:,0]>thresh_loos[nchain][:,2])):
+                print("Pruning chain "+str(nchain)+" due to issue with "+",".join(list(np.array(ivarlist[nchain])[np.where((thresh_is[nchain][:,2]<thresh_loos[nchain][:,0])|(thresh_is[nchain][:,0]>thresh_loos[nchain][:,2]))])))
+                prune_list+=[nchain]
+        if perform_prune and len(prune_list)>0:
+            self.pruned_chains_values += [self.trace.posterior.sel(chain=prune_list)]
+            self.trace.posterior = self.trace.posterior.drop_sel(chain=prune_list)
+            #sel(chain=self.trace_chains_index, groups="posterior")
+        elif len(prune_list)>0:
+            print("Use `perform_prune=True` to ensure the posterior is pruned")
+
+    def assess_period_from_posterior(self,trim=False,trim_factor=10,assess_stability=True,**kwargs):
+        """Doing preriod assessment from transit shape _after_ transit fits
+        
+        Args:
+            trim (bool, optional) - Whether to trim the trace by a factor. Necessary if the trace is too large for multiple new parameters (with shape Nchains*Nsamples*N_gaps) to fit into memory
+            trim_factor (int, optional) - by what factor to reduce the trace
+            assess_stability (bool, optional) - whether to exclude the orbits which cross interior planet orbits
+            """
         from scipy.special import logsumexp
         from scipy.stats import norm
         self.update(**kwargs)
+
+        if trim:
+            #Trimming by a factor trim_factor (default 10)
+            self.trace=self.trace.isel(draw=slice(None, None, trim_factor))
         
         sample_shapes = (len(self.trace.posterior.chain),len(self.trace.posterior.draw))
-        #self.trace.posterior['rhostar']=(('chain','draw'),tools.noneg_get_assymetric_dist(*self.rhostar,nd=np.product(self.trace.posterior['Rs'].shape)).reshape(sample_shapes))
+        #self.trace.posterior['rhostar']=(('chain','draw'),tools.noneg_get_assymetric_dist(*self.rhostar,nd=np.prod(self.trace.posterior['Rs'].shape)).reshape(sample_shapes))
         self.init_interpolated_v_prior()
 
         gap_width_priors={}
@@ -2175,12 +2341,12 @@ class monoModel():
                 if self.model_ambig_ttv:
                     #Where we have TTVs, need to do some sort of linear best-fit using available t0s
                     pfit=np.polyfit(np.hstack([0,self.planets[pl]['ideal_pratio_span'][:,1]]), self.trace.posterior['t0_'+pl].stack(sample=("chain", "draw")).values, 1)
-                    #print(pfit[0].shape,int(self.planets[pl]['npers']))#'av_t0_'+pl+'_dim_0',
+                    #The above uses the ideal pratio, but we need to be using the maxperiod, so we have to rescqle pfit[0] by *self.planets[pl]['ideal_pratio_span'][1,1]
                     self.trace.posterior['av_t0_'+pl] = (('chain', 'draw'), pfit[1].reshape(sample_shapes))
-                    self.trace.posterior['per_'+pl] = (('chain','draw','per_'+pl+'_dim_0'), (pfit[0][:,None]*self.planets[pl]['ideal_pratio_span'][0,0]/self.planets[pl]['period_int_aliases'][None,:]).reshape(sample_shapes+(int(self.planets[pl]['npers']),)))
+                    self.trace.posterior['per_'+pl] = (('chain','draw','per_'+pl+'_dim_0'), (pfit[0][:,None]*self.planets[pl]['ideal_pratio_span'][1,1]/self.planets[pl]['period_int_aliases'][None,:]).reshape(sample_shapes+(int(self.planets[pl]['npers']),)))
                 else:
                     self.trace.posterior['av_t0_'+pl] = (('chain','draw'),self.trace.posterior['t0_'+pl].values[:,:,-1])
-                    self.trace.posterior['per_'+pl] = (('chain','draw','per_'+pl+'_dim_0'), ((self.trace.posterior['t0_'+pl].values[:,:,-1]-self.trace.posterior['t0_'+pl].values[:,:,0])[:,:,None]/(self.planets[pl]['ideal_pratio_span'][0,0]/self.planets[pl]['period_int_aliases'])[None,None,:]).reshape(sample_shapes+(int(self.planets[pl]['npers']),)))
+                    self.trace.posterior['per_'+pl] = (('chain','draw','per_'+pl+'_dim_0'), ((self.trace.posterior['t0_'+pl].values[:,:,-1]-self.trace.posterior['t0_'+pl].values[:,:,0])[:,:,None]/(self.planets[pl]['period_int_aliases'])[None,None,:]).reshape(sample_shapes+(int(self.planets[pl]['npers']),)))
 
                 #av_tcens[pl] = pfit[0]
                 #The planet period here comes from the "ideal" period, so we have to adjust by going -> span and back to the individual aliases:
@@ -2212,7 +2378,20 @@ class monoModel():
             self.trace.posterior['omega_'+pl] = (('chain','draw','omega_'+pl+'_dim_0'), np.pi-0.5*np.pi*(logvels/abs(logvels)))
             self.trace.posterior['perprior_'+pl] = (('chain','draw','perprior_'+pl+'_dim_0'),self.per_index * np.log(self.trace.posterior['per_'+pl].values/self.planets[pl]['P_min']))
             self.trace.posterior['a_Rs_'+pl] = (('chain','draw','a_Rs_'+pl+'_dim_0'), ((6.67e-11*(self.trace.posterior['rhostar'].values[:,:,None]*1409.78)*(86400*self.trace.posterior['per_'+pl].values)**2)/(3*np.pi))**(1/3))
-            self.trace.posterior['max_ecc_'+pl] = (('chain','draw','a_Rs_'+pl+'_dim_0'), 1 - 2/self.trace.posterior['a_Rs_'+pl].values)
+            if len(self.multis)>0 and assess_stability:
+                #We have interior planet
+                multipl=np.array(self.multis)[np.argmax([self.planets[imultipl]['period'] for imultipl in self.multis])]
+                logmassest_multi=5.75402469 - (self.trace.posterior['rpl_'+multipl].values<=12.2).astype(int)*(self.trace.posterior['rpl_'+multipl].values>=1.58).astype(int)*(4.67363091 -0.38348534*self.trace.posterior['rpl_'+multipl].values) - \
+                                                                (self.trace.posterior['rpl_'+multipl].values<1.58).astype(int)*(5.81943841-3.81604756*np.log(self.trace.posterior['rpl_'+multipl].values))
+                if not self.assume_circ and 'ecc_'+multipl in self.trace.posterior:
+                    ecc_multi=self.trace.posterior['ecc_'+multipl].values
+                else:
+                    ecc_multi=0.0
+                a_Rs_multi=(6.67e-11*(self.trace.posterior['per_'+multipl].values*86400)**2*1411*self.trace.posterior['rhostar'].values/(3*np.pi))**(1/3)
+                #print((1 - (1+ecc_multi+(np.exp(logmassest_multi-12.7156)/(3*self.trace.posterior['rhostar'].values*self.trace.posterior['Rs']**3))**(1/3))*a_Rs_multi)/self.trace.posterior['a_Rs_'+pl].values)
+                self.trace.posterior['max_ecc_'+pl] = (('chain','draw','max_ecc_'+pl+'_dim_0'), 1 - ((1+ecc_multi+(np.exp(logmassest_multi-12.7156)/(3*self.trace.posterior['rhostar'].values*self.trace.posterior['Rs'].values**3))**(1/3))*a_Rs_multi)[:,:,None]/self.trace.posterior['a_Rs_'+pl].values)
+            else:
+                self.trace.posterior['max_ecc_'+pl] = (('chain','draw','max_ecc_'+pl+'_dim_0'), 1 - 2/self.trace.posterior['a_Rs_'+pl].values)
             # print(np.clip(self.trace.posterior['max_ecc_'+pl].stack(sample=("chain", "draw")).values,0.0,0.999)[0].shape,
             #       np.log(self.trace.posterior['vel_'+pl].stack(sample=("chain", "draw")).values).shape,
             #       np.column_stack([np.log(self.trace.posterior['vel_'+pl].stack(sample=("chain", "draw")).values[0]),np.clip(self.trace.posterior['max_ecc_'+pl].stack(sample=("chain", "draw")).values[0],0.0,0.999)]).shape)
@@ -2276,31 +2455,47 @@ class monoModel():
             self.trace.posterior['vel_marg_'+pl] = (('chain','draw'),np.sum(self.trace.posterior['vel_'+pl].values*np.exp(self.trace.posterior['logprob_marg_'+pl].values),axis=-1))
             self.trace.posterior['per_marg_av_'+pl] = (('chain','draw'),np.sum(self.trace.posterior['per_'+pl].values*np.exp(self.trace.posterior['logprob_marg_'+pl].values),axis=-1))
             self.trace.posterior['per_marg_sd_'+pl] = (('chain','draw'),np.sum(np.exp(self.trace.posterior['logprob_marg_'+pl].values)*(self.trace.posterior['per_'+pl].values-self.trace.posterior['per_marg_av_'+pl].values[:,:,None])**2,axis=-1)/(1-1/self.planets[pl]['npers']))
-
-    def make_init_solns(self,soln,n_chains):
-        # We know better than NUTS how to initialise our damned chains.
-        # Let's make b and jitter somewhat uniform; while tdur, t0, logror, lds, etc can all be pretty tight
-        dicts=[{} for n in range(n_chains)]
-        for param in soln:
-            if (param[:2]=='b_' and '_interval__' in param) or 'log_jitter' in param:
-                for n in range(n_chains):
-                    dicts[n][param]=soln[param]+np.random.normal(0.0,5.0)
-            elif 'tdur_' in param:
-                for n in range(n_chains):
-                    dicts[n][param]=np.array(soln[param]+self.planets[param.split('_')[-1]]['tdur']*np.random.normal(0.0,0.1))
-            elif 't0_' in param and '__' in param:
-                for n in range(n_chains):
-                    if soln[param].shape==():
-                        dicts[n][param]=np.array(soln[param]+np.random.normal(0.0,0.1)*self.planets[param.split('_')[-1]]['tdur'])
-                    else:
-                        dicts[n][param]=soln[param]+np.random.normal(0.0,0.1,len(soln[param]))*self.planets[param.split('_')[-1]]['tdur']
-            elif np.product(soln[param].shape)<8:
-                for n in range(n_chains):
-                    if soln[param].shape==():
-                        dicts[n][param]=np.array(soln[param]+np.random.normal(0.0,0.12))
-                    else:
-                        dicts[n][param]=soln[param]+np.random.normal(0.0,0.12,len(soln[param]))
-        return dicts
+        
+    # def make_init_solns(self,soln,n_chains):
+    #     # We know better than NUTS how to initialise our damned chains.
+    #     # Let's make b and jitter somewhat uniform; while tdur, t0, logror, lds, etc can all be pretty tight
+    #     dicts=[{} for n in range(n_chains)]
+    #     for param in soln:
+    #         if ('_interval__' not in param and param+"_interval__" in soln) or param[:2]=="__":
+    #             #Update the _interval__ one and then directly apply this to the actual param too
+    #             pass
+    #         if ('_interval__' in param) or 'log_jitter' in param:
+    #             #(param[:2]=='b_' or 'reparam_tau_' in param)
+    #             for n in range(n_chains):
+    #                 if soln[param].shape==():
+    #                     dicts[n][param]=soln[param]+np.random.normal(0.0,2.0)
+    #                 else:
+    #                     dicts[n][param]=soln[param]+np.random.normal(0.0,0.4,soln[param].shape)
+    #             print(param,type(soln[param]),soln[param].shape,soln[param],dicts[n][param],type(dicts[n][param]))
+    #         elif 'tdur_' in param:
+    #             for n in range(n_chains):
+    #                 dicts[n][param]=np.array(soln[param]+self.planets[param.split('_')[-1]]['tdur']*np.random.normal(0.0,0.1))
+    #         elif 't0_' in param and '__' in param:
+    #             for n in range(n_chains):
+    #                 if soln[param].shape==():
+    #                     dicts[n][param]=np.array(soln[param]+np.random.normal(0.0,0.05)*self.planets[param.split('_')[-1]]['tdur'])
+    #                 else:
+    #                     dicts[n][param]=soln[param]+np.random.normal(0.0,0.1,len(soln[param]))*self.planets[param.split('_')[-1]]['tdur']
+    #         # elif 'q_' in param:
+    #         #     #Limb darkening - needs to be 0->
+    #         #     for n in range(n_chains):
+    #         #         # dicts[n][param] = np.array([truncnorm((1e-3 - soln[param][0]) / 0.12, (1-1e-3 - soln[param][0]) / 0.12, loc=soln[param][0], scale=0.12).pdf(np.random.random()),
+    #         #         #                            truncnorm((1e-3 - soln[param][1]) / 0.12, (1-1e-3 - soln[param][1]) / 0.12, loc=soln[param][1], scale=0.12).pdf(np.random.random())])
+    #         #         dicts[n][param]=np.clip(np.array(soln[param]+np.random.normal(0.0,0.12)),1e-3,1-1e-3)
+    #         #         #dicts[n][param]=truncnorm(mu=soln[param],sigma=np.tile(0.12,len(soln[param])),lower=1e-3,upper=1-1e-3)
+    #         #         #dicts[n][param]=np.array(soln[param]+self.planets[param.split('_')[-1]]['tdur']*scipy.stats.random.normal(0.0,0.1))
+    #         elif np.prod(soln[param].shape)<8:
+    #             for n in range(n_chains):
+    #                 if soln[param].shape==():
+    #                     dicts[n][param]=np.array(soln[param]+np.random.normal(0.0,0.12))
+    #                 else:
+    #                     dicts[n][param]=soln[param]+np.random.normal(0.0,0.12,len(soln[param]))
+    #     return dicts
 
     #     dicts=[{} for n in range(n_chains)]
     #     for param in soln:
@@ -2315,7 +2510,7 @@ class monoModel():
     #                                             sigma=np.clip(ld_mult*np.nanstd(trans_ld_dists,axis=0),0.1,1.0), shape=2, 
     #                                             lower=0.0, upper=1.0,
 
-    def sample_model(self, n_draws=500, n_burn_in=None, overwrite=False, continue_sampling=False, n_chains=4, cores=4, step_kwargs={}, **kwargs):
+    def sample_model(self, n_draws=500, n_burn_in=None, overwrite=False, continue_sampling=False, n_chains=4, cores=4, how='hmc', step_kwargs={}, **kwargs):
         """Run pymc sampler
 
         Args:
@@ -2348,39 +2543,122 @@ class monoModel():
 
             n_chains=n_chains if n_chains>=cores else cores#If more cores than chains, increasing chains
 
-            init_dicts=self.make_init_solns(self.init_soln,n_chains)
-
+            #init_dicts=self.make_init_solns(self.init_soln,n_chains)
+            #print([init_dicts[nd]['u_star_tess'] for nd in range(len(init_dicts))])
+            #print([init_dicts[nd]['u_star_tess_interval__'] for nd in range(len(init_dicts))])
             with mod:
-                n_burn_in = np.clip(int(n_draws*0.66), 125, 15000) if n_burn_in is None else n_burn_in
-                if self.debug: print(type(self.init_soln))
-                if self.debug: print(self.init_soln.keys())
-                step = self.sample_method(**step_kwargs)
-                if hasattr(self,'trace') and continue_sampling:
-                    print("Using already-generated MCMC trace as start point for new trace")                    
-                    #trace2 = pm.sample(step=step, cores=8, chains=8, discard_tuned_samples=False, tune=800)
-                    self.trace = pm.sample(tune=n_burn_in, draws=n_draws, chains=n_chains, step=step,
-                                           trace=self.trace, compute_convergence_checks=True, cores=cores)#,initvals=self.init_soln,  **kwargs)
-                else:
-                    # import covadapt
-                    # import covadapt.spd_manifold
-                    # shapes = self.pymc_fast_model.eval_rv_shapes()
-                    # pot = covadapt.spd_manifold.QuadPotentialFullAdapt(
-                    #     sum(np.product(shapes[var.name]) for var in self.pymc_fast_model.value_vars),
-                    #     verbose=False,
-                    #     compute_full_matrix=False,
-                    #     adapt_stop=750,
-                    #     gamma=0.1,
-                    #     n_eigs=12,
-                    #     logeigval_cutoff=0.0,
-                    # )
-                    #step = pm.NUTS(potential=pot, target_accept=0.85)
-                    self.trace = pm.sample(tune=n_burn_in, draws=n_draws, chains=n_chains, step=step,
-                                            compute_convergence_checks=True, cores=cores, init="adapt_full+jitter",
-                                            discard_tuned_samples=False, initvals=init_dicts)#,  **kwargs)
+                n_burn_in = np.clip(int(n_draws*1.5), 125, 15000) if n_burn_in is None else n_burn_in
+                #if self.debug: print(type(self.init_soln))
+                #if self.debug: print(self.init_soln.keys())
+                #step = self.sample_method(**step_kwargs)
+                if how=='hmc':
 
+                    #Creating manually the NUTS sampling.
+                    groups = []
+                    for pl in self.planets:
+                        ipl_group=[]
+                        for par in self.pymc_fast_model.free_RVs:
+                            #Separating planets into correlated groups
+                            if par.name[-2:]=="_"+pl or "_"+pl+"_" in par.name:
+                                ipl_group+=[par]
+                        groups+=[ipl_group]
+                    
+                    assigned_names=set()
+                    for group in groups:
+                        for var in group:
+                            # Convert your distribution variables to their actual sampled value variables
+                            value_var = self.pymc_fast_model.rvs_to_values.get(var, var)
+                            assigned_names.add(value_var.name)
+                    # 3. Subtract the sets of names safely
+                    unassigned_names = {var.name for var in self.pymc_fast_model.value_vars} - assigned_names
+                    unassigned_group = [var for var in self.pymc_fast_model.value_vars if var.name in unassigned_names]
+
+                    cleaned_groups = []
+                    for group in groups:
+                        flat_group = []
+                        for item in group:
+                            # If an item inside your group is a list itself, unpack it
+                            if isinstance(item, list):
+                                flat_group.extend(item)
+                            else:
+                                flat_group.append(item)
+                        cleaned_groups.append(flat_group)
+                    #print(cleaned_groups)
+                    steps=[]
+                    for group in cleaned_groups:
+                        # Calculate the total number of dimensions (scalar elements) in the group
+                        # We evaluate the 'size' property of the PyMC/PyTensor variables
+                        total_dims = sum(var.ndim if var.ndim > 0 else 1 for var in group) 
+                        
+                        # Wait, var.ndim gives the number of axes. We want the total element count!
+                        # Let's get the structural size safely:
+                        total_dims = 0
+                        for var in group:
+                            # If the variable has a shape, multiply its dimensions
+                            if hasattr(var, 'shape') and hasattr(var.shape, 'eval'):
+                                try:
+                                    total_dims += int(np.prod(var.shape.eval()))
+                                except:
+                                    # Fallback if eval fails before sampling context is fully baked
+                                    total_dims += int(np.prod(var.type.shape))
+                            else:
+                                # Fallback to structural type shape
+                                shape = getattr(var.type, "shape", ())
+                                total_dims += int(np.prod([s if isinstance(s, int) else 1 for s in shape]))
+
+                        # Fallback to 1 if it evaluates to 0 (scalar)
+                        if total_dims == 0:
+                            total_dims = 1
+
+                        # Create the NUTS step with the correct N x N identity matrix
+                        step = pm.NUTS(
+                            group, 
+                            scaling=np.eye(total_dims), 
+                            is_cov=True, 
+                            target_accept=0.85)
+                        steps.append(step)
+
+                    # Add the unassigned group
+                    steps.append(pm.NUTS(unassigned_group, target_accept=0.85))
+                    self.trace = pm.sample(tune=n_burn_in, draws=n_draws, 
+                                            cores=cores, step=steps,
+                                            initvals=self.init_soln,
+                                            return_inferencedata=True,compute_convergence_checks=True)# mp_ctx=mp_ctx)#,nuts_sampler="numpyro")# init='adapt_full')
+                    # if hasattr(self,'trace') and continue_sampling:
+                    #     print("Using already-generated MCMC trace as start point for new trace")                    
+                    #     #trace2 = pm.sample(step=step, cores=8, chains=8, discard_tuned_samples=False, tune=800)
+                    #     self.trace = pm.sample(tune=n_burn_in, draws=n_draws, chains=n_chains, step=step, initvals=self.init_soln,
+                    #                         trace=self.trace, compute_convergence_checks=True, cores=cores,init="prior")#,initvals=self.init_soln,  **kwargs)
+                    # else:
+                    #     # import covadapt
+                    #     # import covadapt.spd_manifold
+                    #     # shapes = self.pymc_fast_model.eval_rv_shapes()
+                    #     # pot = covadapt.spd_manifold.QuadPotentialFullAdapt(
+                    #     #     sum(np.prod(shapes[var.name]) for var in self.pymc_fast_model.value_vars),
+                    #     #     verbose=False,
+                    #     #     compute_full_matrix=False,
+                    #     #     adapt_stop=750,
+                    #     #     gamma=0.1,
+                    #     #     n_eigs=12,
+                    #     #     logeigval_cutoff=0.0,
+                    #     # )
+                    #     #step = pm.NUTS(potential=pot, target_accept=0.85)
+                        
+                    #     self.trace = pm.sample(tune=n_burn_in, draws=n_draws, chains=n_chains, step=step,
+                    #                         compute_convergence_checks=True, cores=cores, init="adapt_full+diag",
+                    #                         discard_tuned_samples=False, initvals=init_dicts)#,  **kwargs)
+                elif how=='mcmc':
+                    if hasattr(self,'trace') and continue_sampling:
+                        self.trace = pm.sample(tune=n_burn_in, draws=n_draws, chains=n_chains, step=step,
+                                            trace=self.trace, compute_convergence_checks=True, cores=cores)#,initvals=self.init_soln,  **kwargs)
+
+                #elif how=='smc':
+                #    if hasattr(self,'trace') and continue_sampling:
+                #        idata_04 = pm.sample_smc(2000)
             #Saving both the class and a pandas dataframe of output data.
             self.save_model_to_file()
             _=self.make_table(save=True)
+            
         elif not (hasattr(self,'trace') or hasattr(self,'trace_df')):
             print("Trace or trace df exists...")
 
@@ -2949,9 +3227,9 @@ class monoModel():
             for nj in time_regions:
                 self.lc_regions[nj]=time_regions[nj]
                 self.lc_regions[nj]['total_dur']=self.lc_regions[nj]['end']-self.lc_regions[nj]['start']
-                self.lc_regions[nj]['ix']=(self.lc.time>=self.lc_regions[nj]['start'])*(self.lc.time<=self.lc_regions[nj]['end'])*self.lc.mask
+                self.lc_regions[nj]['ix']=(self.lc.time>=self.lc_regions[nj]['start'])*(self.lc.time<=self.lc_regions[nj]['end'])*self.lc.mask*self.cad_indexes[time_regions[nj]['cadname']]
                 self.lc_regions[nj]['unqcad_ix']=self.lc_regions[nj]['ix'][self.cad_indexes[time_regions[nj]['cadname']]]
-                self.lc_regions[nj]['bin_ix']=(self.lc.bin_time>=self.lc_regions[nj]['start'])*(self.lc.bin_time<=self.lc_regions[nj]['end'])*np.isfinite(getattr(self.lc,fx_bin_lab))
+                self.lc_regions[nj]['bin_ix']=(self.lc.bin_time>=self.lc_regions[nj]['start'])*(self.lc.bin_time<=self.lc_regions[nj]['end'])*np.isfinite(getattr(self.lc,fx_bin_lab))#*self.bin_cad_indexes[unq_cad]
                 self.lc_regions[nj]['model_ix']=(self.model_lcs[time_regions[nj]['cadname']]['time']>=self.lc_regions[nj]['start'])&(self.model_lcs[time_regions[nj]['cadname']]['time']<=self.lc_regions[nj]['end'])
                 self.lc_regions[nj]['cadence']=np.nanmedian(np.diff(self.lc.time[self.lc_regions[nj]['ix']]))
                 self.lc_regions[nj]['mad']=1.06*np.nanmedian(abs(np.diff(getattr(self.lc,fx_lab)[self.lc_regions[nj]['ix']])))
@@ -3591,7 +3869,7 @@ class monoModel():
         #       Initialising GP model
         #####################################
         if self.use_GP and (not hasattr(self, 'gp_to_plot') or 'gp_pred' not in self.gp_to_plot or overwrite):
-            self.init_gp_to_plot(n_samp, max_gp_len, interp=interp, newgp=newgp)
+            self.init_gp_to_plot(n_samp, max_gp_len, newgp=newgp, **kwargs)
         '''
         assert hasattr(self,'trace')
         i_gp_pred=[]
@@ -3960,11 +4238,11 @@ class monoModel():
                     if not self.fit_no_flatten and not self.use_GP:
                         f_alls[key].plot(self.lc.time[self.lc_regions[key]['ix']],
                                     spl+np.sum([self.trans_to_plot[unqcad][pl]['med'] for pl in self.planets],axis=0)[self.lc_regions[key]['unqcad_ix']],
-                                    color="C0", label="transit fit", linewidth=2.5,alpha=0.5,zorder=12, rasterized=raster)
+                                    color="C0", label="transit fit", linewidth=2.5, alpha=0.5, zorder=12, rasterized=raster)
                     else:
                         f_alls[key].plot(self.lc.time[self.lc_regions[key]['ix']],
                                     spl+np.sum([self.trans_to_plot[unqcad][pl]['med'] for pl in self.planets],axis=0)[self.lc_regions[key]['unqcad_ix']],
-                                    color="C0", label="spline + transit fit", linewidth=2.5,alpha=0.5,zorder=12, rasterized=raster)
+                                    color="C0", label="spline + transit fit", linewidth=2.5, alpha=0.5,zorder=12, rasterized=raster)
 
                 #plt.setp(f_alls[key].get_xticklabels(), visible=False)
                 if self.lc_regions[key]['n_plot_col'][0]>0:
@@ -4005,7 +4283,7 @@ class monoModel():
         #####################################
         maxdur=np.max([self.planets[ipl]['tdur'] for ipl in self.planets])
         setattr(self.lc,'phase',{})
-        phaselc={};phasebool={};binsize={};t0s={};per={};ext={};bin_phase={}
+        self.phaselc={};phasebool={};binsize={};t0s={};per={};ext={};bin_phase={}
         for pl in self.planets:
             #Initialising some things
 
@@ -4067,14 +4345,14 @@ class monoModel():
             else:
                 othpls={unqcad:np.zeros(np.sum(self.lc.mask&phasebool[pl]&self.cad_indexes[unqcad])) for unqcad in self.unique_cads}
             if self.use_GP:
-                phaselc[pl]=np.vstack([np.column_stack((self.lc.phase[pl][self.lc.mask&phasebool[pl]&self.cad_indexes[unqcad]],
+                self.phaselc[pl]=np.vstack([np.column_stack((self.lc.phase[pl][self.lc.mask&phasebool[pl]&self.cad_indexes[unqcad]],
                                                 self.lc.flux[self.lc.mask&phasebool[pl]&self.cad_indexes[unqcad]] - \
                                                 self.gp_to_plot[unqcad]['gp_pred'][self.cad_masks[unqcad]&phasebool[pl][self.cad_indexes[unqcad]]] - othpls[unqcad],
                                                 self.lc.flux_err[self.lc.mask&phasebool[pl]&self.cad_indexes[unqcad]],
                                                 othpls[unqcad],self.trans_to_plot[unqcad][pl]['med'][self.cad_masks[unqcad]&phasebool[pl][self.cad_indexes[unqcad]]]
                                                 )) for unqcad in self.unique_cads])
             elif self.fit_no_flatten:
-                phaselc[pl]=np.vstack([np.column_stack((self.lc.phase[pl][self.lc.mask&phasebool[pl]&self.cad_indexes[unqcad]],
+                self.phaselc[pl]=np.vstack([np.column_stack((self.lc.phase[pl][self.lc.mask&phasebool[pl]&self.cad_indexes[unqcad]],
                                                 self.lc.flux[self.lc.mask&phasebool[pl]&self.cad_indexes[unqcad]] - othpls[unqcad],
                                                 self.lc.flux_err[self.lc.mask&phasebool[pl]&self.cad_indexes[unqcad]],
                                                 othpls[unqcad],self.trans_to_plot[unqcad][pl]['med'][self.cad_masks[unqcad]&phasebool[pl][self.cad_indexes[unqcad]]]
@@ -4094,11 +4372,19 @@ class monoModel():
                 #                                     self.lc.flux_err[self.lc.mask&phasebool[pl]&self.cad_indexes[unqcad]].shape,
                 #                                     othpls[unqcad].shape,
                 #                                     self.trans_to_plot[unqcad][pl]['med'][self.cad_masks[unqcad]&phasebool[pl][self.cad_indexes[unqcad]]].shape)
-                phaselc[pl]=np.vstack([np.column_stack((self.lc.phase[pl][self.lc.mask&phasebool[pl]&self.cad_indexes[unqcad]],
-                                                self.lc.flux_flat[self.lc.mask&phasebool[pl]&self.cad_indexes[unqcad]] - othpls[unqcad],
-                                                self.lc.flux_err[self.lc.mask&phasebool[pl]&self.cad_indexes[unqcad]],
-                                                othpls[unqcad],self.trans_to_plot[unqcad][pl]['med'][self.cad_masks[unqcad]&phasebool[pl][self.cad_indexes[unqcad]]])) for unqcad in self.unique_cads])
-            bin_phase[pl]=tools.bin_lc_segment(phaselc[pl][np.argsort(phaselc[pl][:,0]),:3],binsize=binsize[pl])
+                if hasattr(self.lc,'flux_gpfit'):
+                    self.phaselc[pl]=np.vstack([np.column_stack((self.lc.phase[pl][self.lc.mask&phasebool[pl]&self.cad_indexes[unqcad]],
+                                                        (self.lc.flux-self.lc.flux_gpfit)[self.lc.mask&phasebool[pl]&self.cad_indexes[unqcad]] - othpls[unqcad],
+                                                        self.lc.flux_err[self.lc.mask&phasebool[pl]&self.cad_indexes[unqcad]],
+                                                        othpls[unqcad],self.trans_to_plot[unqcad][pl]['med'][self.cad_masks[unqcad]&phasebool[pl][self.cad_indexes[unqcad]]])) for unqcad in self.unique_cads])
+                else:
+                    self.phaselc[pl]=np.vstack([np.column_stack((self.lc.phase[pl][self.lc.mask&phasebool[pl]&self.cad_indexes[unqcad]],
+                                                        (self.lc.flux-self.lc.flux_spline)[self.lc.mask&phasebool[pl]&self.cad_indexes[unqcad]] - othpls[unqcad],
+                                                        self.lc.flux_err[self.lc.mask&phasebool[pl]&self.cad_indexes[unqcad]],
+                                                        othpls[unqcad],self.trans_to_plot[unqcad][pl]['med'][self.cad_masks[unqcad]&phasebool[pl][self.cad_indexes[unqcad]]])) for unqcad in self.unique_cads])
+                #print(self.phaselc[pl][::1350,1])
+
+            bin_phase[pl]=tools.bin_lc_segment(self.phaselc[pl][np.argsort(self.phaselc[pl][:,0]),:3],binsize=binsize[pl])
         
         #####################################
         #  Plotting individual transits
@@ -4159,11 +4445,11 @@ class monoModel():
 
             if interactive:
                 sdbuffer=3
-                f_trans[pl].circle(phaselc[pl][:,0],phaselc[pl][:,1],
+                f_trans[pl].circle(self.phaselc[pl][:,0],self.phaselc[pl][:,1],
                                   color='black', alpha=0.4, size=0.75)
 
-                f_trans[pl].circle(phaselc[pl][:,0],
-                                  phaselc[pl][:,1] - phaselc[pl][self.lc.mask&phasebool[pl],4] - self.min_trans['all']-sdbuffer*resid_sigma,
+                f_trans[pl].circle(self.phaselc[pl][:,0],
+                                  self.phaselc[pl][:,1] - self.phaselc[pl][self.lc.mask&phasebool[pl],4] - self.min_trans['all']-sdbuffer*resid_sigma,
                                   color='black', alpha=0.2, size=0.75)
                 errors = ColumnDataSource(data=dict(base=bin_phase[pl][:,0],
                                         lower=bin_phase[pl][:,1] - bin_phase[pl][:,2],
@@ -4174,17 +4460,17 @@ class monoModel():
                                              lower_head=arrow_heads.TeeHead(line_color='#dddddd',line_alpha=0.5)))
                 f_trans[pl].circle(bin_phase[pl][:,0], bin_phase[pl][:,1], alpha=0.65, size=3.5)
                 if '-2sig' in self.trans_to_plot[unqcad][list(self.planets.keys())[0]]:
-                    trband = ColumnDataSource(data=dict(base=np.sort(phaselc[pl][:,0]),
-                              lower=np.hstack([self.trans_to_plot[unqcad][pl]['-2sig'][self.cad_masks[unqcad]&phasebool[pl][self.cad_indexes[unqcad]]] for unqcad in self.unique_cads])[np.argsort(phaselc[pl][:,0])],
-                              upper=np.hstack([self.trans_to_plot[unqcad][pl]['+2sig'][self.cad_masks[unqcad]&phasebool[pl][self.cad_indexes[unqcad]]] for unqcad in self.unique_cads])[np.argsort(phaselc[pl][:,0])]))
+                    trband = ColumnDataSource(data=dict(base=np.sort(self.phaselc[pl][:,0]),
+                              lower=np.hstack([self.trans_to_plot[unqcad][pl]['-2sig'][self.cad_masks[unqcad]&phasebool[pl][self.cad_indexes[unqcad]]] for unqcad in self.unique_cads])[np.argsort(self.phaselc[pl][:,0])],
+                              upper=np.hstack([self.trans_to_plot[unqcad][pl]['+2sig'][self.cad_masks[unqcad]&phasebool[pl][self.cad_indexes[unqcad]]] for unqcad in self.unique_cads])[np.argsort(self.phaselc[pl][:,0])]))
                     f_trans[pl].add_layout(Band(source=trband,base='base',lower='lower',upper='upper',
                            level='underlay',fill_alpha=0.25, line_width=0.0, fill_color=self.pal[2+n]))
-                    trband = ColumnDataSource(data=dict(base=np.sort(phaselc[pl][:,0]),
-                              lower=np.hstack([self.trans_to_plot[unqcad][pl]['-1sig'][self.cad_masks[unqcad]&phasebool[pl][self.cad_indexes[unqcad]]] for unqcad in self.unique_cads])[np.argsort(phaselc[pl][:,0])],
-                              upper=np.hstack([self.trans_to_plot[unqcad][pl]['+1sig'][self.cad_masks[unqcad]&phasebool[pl][self.cad_indexes[unqcad]]] for unqcad in self.unique_cads])[np.argsort(phaselc[pl][:,0])]))
+                    trband = ColumnDataSource(data=dict(base=np.sort(self.phaselc[pl][:,0]),
+                              lower=np.hstack([self.trans_to_plot[unqcad][pl]['-1sig'][self.cad_masks[unqcad]&phasebool[pl][self.cad_indexes[unqcad]]] for unqcad in self.unique_cads])[np.argsort(self.phaselc[pl][:,0])],
+                              upper=np.hstack([self.trans_to_plot[unqcad][pl]['+1sig'][self.cad_masks[unqcad]&phasebool[pl][self.cad_indexes[unqcad]]] for unqcad in self.unique_cads])[np.argsort(self.phaselc[pl][:,0])]))
                     f_trans[pl].add_layout(Band(source=trband,base='base',lower='lower',upper='upper',
                                               level='underlay',fill_alpha=0.25, line_width=0.0, fill_color=self.pal[2+n]))
-                f_trans[pl].line(np.sort(phaselc[pl][:,0]), phaselc[pl][np.argsort(phaselc[pl][:,0]),4], color=self.pal[2+n])
+                f_trans[pl].line(np.sort(self.phaselc[pl][:,0]), self.phaselc[pl][np.argsort(self.phaselc[pl][:,0]),4], color=self.pal[2+n])
                 f_trans[pl].y_range=Range1d(-1*self.min_trans-2*sdbuffer*med_resid_sigma,sdbuffer*med_resid_sigma)
 
                 if n<len(self.planets)-1:
@@ -4193,31 +4479,31 @@ class monoModel():
                     f_trans[pl].xaxis.major_label_text_font_size = '0pt'  # preferred method for removing tick labels
 
             else:
-                f_trans[pl].plot(phaselc[pl][:,0],phaselc[pl][:,1], ".",label="raw data", color=pointcol,
-                                 alpha=np.clip(0.15+6*(len(phaselc[pl][:,0])**-0.5),0.1,0.9), markersize=1.25, rasterized=raster)
-                f_trans[pl].errorbar(bin_phase[pl][:,0],bin_phase[pl][:,1], yerr=bin_phase[pl][:,2], fmt='.',color='C2',
+                f_trans[pl].plot(self.phaselc[pl][:,0], self.phaselc[pl][:,1], ".",label="raw data", color=pointcol,
+                                 alpha=np.clip(0.15+6*(len(self.phaselc[pl][:,0])**-0.5),0.1,0.9), markersize=1.25, rasterized=raster)
+                f_trans[pl].errorbar(bin_phase[pl][:,0], bin_phase[pl][:,1], yerr=bin_phase[pl][:,2], fmt='.',color='C2',
                                     alpha=0.9, markersize=5, rasterized=raster)
-                f_trans_resids[pl].plot(phaselc[pl][:,0],
-                                        phaselc[pl][:,1]-phaselc[pl][:,3]-phaselc[pl][:,4], ".",
-                                        alpha=np.clip(0.15+6*(len(phaselc[pl][:,0])**-0.5),0.1,0.9), color=pointcol, markersize=1.25, rasterized=raster)
-                bin_resids=tools.bin_lc_segment(np.column_stack((np.sort(phaselc[pl][:,0]),
-                                                                 (phaselc[pl][:,1]-phaselc[pl][:,3]-phaselc[pl][:,4])[np.argsort(phaselc[pl][:,0])],
-                                                                 phaselc[pl][np.argsort(phaselc[pl][:,0]),2])),binsize[pl])
+                f_trans_resids[pl].plot(self.phaselc[pl][:,0],
+                                        self.phaselc[pl][:,1]-self.phaselc[pl][:,4], ".",
+                                        alpha=np.clip(0.15+6*(len(self.phaselc[pl][:,0])**-0.5),0.1,0.9), color=pointcol, markersize=1.25, rasterized=raster)
+                bin_resids=tools.bin_lc_segment(np.column_stack((np.sort(self.phaselc[pl][:,0]),
+                                                                 (self.phaselc[pl][:,1]-self.phaselc[pl][:,4])[np.argsort(self.phaselc[pl][:,0])],
+                                                                 self.phaselc[pl][np.argsort(self.phaselc[pl][:,0]),2])),binsize[pl])
                 nrtrns_resid=np.nanstd(bin_resids[:,1])
                 f_trans_resids[pl].errorbar(bin_resids[:,0],bin_resids[:,1],yerr=bin_resids[:,2],fmt=".",color='C2',
                                          alpha=0.75, markersize=5, rasterized=raster)
-
+                #print(self.phaselc[pl][::1350,1])
                 if '+2sig' in self.trans_to_plot[self.unique_cads[0]][list(self.planets.keys())[0]]:
                     if plot_2sig:
-                        f_trans[pl].fill_between(np.sort(phaselc[pl][:,0]),
-                            np.hstack([self.trans_to_plot[unqcad][pl]['-2sig'][self.cad_masks[unqcad]&phasebool[pl][self.cad_indexes[unqcad]]] for unqcad in self.unique_cads])[np.argsort(phaselc[pl][:,0])],
-                            np.hstack([self.trans_to_plot[unqcad][pl]['+2sig'][self.cad_masks[unqcad]&phasebool[pl][self.cad_indexes[unqcad]]] for unqcad in self.unique_cads])[np.argsort(phaselc[pl][:,0])],
+                        f_trans[pl].fill_between(np.sort(self.phaselc[pl][:,0]),
+                            np.hstack([self.trans_to_plot[unqcad][pl]['-2sig'][self.cad_masks[unqcad]&phasebool[pl][self.cad_indexes[unqcad]]] for unqcad in self.unique_cads])[np.argsort(self.phaselc[pl][:,0])],
+                            np.hstack([self.trans_to_plot[unqcad][pl]['+2sig'][self.cad_masks[unqcad]&phasebool[pl][self.cad_indexes[unqcad]]] for unqcad in self.unique_cads])[np.argsort(self.phaselc[pl][:,0])],
                             alpha=0.25, color=self.pal[4-n], rasterized=raster)
-                    f_trans[pl].fill_between(np.sort(phaselc[pl][:,0]),
-                            np.hstack([self.trans_to_plot[unqcad][pl]['-1sig'][self.cad_masks[unqcad]&phasebool[pl][self.cad_indexes[unqcad]]] for unqcad in self.unique_cads])[np.argsort(phaselc[pl][:,0])],
-                            np.hstack([self.trans_to_plot[unqcad][pl]['+1sig'][self.cad_masks[unqcad]&phasebool[pl][self.cad_indexes[unqcad]]] for unqcad in self.unique_cads])[np.argsort(phaselc[pl][:,0])],
+                    f_trans[pl].fill_between(np.sort(self.phaselc[pl][:,0]),
+                            np.hstack([self.trans_to_plot[unqcad][pl]['-1sig'][self.cad_masks[unqcad]&phasebool[pl][self.cad_indexes[unqcad]]] for unqcad in self.unique_cads])[np.argsort(self.phaselc[pl][:,0])],
+                            np.hstack([self.trans_to_plot[unqcad][pl]['+1sig'][self.cad_masks[unqcad]&phasebool[pl][self.cad_indexes[unqcad]]] for unqcad in self.unique_cads])[np.argsort(self.phaselc[pl][:,0])],
                            alpha=0.25, color=self.pal[4-n], rasterized=raster)
-                f_trans[pl].plot(np.sort(phaselc[pl][:,0]),phaselc[pl][np.argsort(phaselc[pl][:,0]),4]+phaselc[pl][np.argsort(phaselc[pl][:,0]),3],
+                f_trans[pl].plot(np.sort(self.phaselc[pl][:,0]),self.phaselc[pl][np.argsort(self.phaselc[pl][:,0]),4],
                                color=self.pal[4-n], label="transit fit", rasterized=raster,linewidth=2.5)
                 f_trans[pl].set_ylim(-1*self.min_trans[pl]-4*nrtrns_resid,4*nrtrns_resid)
                 f_trans_resids[pl].set_ylim(-5*nrtrns_resid,5*nrtrns_resid)
@@ -4272,7 +4558,7 @@ class monoModel():
                 return fig
 
     def plot_periods(self, pls='all', plot_loc=None, ylog=True, xlog=True, nbins=25, 
-                     pmax=None, pmin=None, ymin=None,ymax=None,extra_factor=1):
+                     pmax=None, pmin=None, ymin=None,ymax=None,extra_factor=1,include_kde=False):
         """Plot Marginalised probabilities of the possible periods
 
         Args:
@@ -4310,7 +4596,7 @@ class monoModel():
         cdict = dict(zip(rgb, c))
         cmap = LinearSegmentedColormap('tab20', cdict)
         #sns.set_palette(mango)
-        pal=cmap(np.linspace(0,1,6))#sns.color_palette(mango)
+        pal=cmap(np.linspace(0,1,7))#sns.color_palette(mango)
         coldic={-6:"p<1e-5",-5:"p>1e-5",-4:"p>1e-4",-3:"p>0.1%",-2:"p>1%",-1:"p>10%",0:"p>100%"}
         if pls=='all':
             plot_pers=self.duos+self.monos+self.ambigs
@@ -4391,25 +4677,26 @@ class monoModel():
                             #print(ngap,np.exp(self.trace.posterior['logprob_marg_'+pl][:,ngap]-total_prob))
                             if ncol not in cols:
                                 cols+=[ncol]
-                                plt.bar(x=self.planets[pl]['per_gaps']['gap_mids'][ngap],
+                                axes[npl].bar(x=self.planets[pl]['per_gaps']['gap_mids'][ngap],
                                         height=np.sum(np.exp(ext['logprob_marg_'+pl].values[ngap,ext_mask] - total_prob)),
                                         width=self.planets[pl]['per_gaps']['gap_widths'][ngap],lw=0.0,color=pal[6+ncol],label=coldic[ncol],alpha=0.8)
                                 # axes[npl].hist(ext['per_'+pl][:,ngap], bins=bins, edgecolor=sns.color_palette()[0],
                                 #     weights=np.exp(ext['logprob_marg_'+pl][:,ngap]-total_av_prob),
                                 #     color=pal[6+ncol],histtype="stepfilled",label=coldic[ncol])
                             else:
-                                plt.bar(x=self.planets[pl]['per_gaps']['gap_mids'][ngap],
+                                axes[npl].bar(x=self.planets[pl]['per_gaps']['gap_mids'][ngap],
                                         height=np.sum(np.exp(ext['logprob_marg_'+pl].values[ngap,ext_mask] - total_prob)),
                                         width=self.planets[pl]['per_gaps']['gap_widths'][ngap],lw=0.0,color=pal[6+ncol],alpha=0.8)
                                 # axes[npl].hist(ext['per_'+pl][:,ngap], bins=bins, edgecolor=sns.color_palette()[0],
                                 #     weights=np.exp(ext['logprob_marg_'+pl][:,ngap]-total_av_prob),
                                 #     color=pal[6+ncol],histtype="stepfilled")
-                    kernel = gaussian_kde(np.log(ext['per_'+pl].values[:,ext_mask].ravel()),
+                    if include_kde:
+                        kernel = gaussian_kde(np.log(ext['per_'+pl].values[:,ext_mask].ravel()),
                                           weights = np.exp(ext['logprob_marg_'+pl].values[:,ext_mask].ravel() - total_prob))
-                    x = np.linspace(np.log(pmin),np.log(pmax),300) #restrict range to (0,1)
-                    y = kernel(x)
-                    offset=np.average(kernel(np.log(self.planets[pl]['per_gaps']['gap_mids']))/np.sum(np.exp(ext['logprob_marg_'+pl].values[:,ext_mask] - total_prob),axis=1))
-                    plt.fill_between(np.exp(x),np.tile(1e-12,len(y)),1.5*y/offset,alpha=0.6,color=mango[5],zorder=-5,label='KDE')
+                        x = np.linspace(np.log(pmin),np.log(pmax),300) #restrict range to (0,1)
+                        y = kernel(x)
+                        offset=np.average(kernel(np.log(self.planets[pl]['per_gaps']['gap_mids']))/np.sum(np.exp(ext['logprob_marg_'+pl].values[:,ext_mask] - total_prob),axis=1))
+                        plt.fill_between(np.exp(x),np.tile(ymin,len(y)),1.5*y/offset,alpha=0.6,color=mango[5],zorder=-5,label='KDE')
 
                     axes[npl].set_title("Mono - "+str(pl))
 
@@ -4425,13 +4712,16 @@ class monoModel():
                     if ylog:
                         axes[npl].set_yscale('log')
                         if npl==0:
-                            axes[npl].set_ylabel("$\log_{10}{\\rm prob}$")
-                        axes[npl].set_ylim(ymin, ymax)
+                            axes[npl].set_ylabel("prob")#"$\log_{10}{\\rm prob}$")
+                        #axes[npl].set_ylim(ymin, ymax)
+                        #print(ymin, ymax)
                     else:
-                        axes[npl].set_ylim(ymin, ymax)
+                        
                         if npl==0:
                             axes[npl].set_ylabel("prob")
                         #plt.xlim(60,80)
+                        #print(ymin, ymax)
+                    axes[npl].set_ylim(ymin, ymax)
                     axes[npl].set_xlabel("Period [d]")
                     axes[npl].legend(title="Average prob")
             fig.tight_layout()
@@ -4512,8 +4802,8 @@ class monoModel():
             # all_weighted_periods={}
             # all_logprobs={}
 
-            # n_mult=np.product([self.planets[mpl]['ngaps'] for mpl in self.monos]) * \
-            #        np.product([len(self.planets[dpl]['period_aliases']) for dpl in self.duos])
+            # n_mult=np.prod([self.planets[mpl]['ngaps'] for mpl in self.monos]) * \
+            #        np.prod([len(self.planets[dpl]['period_aliases']) for dpl in self.duos])
             #print(n_mult,"x samples")
             #samples['log_prob']=np.tile(0.0,len(samples))
             #samples_len=len(samples)
@@ -4554,7 +4844,7 @@ class monoModel():
         fig.savefig(self.savenames[0]+'_corner.pdf')#,dpi=400,rasterized=True)
 
 
-    def make_table(self,short=True,save=True,cols=['all']):
+    def make_table(self,short=True,save=True,cols=['all'],inc_incl=False,inc_depth=True):
         """Make table from MCMC Samples
 
         Args:
@@ -4566,6 +4856,16 @@ class monoModel():
             pandas DataFrame: Dataframe of parameters and specific parameters for the samples
         """
         assert hasattr(self,'trace')
+        
+        if inc_depth or inc_incl:
+            #Adding depth:
+            for pl in self.planets:
+                if inc_depth:
+                    for mis in self.transit_limbdarks:
+                        self.trace.posterior['depth_'+mis+'_'+pl] = (('chain','draw'), (self.trace.posterior['ror_'+pl].values**2*(1 - self.trace.posterior["u_star_"+mis].values[:,:,0] * (1 - np.sqrt(1-self.trace.posterior['b_'+pl].values**2)) - self.trace.posterior["u_star_"+mis].values[:,:,1]*(1 - pm.math.sqrt(1-self.trace.posterior['b_'+pl].values**2))**2) / (1 - self.trace.posterior["u_star_"+mis].values[:,:,0]/3 - self.trace.posterior["u_star_"+mis].values[:,:,1]/6)).eval())
+                if inc_incl and pl in self.multis:
+                    #b = a_Rs*cos(i); arccos(b/a_Rs)
+                    self.trace.posterior['incl_'+pl] = (('chain','draw'), np.arccos(self.trace.posterior['b_'+pl].values/self.trace.posterior['a_Rs_'+pl].values))
 
         if cols[0]=='all':
             #Removing lightcurve, GP and reparameterised hyper-param columns
@@ -4578,15 +4878,15 @@ class monoModel():
             medvars=[var for var in self.trace.posterior if not np.any([icol in var for icol in cols_to_remove])]
             #print(cols_to_remove, medvars)
             df = pm.summary(self.trace,var_names=medvars,stat_funcs={"5%": lambda x: np.percentile(x, 5),
-                                                                     "-$1\sigma$": lambda x: np.percentile(x, 15.87),
+                                                                     "-$1\\sigma$": lambda x: np.percentile(x, 15.87),
                                                                      "median": lambda x: np.percentile(x, 50),
-                                                                     "+$1\sigma$": lambda x: np.percentile(x, 84.13),
+                                                                     "+$1\\sigma$": lambda x: np.percentile(x, 84.13),
                                                                      "95%": lambda x: np.percentile(x, 95)},round_to=5)
         else:
             df = pm.summary(self.trace,var_names=cols,stat_funcs={"5%": lambda x: np.percentile(x, 5),
-                                                                     "-$1\sigma$": lambda x: np.percentile(x, 15.87),
+                                                                     "-$1\\sigma$": lambda x: np.percentile(x, 15.87),
                                                                      "median": lambda x: np.percentile(x, 50),
-                                                                     "+$1\sigma$": lambda x: np.percentile(x, 84.13),
+                                                                     "+$1\\sigma$": lambda x: np.percentile(x, 84.13),
                                                                      "95%": lambda x: np.percentile(x, 95)},round_to=5)
 
         if save:
@@ -4596,6 +4896,190 @@ class monoModel():
             else:
                 df.to_csv(self.savenames[0]+'_mcmc_output.csv')
         return df
+
+    def save_model_timeseries(self,pls='all',n_samp=50,overwrite=True,max_gp_len=20000,**kwargs):
+        """Create output table of input timeseries alongside model best-fits"""
+        
+        if not hasattr(self,'models_dict') or overwrite:
+            if not hasattr(self, 'trans_to_plot') or 'all' not in self.trans_to_plot or overwrite:
+                print("initialising transit")
+                self.init_trans_to_plot(n_samp*10,**kwargs)
+
+            if self.use_GP and (not hasattr(self, 'gp_to_plot') or 'gp_pred' not in self.gp_to_plot or overwrite):
+                self.init_gp_to_plot(n_samp, max_gp_len, interp=interp, newgp=newgp,**kwargs)
+            #Getting lightcurve info
+            self.models_dict={'time':np.hstack([self.lc.time[self.cad_indexes[unqcad]] for unqcad in self.cad_indexes]),
+                             'flux':np.hstack([self.lc.flux[self.cad_indexes[unqcad]] for unqcad in self.cad_indexes]),
+                             'mask':np.hstack([self.lc.mask[self.cad_indexes[unqcad]] for unqcad in self.cad_indexes]),
+                             'flux_err':np.hstack([self.lc.flux_err[self.cad_indexes[unqcad]] for unqcad in self.cad_indexes])}
+            
+            for unqcad in self.cad_indexes:
+                self.models_dict[unqcad] = self.cad_indexes[unqcad]
+            
+            #Getting additional info (e.g. raw/flat flux, GPs, etc.)
+            if hasattr(self.lc,'gp_to_plot'):        
+                self.models_dict['gp']=np.hstack([self.gp_to_plot[unqcad]['gp_pred'] for unqcad in self.cad_indexes])
+            if hasattr(self.lc,'raw_flux'):
+                self.models_dict['raw_flux']=np.hstack([self.lc.raw_flux[self.cad_indexes[unqcad]] for unqcad in self.cad_indexes])
+            if hasattr(self.lc,'flux_flat'):
+                self.models_dict['flux_flat']=np.hstack([self.lc.flux_flat[self.cad_indexes[unqcad]] for unqcad in self.cad_indexes])
+            if hasattr(self.lc,'flux_spline'):
+                self.models_dict['flux_flat']=np.hstack([self.lc.flux_flat[self.cad_indexes[unqcad]] for unqcad in self.cad_indexes])
+            if hasattr(self.lc,'gp_to_plot') and np.any(['gp_+1sig' in self.gp_to_plot[unqcad] and np.sum(abs(self.gp_to_plot[unqcad]))>0 for unqcad in self.gp_to_plot]):
+                self.models_dict['gp_-1sig']=np.hstack([self.gp_to_plot[unqcad]['gp_-1sig'] for unqcad in self.cad_indexes])
+                self.models_dict['gp_+1sig']=np.hstack([self.gp_to_plot[unqcad]['gp_+1sig'] for unqcad in self.cad_indexes])
+            
+            #Getting planet models
+            pls=list(self.planets.keys()) if pls=='all' else pls
+            percentiles={'-2sig':2.2750132, '-1sig':15.8655254, 'med':50., '+1sig':84.1344746, '+2sig':97.7249868}
+            for pl in pls:
+                for p in percentiles:
+                    self.models_dict[pl+'_'+p]=np.zeros_like(self.models_dict['time'])
+                    for unqcad in self.unique_cads:
+                        #print(np.sum(self.cad_indexes[unqcad]&self.lc.near_trans['all']),len(self.trans_to_plot[unqcad][pl][p]),np.sum(self.lc.near_trans['all'][self.cad_indexes[unqcad]]),self.trace.posterior[pl+"_light_curves_"+unqcad].shape,np.sum(self.model_lcs[unqcad]['near_trans']))
+                        self.models_dict[pl+'_'+p][self.cad_indexes[unqcad]&self.lc.near_trans['all']] = np.percentile(self.trace.posterior[pl+"_light_curves_"+unqcad][:,:,self.model_lcs[unqcad]['near_trans']].stack(sample=("chain", "draw")), percentiles[p],axis=1)
+                        #prcnt[nk]
+                        # df = pm.summary(self.trace,var_names=cols,stat_funcs=, round_to=5)
+                    #models_dict[pl+"_"+p]=np.nanpercentile(np.percentile(getattr(self.trace.posterior[src+'_gp_model_x'], self.percentiles[p],axis=(0,1)), percentiles[p], axis=0, round_to=6)
+            #print({k:self.models_dict[k].shape for k in self.models_dict})
+            pd.DataFrame(self.models_dict).to_csv(self.savenames[0]+'_fit_output.csv')
+
+
+    def make_tess_planet_params_dict(self,pl='b',flag='newctoi',disp='PC',discovery='TESS',candname=None,notes=''):
+        """Create output compatible with the ExoFop CTOI, planet parameters and SG1 uploads.
+
+        Args:
+            pl (str, optional): string name of planet, as found in self.planets. Defaults to None.
+            flag (str): Must be "newctoi" or "newparams"
+            disp (str): Disposition - KP, CP or PC
+            discovery (str): Group responsible for discovery
+            candname (str): TOI association name, e.g. .01
+            notes (Str): additional target notes.
+        """
+        #New_name:[table index, table col, ]
+        pldict={}
+        candname=str(['b','c','d','e','f'].index(pl)).zfill(2) if candname is None else candname
+        pldict['target']='TIC'+str(int(self.lc.id))+candname
+        tois=tools.load_toi(self.lc.id)
+        if len(tois)>0:
+            pldict['toi']=str(int(tois['TOI'].values[0]))+candname
+        else:
+            pldict['toi']=None
+        pldict['ra']=self.radec.ra.deg
+        pldict['dec']=self.radec.dec.deg
+        pldict['flag']=flag
+        pldict['disp']=disp
+        pldict['discovery']=discovery
+        pldict['candname']=None
+        if pl in self.multis:
+            pldict['period']=df.loc['per_'+pl,'mean'],
+            pldict['period_unc']=df.loc['per_'+pl,'sd']
+        elif pl in self.duos+self.ambigs:
+            per_index='per_'+pl+'['+str(int(self.planets[pl]['npers']-1))+']'
+            pldict['period']=df.loc[per_index,'mean']
+            pldict['period_unc']=df.loc[per_index,'sd']
+        else:
+            pldict['period']=None;pldict['period_unc']=None
+        if pl in self.multis+self.monos:
+            pldict['epoch']=df.loc['t0_'+pl,'mean']
+            pldict['epoch_btjd']=pldict['epoch']-2457000
+        else:
+            t0ix='t0_'+pl+'['+str(int(len(self.planets[pl]['tcens'])-1))+']'
+            pldict['epoch']=df.loc[t0ix,'mean']+2450000 if df.loc[t0ix,'mean']<2450000 else df.loc[t0ix,'mean']
+            pldict['epoch_btjd']=pldict['epoch']-2457000
+            pldict['epoch_unc']=df.loc[t0ix,'sd']
+            if pl in self.duos+self.ambigs:
+                pldict['sect_t0']=self.lc.cadence[np.argmin(abs(self.lc.time-df.loc['t0_'+pl+'[0]','mean']))].split("_")[-1]
+                pldict['sect_t1']=self.lc.cadence[np.argmin(abs(self.lc.time-df.loc['t0_'+pl+'['+str(int(len(self.planets[pl]['tcens'])-1))+']','mean']))].split("_")[-1]
+            if pl in self.ambigs:
+                comm=['duo','tri','tetra','penta','hexa','hepta','octa'][self.planets[pl]['npers']-2]+'transit ('
+                for nt0 in range(1,self.planets[pl]['npers']-1):
+                    comm+=str(np.round(df.loc['t0_'+pl+'['+str(int(nt0))+']','mean'],2))+";"
+                comm=comm[:-1]+")"
+        if 'depth_tess_'+pl in df.columns:
+            pldict['depth']=df.loc['depth_tess_'+pl,'mean']
+            pldict['depth_unc']=df.loc['depth_tess_'+pl,'sd']
+        else:
+            pldict['depth']=1e3*df.loc['ror_'+pl,'mean']**2
+            pldict['depth_unc']=1e3*pldict['depth']*(2*df.loc['ror_'+pl,'sd']/df.loc['ror_'+pl,'mean'])
+        if pl in self.duos+self.ambigs:
+            pldict['aliases']=",".join([str(int(i)) for i in self.planets[pl]['period_int_aliases']])
+        pldict['duration']=24*df.loc['tdur_'+pl,'mean']
+        pldict['duration_unc']=df.loc['tdur_'+pl,'sd']
+        if 'incl_'+pl in df.columns:
+            pldict['inc']=df.loc['incl_'+pl,'mean']
+            pldict['inc_unc']=df.loc['incl_'+pl,'sd']
+        else:
+            pldict['inc']=None;pldict['inc_unc']=None
+        pldict['imp']=df.loc['b_'+pl,'mean']
+        pldict['imp_unc']=df.loc['b_'+pl,'sd']
+        pldict['r_planet']=df.loc['ror_'+pl,'mean']
+        pldict['r_planet_unc']=df.loc['ror_'+pl,'sd']
+        if pl in self.multis:
+            pldict['ar_star']=df.loc['a_Rs_'+pl,'mean']
+            pldict['ar_star_unc']=df.loc['a_Rs_'+pl,'sd']
+        else:
+            pldict['ar_star']=None;pldict['ar_star_unc']=None
+        pldict['radius']=df.loc['rpl_'+pl,'mean']
+        pldict['radius_unc']=df.loc['rpl_'+pl,'sd']
+        pldict['mass']=None;pldict['mass_unc']=None
+        pldict['temp']=None;pldict['temp_unc']=None
+        pldict['insol']=None;pldict['insol_unc']=None
+        pldict['dens']=None;pldict['dens_unc']=None
+        pldict['sma']=None;pldict['sma_unc']=None
+        pldict['ecc']=None;pldict['ecc_unc']=None
+        pldict['arg_peri']=None;pldict['arg_peri_unc']=None
+        pldict['time_peri']=None;pldict['time_peri_unc']=None
+        pldict['vsa']=None;pldict['vsa_unc']=None
+        pldict['tag']=Time.now().isot[:10].replace('-','')+'_osborn_MonoToolsFit_00001'
+        pldict['group']='tfopwg'
+        pldict['notes']=notes+comm
+        return pldict
+
+
+    def save_exofop_planet_params_dict(self,pldicts):
+        initrow="""target|flag|disp|discovery|candname|period|period_unc|epoch|epoch_unc|depth|depth_unc|duration|duration_unc|inc|inc_unc|imp|imp_unc|r_planet|r_planet_err|ar_star|ar_star_err|radius|radius_unc|mass|mass_unc|temp|temp_unc|insol|insol_unc|dens|dens_unc|sma|sma_unc|ecc|ecc_unc|arg_peri|arg_peri_err|time_peri|time_peri_unc|vsa|vsa_unc|tag|group|prop_period|notes"""
+        with open(self.savenames[0]+'_exofop_planet_info.csv','wb') as outfile:
+            outfile.write(initrow+"\n")
+            for idict in pldicts:
+                outstr=[]
+                for col in initrow.split("|"):
+                    if idict[col] is None:
+                        outstr+=[""]
+                    else:
+                        ival=str(idict[col])
+                        if col not in ['notes','target','tag'] and len(ival)>12:
+                            ival=ival[:12]
+                        outstr+=[ival]
+                outfile.write('|'.join(outstr)+"\n")
+
+    def save_SG1_sheet_dict(self,pldicts):
+        """TIC Number, 
+        TOI number,  (If any - leave blank otherwise)
+        Sector of first transit,
+        Sector of second transit,
+        T0 (BTJD, i.e. BJD - 2457000), 
+        T0_Uncertainty (Days), 
+        Period (days),   (This is the longest possible period; aliases will be fractions of this) 
+        Period_Uncertainty (days), 
+        Duration (hours), 
+        Duration_Uncertainty (hours)
+        Depth (ppm), 
+        Depth_Uncertainty (ppm), 
+        R_planet (R_Earth), 
+        Active_Aliases (list of integers), 
+        Comments, 
+        RA (decimal degrees), 
+        Dec (decimal degrees)"""
+        initrow="target|toi|sect_t0|sect_t1|epoch_btjd|epoch_unc|period|period_unc|duration|duration_unc|depth|depth_unc|radius|aliases|notes|ra|dec"
+        with open(self.savenames[0]+'_tess_sg1_duos_cat_info.csv','wb') as outfile:
+            outfile.write(initrow+"\n")
+            for idict in pldicts:
+                outstr=[]
+                for col in initrow.split("|"):
+                    outstr+=[str(idict[col])]
+                outfile.write('|'.join(outstr)+"\n")
+
 
     def cheops_planet_properties_table(self,planet=None):
         """Create output compatible with the Cheops "PlanetPropertiesTable". Not yet implemented
@@ -4624,7 +5108,7 @@ class monoModel():
         fig.patch.set_visible(False)
         ax.axis('off')
         ax.axis('tight')
-        cols=["name","mean","sd","5%","-$1\sigma$","median","+$1\sigma$","95%"]
+        cols=["name","mean","sd","5%","-$1\\sigma$","median","+$1\\sigma$","95%"]
         df['name']=df.index.values
         #print(df.loc[:,list(cols.keys())].values)
         tab = ax.table(cellText=df[cols].values,
@@ -4754,7 +5238,7 @@ class monoModel():
         all_trans_fin=pd.DataFrame()
         loopplanets = self.duos+self.ambigs+self.multis if include_multis else self.duos+self.ambigs
         all_unq_trans=[]
-
+        unq_trans={}
         for pl in loopplanets:
             all_trans=pd.DataFrame()
             if pl in self.duos+self.ambigs:
@@ -4762,6 +5246,7 @@ class monoModel():
                 trans_p0=np.floor(np.nanmedian(time_start - ext['t0_'+pl].values[-1])/np.nanmedian(ext['per_'+pl].values,axis=1))
                 trans_p1=np.ceil(np.nanmedian(time_end -  ext['t0_'+pl].values[-1])/np.nanmedian(ext['per_'+pl].values,axis=1))
                 n_trans=trans_p1-trans_p0
+                
             elif pl in self.multis:
                 trans_p0=[np.floor(np.nanmedian(time_start - ext['t0_'+pl].values)/np.nanmedian(ext['per_'+pl].values))]
                 trans_p1=[np.ceil(np.nanmedian(time_end -  ext['t0_'+pl].values)/np.nanmedian(ext['per_'+pl].values))]
@@ -4778,7 +5263,9 @@ class monoModel():
                 dur=np.nanpercentile(ext['tdur_'+pl],percentiles)
             naliases=[0] if pl in self.multis else np.arange(self.planets[pl]['npers'])
             idfs=[]
+            
             for nd in naliases:
+                #print(pl,nd,n_trans[nd])
                 if n_trans[nd]>0:
                     if pl in self.duos+self.ambigs:
                         int_alias=int(self.planets[pl]['period_int_aliases'][nd])
@@ -4787,7 +5274,7 @@ class monoModel():
                         #print(np.column_stack([ext['t0_2_'+pl].values+ntr*ext['per_'+pl].values[nd,:] for ntr in np.arange(trans_p0[nd],trans_p1[nd])]).shape)
                         #print(ext['t0_'+pl].values[-1])
                         transits=np.nanpercentile(np.column_stack([ext['t0_'+pl].values[-1]+ntr*ext['per_'+pl].values[nd,:] for ntr in np.arange(trans_p0[nd],trans_p1[nd])]),percentiles,axis=0)
-                        #print(transits.shape)
+                        
                         if 'tdur' in self.marginal_params:
                             dur=np.nanpercentile(ext['tdur_'+pl],percentiles)
                         logprobs=np.nanmedian(ext['logprob_marg_'+pl][nd,:])-sum_all_probs
@@ -4821,20 +5308,20 @@ class monoModel():
                                       'alias_p':np.tile(np.nanmedian(ext['per_'+pl].values[nd,:]),len(transits[2])) if pl in self.duos+self.ambigs else np.tile(np.nanmedian(ext['per_'+pl].values),len(transits[2]))})]
                     #print(idfs[-1].shape,idfs[-1]['transit_mid_date'])
             all_trans=pd.concat(idfs)
-            unq_trans = all_trans.sort_values('log_prob').copy().drop_duplicates('transit_fractions')
-            unq_trans = unq_trans.set_index(np.arange(len(unq_trans)))
-            unq_trans['aliases_ns']=unq_trans['alias_n'].values.astype(str)
-            unq_trans['aliases_ps']=unq_trans['alias_p'].values.astype(str)
-            unq_trans['total_prob']=unq_trans['prob']
+            unq_trans[pl] = all_trans.sort_values('log_prob').copy().drop_duplicates('transit_fractions')
+            unq_trans[pl] = unq_trans[pl].set_index(np.arange(len(unq_trans[pl])))
+            unq_trans[pl]['aliases_ns']=unq_trans[pl]['alias_n'].values.astype(str)
+            unq_trans[pl]['aliases_ps']=unq_trans[pl]['alias_p'].values.astype(str)
+            unq_trans[pl]['total_prob']=unq_trans[pl]['prob']
             all_unq_trans=pd.DataFrame()
-            for i,row in unq_trans.iterrows():
+            for i,row in unq_trans[pl].iterrows():
                 oths=all_trans.loc[all_trans['transit_fractions']==row['transit_fractions']]
                 #print(row['transit_fractions'],oths['alias_n'].values,oths['alias_p'].values)
-                unq_trans.loc[i,'aliases_ns']=','.join(list(oths['alias_n'].values.astype(str)))
-                unq_trans.loc[i,'aliases_ps']=','.join(list(np.round(oths['alias_p'].values,4).astype(str)))
-                unq_trans.loc[i,'num_aliases']=len(oths)
-                unq_trans.loc[i,'total_prob']=np.sum(oths['prob'].values)
-        all_trans_fin=unq_trans.drop_duplicates('transit_fractions')
+                unq_trans[pl].loc[i,'aliases_ns']=','.join(list(oths['alias_n'].values.astype(str)))
+                unq_trans[pl].loc[i,'aliases_ps']=','.join(list(np.round(oths['alias_p'].values,4).astype(str)))
+                unq_trans[pl].loc[i,'num_aliases']=len(oths)
+                unq_trans[pl].loc[i,'total_prob']=np.sum(oths['prob'].values)
+        all_trans_fin=pd.concat([unq_trans[u].drop_duplicates('transit_fractions') for u in unq_trans],axis=0)
         all_trans_fin = all_trans_fin.loc[(all_trans_fin['transit_end_+2sig']>time_start)*(all_trans_fin['transit_start_-2sig']<time_end)].sort_values('transit_mid_med')
         all_trans_fin = all_trans_fin.set_index(np.arange(len(all_trans_fin)))
 
@@ -5044,7 +5531,9 @@ class monoModel():
 
         vars=[]
         for ipl in searchpls:
-            vars+=['logprob_marg_'+ipl,'per_'+ipl,'ror_'+ipl,'tdur_'+ipl,'t0_'+ipl]
+            vars+=['per_'+ipl,'ror_'+ipl,'tdur_'+ipl,'t0_'+ipl]
+            if ipl in self.ambigs+self.monos+self.duos:
+                vars+=['logprob_marg_'+ipl]
         ext=az.extract(self.trace.posterior,var_names=vars)
         
         for ipl in searchpls:
@@ -5305,9 +5794,9 @@ class monoModel():
             if np.round(errs[0],roundval-1)==np.round(errs[1],roundval-1):
                 #Errors effectively the same...
                 if roundval<0:
-                    return " $ "+str(int(np.round(vals[1],roundval)))+" \pm "+str(int(np.round(np.average(errs),roundval)))+" $ "
+                    return " $ "+str(int(np.round(vals[1],roundval)))+" \\pm "+str(int(np.round(np.average(errs),roundval)))+" $ "
                 else:
-                    return " $ "+str(np.round(vals[1],roundval))+" \pm "+str(np.round(np.average(errs),roundval))+" $ "
+                    return " $ "+str(np.round(vals[1],roundval))+" \\pm "+str(np.round(np.average(errs),roundval))+" $ "
             else:
                 if roundval<0:
                     return " $ "+str(int(np.round(vals[1],roundval)))+"^{+"+str(int(np.round(errs[0],roundval)))+"}_{-"+str(int(np.round(errs[1],roundval)))+"} $ "
@@ -5545,19 +6034,6 @@ class monoModel():
                     print(self.assume_circ,)
                     #Marginalising over, so one value for each period:
                     if pl not in self.multis and not self.interpolate_v_prior and ('ecc' in self.marginal_params or 'omega' in self.marginal_params):
-                        if self.ecc_prior.lower()=='kipping' or (self.ecc_prior.lower()=='auto' and (len(self.planets)+len(self.rvplanets))==1):
-                            eccs[pl] = xo.distributions.eccentricity.kipping13("ecc_"+pl,shape=self.n_margs[pl],fixed=True)
-                            #eccs[pl] = BoundedBeta("ecc_"+pl, alpha=0.867,beta=3.03,
-                            #                             initval=0.05,shape=self.n_margs[pl])
-                        elif self.ecc_prior.lower()=='vaneylen' or (self.ecc_prior.lower()=='auto' and (len(self.planets)+len(self.rvplanets))>1):
-                            # The eccentricity prior distribution from Van Eylen for multiplanets (lower-e than single planets)
-                            eccs[pl] = xo.distributions.eccentricity.vaneylen19("ecc_"+pl,shape=self.n_margs[pl],fixed=True)
-                            #pm.Bound(pm.Weibull, lower=1e-5,
-                            #                         upper=1-1e-5)("ecc_"+pl,alpha=0.049,beta=2,initval=0.05,
-                            #                                       shape=self.n_margs[pl])
-                        elif self.ecc_prior.lower()=='uniform':
-                            eccs[pl] = pm.Uniform("ecc_"+pl,lower=1e-5, upper=1-1e-5,
-                                                       shape=self.n_margs[pl])
 
                         omegas[pl] = pmx.angle("omega_"+pl,
                                                                  shape=self.n_margs[pl])
@@ -5580,11 +6056,13 @@ class monoModel():
                               pl not in self.multis and not self.interpolate_v_prior and ('ecc' in self.marginal_params or 'omega' in self.marginal_params),
                               pl not in self.multis, not self.interpolate_v_prior, ('ecc' in self.marginal_params or 'omega' in self.marginal_params))
                 if 'b' in self.fit_params or pl in self.multis:
+                    #bs[pl] = pm.Uniform("b_"+pl, lower=0,upper=1.0)
                     if 'logror' in self.marginal_params and pl not in self.multis:
                         # The Espinoza (2018) parameterization for the joint radius ratio and
                         bs[pl] = xo.distributions.ImpactParameter("b_"+pl,ror=rors[pl],shape=self.n_margs[pl])
                     else:
                         bs[pl] = xo.distributions.ImpactParameter("b_"+pl, ror=rors[pl], initval=self.planets[pl]['b'])
+                       
                 if 'tdur' in self.fit_params and pl not in self.multis:
                     tdursigma=0.25*self.planets[pl]['tdur'] if 'tdur_err' not in self.planets[pl] else self.planets[pl]['tdur_err']
                     tdurs[pl] = pm.TruncatedNormal("tdur_"+pl,
@@ -5775,7 +6253,7 @@ class monoModel():
                 if self.debug: print(np.isnan(self.model_time),np.isnan(self.model_flux),np.isnan(self.model_flux_err))
                 if self.train_GP:
                     #Using histograms from the output of the previous GP training as priors for the true model.
-                    vars=[var for var in self.gp_init_trace.posterior if '__' not in var and np.product(self.gp_init_trace.posterior[var].shape)<5*len(self.gp_init_trace.posterior.chain)*len(self.gp_init_trace.posterior.draw)]
+                    vars=[var for var in self.gp_init_trace.posterior if '__' not in var and np.prod(self.gp_init_trace.posterior[var].shape)<5*len(self.gp_init_trace.posterior.chain)*len(self.gp_init_trace.posterior.draw)]
                     ext_gp_init_trace=az.extract(self.gp_init_trace.posterior,var_names=vars)
 
                     minmaxs={var:np.percentile(ext_gp_init_trace[var].values,[0.5,99.5]).astype(self.floattype) for var in vars}
@@ -6446,19 +6924,19 @@ class monoModel():
             ################################################
             #Setting up optimization depending on what planet models we have:
             if self.step_initialise:
-                initvars1=[logs2]
+                initvars['1']=[logs2]
                 initvars2=[logs2]#P,t0
                 initvars3=[logrho_S,logs2]
                 initvars4=[logs2]#r,b,P
                 for pl in self.planets:
-                    initvars1+=[logrors[pl]];initvars2+=[logrors[pl]];initvars4+=[logrors[pl]]
+                    initvars['1']+=[logrors[pl]];initvars2+=[logrors[pl]];initvars4+=[logrors[pl]]
                     initvars2+=[t0s[pl]]
                     if 'b' in self.fit_params or pl in self.multis:
                         initvars4+=[bs[pl]]
                     if 'tdur' in self.fit_params and pl not in self.multis:
-                        initvars1+=[tdurs[pl]];initvars4+=[tdurs[pl]]
+                        initvars['1']+=[tdurs[pl]];initvars4+=[tdurs[pl]]
                     if pl in self.multis:
-                        initvars1+=[bs[pl]]
+                        initvars['1']+=[bs[pl]]
                         initvars2+=[pers[pl]];initvars4+=[pers[pl]]
                     if pl in self.monos:
                         initvars2+=[mono_uniform_index_period[pl]];initvars4+=[mono_uniform_index_period[pl]]
@@ -6469,7 +6947,7 @@ class monoModel():
                     if not self.assume_circ and (not self.interpolate_v_prior or pl in self.multis):
                         initvars3+=[eccs[pl], omegas[pl]]
                     if hasattr(self,'rvs') and not self.derive_K:
-                        initvars1+=[logKs[pl]]
+                        initvars['1']+=[logKs[pl]]
                         initvars3+=[logKs[pl]]
                         #initvars0+=[logMp_wrt_normals[pl]]
                         #initvars2+=[logMp_wrt_normals[pl]]
@@ -6495,7 +6973,10 @@ class monoModel():
                     initvars3+=[phot_mean]
                 initvars5=initvars2+initvars3+[logs2,Rs,Ms]
                 for mis in self.unique_limbdarks:
-                    initvars5+=[q_star[mis]]
+                    if self.constrain_LD:
+                        initvars5+=[q_star[mis]]
+                    else:
+                        initvars5+=[u_star[mis]]
                 
                 ################################################
                 #                  Optimising:
@@ -6504,14 +6985,14 @@ class monoModel():
                 if self.debug: print("before",self.pymc_modelcheck_initial_point())
                 #pm.find_MAP(start=start)
                 if self.debug: print("before",self.pymc_modelcheck_initial_point())
-                map_soln = pmx.optimize(vars=initvars1)
+                map_soln = pmx.optimize(vars=initvars['1'])
                 map_soln = pmx.optimize(start=map_soln, vars=initvars2)
                 map_soln = pmx.optimize(start=map_soln, vars=initvars3)
                 map_soln = pmx.optimize(start=map_soln, vars=initvars4)
                 #Doing everything except the marginalised periods:
                 map_soln = pmx.optimize(start=map_soln, vars=initvars5)
                 map_soln = pmx.optimize(start=map_soln)
-                #map_soln = pmx.optimize(start=map_soln, vars=initvars1)
+                #map_soln = pmx.optimize(start=map_soln, vars=initvars['1'])
                 #map_soln = pmx.optimize(start=start, vars=[logs2])
 
                 if self.debug: print("after",self.pymc_modelcheck_initial_point())

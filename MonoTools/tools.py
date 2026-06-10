@@ -923,10 +923,21 @@ def cut_anom_diff(flux,thresh=4.2):
                      abs(flux[-1]-np.median(flux[-3:-1]))<(np.median(abs(diffarr[0,:]))*thresh*5)))
     return anoms
 
-def observed(tic,radec=None,maxsect=96):
+def observed_full(tic,radec=None,maxsect=None):
     # Using either "webtess" page or Chris Burke's tesspoint to check if TESS object was observed:
     # Returns dictionary of each sector and whether it was observed or not
-    
+    from astropy.time import Time
+    maxsect=109+int(13*(Time.now().jyear-2025.4)) if maxsect is None else maxsect
+    tess_stars2px = importlib.import_module("tess-point.tess_stars2px")
+    #from tesspoint import tess_stars2px_function_entry as tess_stars2px
+    result = tess_stars2px.tess_stars2px_function_entry(tic, radec.ra.deg, radec.dec.deg)
+    return result
+
+def observed(tic,radec=None,maxsect=None):
+    # Using either "webtess" page or Chris Burke's tesspoint to check if TESS object was observed:
+    # Returns dictionary of each sector and whether it was observed or not
+    from astropy.time import Time
+    maxsect=109+int(13*(Time.now().jyear-2025.4)) if maxsect is None else maxsect
     tess_stars2px = importlib.import_module("tess-point.tess_stars2px")
     #from tesspoint import tess_stars2px_function_entry as tess_stars2px
     result = tess_stars2px.tess_stars2px_function_entry(tic, radec.ra.deg, radec.dec.deg)
@@ -1410,6 +1421,19 @@ def cut_lc(lctimes,max_len=10000,return_bool=True,transit_mask=None):
             return times
         else:
             return [lctimes]
+
+def load_toi(tic):
+    from astropy.time import Time
+    toicat="TOIs_"+Time.now().isot[:7]+".csv"
+    if not os.path.exists(os.path.join(MonoData_tablepath,toicat)):
+        tois=pd.read_csv("https://exofop.ipac.caltech.edu/tess/download_toi.php?sort=toi&output=csv")
+        tois.to_csv(toicat)
+    else:
+        tois=pd.read_csv(toicat,index_col=0)
+    return tois.loc[tois['TIC ID']==tic]
+
+def get_depth(rprs,u,b):
+    return rprs**2*(1 - u[0] * (1 - np.sqrt(1-b**2)) - u[1]*(1 - pm.math.sqrt(1-b**2))**2) / (1 - u[0]/3 - u[1]/6)
 
 def med_and_std(values):
     return [np.nanmedian(values),np.nanstd(values)]
@@ -2305,7 +2329,7 @@ def gp_flatten(time, flux, flux_err, flux_mask = None, tdurs=[0.3], transit_mask
     bk_space=0.5*np.sum(np.diff(np.sort(time))[np.diff(np.sort(time))<0.1])#Summing cadences with large jumps removed.
     region_starts=np.sort(time)[1+np.hstack((-1,np.where(np.diff(np.sort(time))>bk_space)[0]))]
     region_ends  =np.sort(time)[np.hstack((np.where(np.diff(np.sort(time))>bk_space)[0],len(time)-1))]
-    print(len(region_starts),"regions:",[str(region_starts[n])[:6]+" - "+str(region_ends[n])[:6] for n in range(len(region_starts))])
+    #print(len(region_starts),"regions:",[str(region_starts[n])[:6]+" - "+str(region_ends[n])[:6] for n in range(len(region_starts))])
 
     gpfits = np.zeros(len(time))
     for n in range(len(region_starts)):
@@ -2361,7 +2385,7 @@ def kepler_spline(time, flux, flux_mask = None, transit_mask = None, bk_space=1.
     region_ends  =np.sort(time)[np.hstack((np.where(np.diff(np.sort(time))>bk_space)[0],len(time)-1))]
     spline = []
     mask = []
-    print(region_starts,region_ends)
+    #print(region_starts,region_ends)
     for n in range(len(region_starts)):
         ix=(time>=region_starts[n])*(time<=region_ends[n])
         
@@ -2741,6 +2765,63 @@ def iteratively_determine_GP_params(pmmodel,time,flux,flux_err,tdurs,mult_long_t
         #         success=False
         # if debug: print(success, minpower,maxpower)
     
+def calc_min_periods(trans,time,minjump=0.25):
+    """Calculate furthest point from all transits not covered by any ligthcurve"""
+    phase=np.sort(abs(trans[:,None]-time[None,:]).ravel())
+    jumps=np.diff(phase)>minjump
+    return np.min(phase[:-1][jumps])
+
+def calc_ambig_periods(trans,minp=18,max_ttv_hrs_per_year=2):
+    """Calculate most likely period given three transits, a minimum period, and a threshold (in time) below which to search for period matches."""
+    trans=np.sort(trans)
+    #Getting all possible periods between each consecutive transit (down to minp)
+    poss_pers=[(trans[i+1]-trans[i])/np.arange(1,int(np.floor((trans[i+1]-trans[i])/minp))) for i in range(len(trans)-1)]
+    meta_pers=(trans[-1]-trans[0])/np.arange(1,int(np.floor((trans[-1]-trans[0])/minp)))
+    bools=np.tile(True,len(meta_pers))
+    for i_tr in range(len(trans)-1):
+        new_thresh=max_ttv_hrs_per_year*np.max(poss_pers[i_tr])/365.25
+        #Calculating closeness between each period and the metaperiods
+        per_mins=24*np.min(abs(meta_pers[:,None]-poss_pers[i_tr][None,:]),axis=1)
+        #print(i_tr,new_thresh,np.sum(per_mins<new_thresh),per_mins[per_mins<new_thresh])
+        #Removing periods which do not pass ttv test from the boolean array
+        bools[per_mins>new_thresh]=False
+    
+    #Looping through the remaining possible periods to do some info:
+    if np.any(bools):
+        iperdic={}
+        for n_p,p in enumerate(meta_pers[bools]):
+            iperdic[n_p]={'p_0_'+str(len(trans)-1):p}
+            #alltrans=trans[0]+np.arange(0,iperdic[n_p]['n_0_'+str(len(trans))])*(trans[-1]-trans[0])/iperdic[n_p]['n_0_'+str(len(trans))]
+            for n in range(len(poss_pers)):
+                iperdic[n_p]['p_'+str(n)+"_"+str(n+1)]=poss_pers[n][np.argmin(abs(poss_pers[n]-p))]#Finding closest matching period to metaperiod
+                iperdic[n_p]['n_'+str(n)+"_"+str(n+1)]=int(np.round((trans[n+1]-trans[n])/iperdic[n_p]['p_'+str(n)+"_"+str(n+1)]))#Deriving integer period numerator
+                iperdic[n_p]['n_0_'+str(len(trans)-1)]=int(np.round((trans[-1]-trans[0])/iperdic[n_p]['p_0_'+str(len(trans)-1)]))
+                if n>0:
+                    #Deriving integer metaperiod numerator
+                    iperdic[n_p]['n_0_'+str(n)]=int(np.sum([iperdic[n_p]['n_'+str(_n)+"_"+str(_n+1)] for _n in range(n)]))
+                    #Computing middle transit expected time given metaperiod and n
+                    iperdic[n_p]['t_'+str(n)+'_exp']=trans[0]+iperdic[n_p]['n_0_'+str(n)]*iperdic[n_p]['p_0_'+str(len(trans)-1)]
+                    
+        perdf=pd.DataFrame(iperdic).T
+        perdf['dist']=np.nanstd(perdf.loc[:,['p_'+str(n)+"_"+str(n+1) for n in range(len(poss_pers))]].values,axis=1)
+        #For Total TTV - given average period, what is min distance in days from all transits? 
+        #Half of TTV between predicted 0->2 period span at transit 1
+        #print(perdf.columns,trans[1:-1],
+        #      perdf.loc[:,['t_1_exp' for n in range(1,len(trans)-1)]].values)
+        #print(abs(trans[1:-1][None,:]-perdf.loc[:,['t_'+str(n)+'_exp' for n in range(1,len(trans)-1)]].values).shape,np.sum(abs(trans[1:-1][None,:]-perdf.loc[:,['t_'+str(n)+'_exp' for n in range(1,len(trans)-1)]].values),axis=1).shape)
+        perdf['abs_total_ttv_hrs']=24*np.sum(abs(trans[1:-1][None,:]-perdf.loc[:,['t_'+str(n)+'_exp' for n in range(1,len(trans)-1)]].values),axis=1)
+        
+        #Removing extremely high TTVs which have made it through:
+        perdf=perdf[perdf['abs_total_ttv_hrs']<max_ttv_hrs_per_year*(trans[-1]-trans[0])/366.25]
+        #perdf['abs_total_ttv']=abs(perdf['nearest_total_n']*((trans[2]-trans[0])/perdf['avper']-perdf['nearest_total_n']))
+        perdf['p']=perdf['p_0_'+str(len(trans)-1)]
+        perdf['distratio']=abs(perdf['dist']/perdf['p'])
+        #Sorting by total TTV from set times:
+        perdf=perdf.sort_values(['abs_total_ttv_hrs','p'],ascending=[True,False])
+        return perdf
+    else:
+        return None
+
 
 def calc_trio_periods(trans,minp=18,thresh=0.5):
     """Calculate most likely period given three transits, a minimum period, and a threshold (in time) below which to search for period matches."""
@@ -2803,7 +2884,7 @@ def correct_lightcurve_steps(lc,time_jump_norm=0.3,diff_sigma_thresh=3,do_polyfi
                             lc.time[-1]+0.2])
     for j in range(1,len(time_jumps)-2):
         ix = (lc.time>time_jumps[j]) & (lc.time>time_jumps[j+1]) 
-        print(np.sum(ix),np.sum(ix&lc.mask))
+        #print(np.sum(ix),np.sum(ix&lc.mask))
         if do_polyfit:
             shifts[ix]-=np.polyval(np.polyfit(lc.time[ix&lc.mask],shifts[ix&lc.mask],polyfit_deg),lc.time[ix])
         else:
@@ -3011,10 +3092,12 @@ class DuoOrbit:
         self.b = as_tensor_variable(b)
         self.duration = as_tensor_variable(duration)
         self.r_star = as_tensor_variable(r_star)
+        self.ror = as_tensor_variable(ror)
 
-        self._b_norm = self.b * self.r_star
-        x2 = r_star**2 * ((1 + ror) ** 2 - b**2)
-        self.speed = 2 * np.sqrt(x2) / duration
+        #self._b_norm = self.b * self.r_star
+        #x2 = r_star**2 * ((1 + ror) ** 2 - b**2)
+        self.speed = (2.0 * pt.sqrt((1.0 + self.ror)**2 - self.b**2) / self.duration) * self.r_star
+        #self.speed = 2 * np.sqrt(x2) / duration
         
     def get_relative_position(self, t, light_delay=False):
         """The planets' positions relative to the star
@@ -3031,39 +3114,77 @@ class DuoOrbit:
             raise NotImplementedError(
                 "Light travel time delay is not implemented for simple orbits"
             )
-        dt = pt.mod(pt.shape_padright(t) - self.t0s[0] - 0.5*self.maxper,self.maxper) - 0.5*self.maxper
+        
+        #x2 = r_star**2 * ((1 + ror) ** 2 - b**2)
+        self.speed = 2.0 * pt.sqrt((1.0 + self.ror)**2 - self.b**2) * self.r_star / self.duration #Stellar radii per day
+
+        dt = pt.mod(pt.shape_padright(t) - self.t0s[0] - 0.5*self.maxper, self.maxper) - 0.5*self.maxper
+        # 3. Project coordinates directly into Solar Radii
         x = pt.squeeze(self.speed * dt)
-        y = pt.squeeze(self._b_norm + pt.zeros_like(dt))
-        m = pt.abs(dt) < 0.5 * self.duration
-        z = pt.squeeze(m * 1.0 - (~m) * 1.0)
+        y = pt.squeeze((self.b * self.r_star) + pt.zeros_like(dt))
+        z = 100*pt.squeeze(pt.ones_like(dt))#Ensuring z is in front of the star (-1 = 1stellar radius, so not necessarily)
+
         return x, y, z
-    
+        # x = pt.squeeze(self.speed * dt)
+        # y = pt.squeeze(self._b_norm + pt.zeros_like(dt))
+        # m = pt.abs(dt) < 0.5 * self.duration
+        # z = pt.squeeze(m * 1.0 - (~m) * 1.0)
+        # return x, y, z
+
     def in_transit(self, t, r=None, texp=None, light_delay=False):
-        """Get a list of timestamps that are in transit
-
-        Args:
-            t (vector): A vector of timestamps to be evaluated.
-            r (Optional): The radii of the planets.
-            texp (Optional[float]): The exposure time.
-
-        Returns:
-            The indices of the timestamps that are in transit.
-
-        """
-        if light_delay:
-            raise NotImplementedError(
-                "Light travel time delay is not implemented for simple orbits"
-            )
-        dt = pt.mod(pt.shape_padright(t) - self.t0s[0] - 0.5*self.maxper,self.maxper) - 0.5*self.maxper
-        if r is None:
+        # 1. Compute dt using your exact modulo phase-wrapping logic
+        dt = pt.mod(pt.shape_padright(t) - self.t0s[0] - 0.5*self.maxper, self.maxper) - 0.5*self.maxper
+        
+        # 2. Re-calculate the dynamic speed and b scaling (in R_sun)
+        self.speed = (2.0 * pt.sqrt((1.0 + self.ror)**2 - self.b**2) / self.duration) * self.r_star
+        
+        # 3. Calculate the time window tolerance (tol)
+        if r is None and self.ror is None:
+            # If no planet radius is provided, default to total contact duration
             tol = 0.5 * self.duration
         else:
-            x = (r + self.r_star) ** 2 - self._b_norm**2
-            tol = pt.sqrt(x) / self.speed
+            if self.ror is not None:
+                x = ((1 + self.ror)*self.r_star) ** 2 - (self.b * self.r_star)**2
+            else:
+                # r is passed in R_sun. Max distance where transit can happen is (r + r_star)
+                x = (r + self.r_star) ** 2 - (self.b * self.r_star)**2
+            
+            # Guard against negative values under the sqrt if b_norm > r + r_star
+            x_clipped = pt.maximum(x, 0.0) 
+            tol = pt.sqrt(x_clipped) / self.speed
+            
         if texp is not None:
             tol += 0.5 * texp
+
         mask = pt.any(pt.abs(dt) < tol, axis=-1)
+        
         return pt.arange(t.size)[mask]
+    # def in_transit(self, t, r=None, texp=None, light_delay=False):
+    #     """Get a list of timestamps that are in transit
+
+    #     Args:
+    #         t (vector): A vector of timestamps to be evaluated.
+    #         r (Optional): The radii of the planets.
+    #         texp (Optional[float]): The exposure time.
+
+    #     Returns:
+    #         The indices of the timestamps that are in transit.
+
+    #     """
+    #     if light_delay:
+    #         raise NotImplementedError(
+    #             "Light travel time delay is not implemented for simple orbits"
+    #         )
+    #     dt = pt.mod(pt.shape_padright(t) - self.t0s[0] - 0.5*self.maxper,self.maxper) - 0.5*self.maxper
+    #     if r is None:
+    #         tol = 0.5 * self.duration
+    #     else:
+    #         x = (r + self.r_star) ** 2 - (self.b * self.r_star)**2
+    #         tol = pt.sqrt(x) / self.speed
+    #     if texp is not None:
+    #         tol += 0.5 * texp
+    #     mask = pt.any(pt.abs(dt) < tol, axis=-1)
+    #     return pt.arange(t.size)[mask]
 
 class AmbigOrbit:
     """An orbit representing a long-period planet transiting a common central
@@ -3072,22 +3193,28 @@ class AmbigOrbit:
     period, phase, duration, and impact parameter.
 
     Args:
+        duration: The durations of the transits in days.
         t0: The midpoint time of a reference transit for each planet in days.
         b: The impact parameters of the orbits.
-        duration: The durations of the transits in days.
+        span_maxper: The ratio of span (i.e. first to last transit) divided by the maximum period (derived from the t0 span ratios)
         r_star: The radius of the star in ``R_sun``.
+        ror: The radius ratio of the planet
     """
 
-    def __init__(self, duration, t0s, b, maxper_span, r_star=1.0, ror=0,):
+    def __init__(self, duration, t0s, b, span_maxper=1, r_star=1.0, ror=0,):
+        self.span = as_tensor_variable((t0s[-1]-t0s[0])/span_maxper)
         self.t0s = as_tensor_variable(t0s)
-        self.span = as_tensor_variable(t0s[1]-t0s[0])
         self.b = as_tensor_variable(b)
         self.duration = as_tensor_variable(duration)
         self.r_star = as_tensor_variable(r_star)
+        self.ror = as_tensor_variable(ror)
 
-        self._b_norm = self.b * self.r_star
-        x2 = r_star**2 * ((1 + ror) ** 2 - b**2)
-        self.speed = 2 * np.sqrt(x2) / duration
+        self.speed = (2.0 * pt.sqrt((1.0 + self.ror)**2 - self.b**2) / self.duration) * self.r_star
+        # self._b_norm = self.b * self.r_star
+        # #x2 = r_star**2 * ((1 + ror) ** 2 - b**2)
+        # chord_half_length = pt.sqrt((1.0 + ror)**2 - self.b**2)
+        # self.speed = (2.0 * chord_half_length / self.duration) * self.r_star
+        #self.speed = 2 * np.sqrt(x2) / duration
         
     def get_relative_position(self, t, light_delay=False):
         """The planets' positions relative to the star
@@ -3105,11 +3232,16 @@ class AmbigOrbit:
                 "Light travel time delay is not implemented for simple orbits"
             )
         dt = pt.mod(pt.shape_padright(t) - self.t0s[0] - 0.5*self.span,self.span) - 0.5*self.span
+        self.speed = (2.0 * pt.sqrt((1.0 + self.ror)**2 - self.b**2) / self.duration) * self.r_star
+        # 3. Project coordinates directly into Solar Radii
         x = pt.squeeze(self.speed * dt)
-        y = pt.squeeze(self._b_norm + pt.zeros_like(dt))
-        m = pt.abs(dt) < 0.5 * self.duration
-        z = pt.squeeze(m * 1.0 - (~m) * 1.0)
-        return x, y, z
+        y = pt.squeeze((self.b * self.r_star) + pt.zeros_like(dt))
+        z = 100*pt.squeeze(pt.ones_like(dt))
+        # x = pt.squeeze(self.speed * dt)
+        # y = pt.squeeze(self._b_norm + pt.zeros_like(dt))
+        # m = pt.abs(dt) < 0.5 * self.duration
+        # z = pt.squeeze(m * 1.0 - (~m) * 1.0)
+        # return x, y, z
     
     def in_transit(self, t, r=None, texp=None, light_delay=False):
         """Get a list of timestamps that are in transit
